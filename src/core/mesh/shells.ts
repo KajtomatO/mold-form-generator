@@ -144,11 +144,17 @@ function signedVolumeAbout(mesh: WeldedMesh, triangles: ArrayLike<number> | null
   return sum / 6;
 }
 
+/** A connected piece of a mesh, with the triangles that make it up. */
+export interface MeshPiece extends ShellInfo {
+  triangles: number[];
+}
+
 /**
- * Connected pieces of an open mesh, joined through shared vertices. M4 places one pour per body,
- * which soup mode needs too, so each piece reports its bounds and an estimate of its volume.
+ * Connected pieces of a mesh, joined through shared vertices. M4 places one pour per body, which
+ * soup mode needs too, so each piece reports its bounds and an estimate of its volume. Needs no
+ * Manifold, so the field worker can use it as well.
  */
-function soupShells(mesh: WeldedMesh): ShellInfo[] {
+export function connectedPieces(mesh: WeldedMesh): MeshPiece[] {
   const { positions: p, indices } = mesh;
   const parent = new Int32Array(p.length / 3);
   for (let v = 0; v < parent.length; v++) parent[v] = v;
@@ -179,11 +185,11 @@ function soupShells(mesh: WeldedMesh): ShellInfo[] {
     }
   }
   const pieces = Array.from(byRoot.values());
-  return pieces.map(({ triangles, min, max }): ShellInfo => {
+  return pieces.map(({ triangles, min, max }): MeshPiece => {
     const volume = signedVolumeAbout(mesh, triangles, (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
     // Wound inside out and lying within another piece: a void such as the barrel's, not a body.
     const nested = pieces.some((other) => [0, 1, 2].every((axis) => other.min[axis] < min[axis] && other.max[axis] > max[axis]));
-    return { kind: volume < 0 && nested ? 'void' : 'unverified', volume: nested ? volume : Math.abs(volume), triangleCount: triangles.length, genus: 0, min, max };
+    return { kind: volume < 0 && nested ? 'void' : 'unverified', volume: nested ? volume : Math.abs(volume), triangleCount: triangles.length, genus: 0, min, max, triangles };
   });
 }
 
@@ -213,7 +219,7 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
   const mesh = flipped ? { positions: welded.positions, indices: reversed(welded.indices) } : welded;
   const openLoops = flipped ? audit.openLoops.map((loop): OpenLoop => ({ ...loop, capNormal: [-loop.capNormal[0] || 0, -loop.capNormal[1] || 0, -loop.capNormal[2] || 0] })) : audit.openLoops;
 
-  const shells = soupShells(mesh);
+  const shells = connectedPieces(mesh).map(({ triangles: _, ...shell }): ShellInfo => shell);
   return {
     solid: null,
     mesh,

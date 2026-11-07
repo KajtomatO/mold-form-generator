@@ -123,7 +123,7 @@ export const PARAM_SCHEMA = {
   grid: {
     nx: num('Columns', 1, { unit: '', min: 1, max: 20, integer: true }),
     ny: num('Rows', 1, { unit: '', min: 1, max: 20, integer: true }),
-    spacing: auto('Spacing', '2 r_eff + 2 Hmax tan(draft) + 2', { min: 0, max: 100 }),
+    spacing: auto('Spacing', '2 r_eff + 2 Hmax tan(draft) + a wall of 2 lines plus 1.2 mm, or the closing width if wider, + 3 cells of rounding', { min: 0, max: 100 }),
     edge: auto('Edge distance', 'smallest that fits the joint', { min: 0, max: 100 }),
   },
   print: {

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -60,6 +60,28 @@ describe('source rules', () => {
     for (const file of all.filter((f) => f.path.startsWith('src/core/'))) {
       expect(/\.(mirror|scale)\s*\(/.test(file.text), `${file.path} mirrors or scales`).toBe(false);
     }
+  });
+
+  it('keeps the field code free of Manifold at run time, so field.worker can load it without WASM', () => {
+    const byPath = new Map(all.map((file) => [file.path, file.text]));
+    const seen = new Set<string>();
+    const queue = all.filter((file) => file.path.startsWith('src/core/field/')).map((file) => file.path);
+    expect(queue.length).toBeGreaterThan(5);
+    while (queue.length > 0) {
+      const path = queue.pop()!;
+      if (seen.has(path)) continue;
+      seen.add(path);
+      // A line that starts `import type` is erased at build time, so it pulls nothing in.
+      for (const [, from] of byPath.get(path)!.matchAll(/^import (?!type )[^;]*?from '([^']+)';/gm)) {
+        expect(from, `${path} loads ${from}`).not.toMatch(/^manifold-3d|^three/);
+        if (!from.startsWith('.')) continue;
+        const target = join(dirname(path), from).replaceAll('\\', '/') + '.ts';
+        expect(byPath.has(target), `${path} imports ${from}`).toBe(true);
+        queue.push(target);
+      }
+    }
+    expect(seen.has('src/core/mesh/shells.ts')).toBe(true);
+    expect(seen.has('src/core/solid/arena.ts')).toBe(false);
   });
 
   it('keeps core free of DOM and three', () => {

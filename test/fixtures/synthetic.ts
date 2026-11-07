@@ -351,6 +351,79 @@ export function squareStack(rings: [number, number][]): WeldedMesh {
   return { positions: Float32Array.from(positions), indices: Uint32Array.from(indices) };
 }
 
+/** The cup every field oracle uses, open end up: outer R30, inner r27, height 60, floor 3. */
+export const CUP = { R: 30, r: 27, height: 60, floor: 3 };
+
+/** Facets this fine change the volumes by about 0.01%, far below the 2% these shapes are checked to. */
+const ROUND = 256;
+
+function cupSolid(api: ManifoldToplevel, keep: <T extends Manifold>(m: T) => T): Manifold {
+  const { R, r, height, floor } = CUP;
+  const outer = keep(api.Manifold.cylinder(height, R, R, ROUND));
+  const hollow = keep(keep(api.Manifold.cylinder(height, r, r, ROUND)).translate([0, 0, floor]));
+  return keep(outer.subtract(hollow));
+}
+
+export function cup(api: ManifoldToplevel): WeldedMesh {
+  return meshOf((keep) => cupSolid(api, keep));
+}
+
+/** The same cup with its open end on the plane: a half-turn about x, so still no reflection. */
+export function invertedCup(api: ManifoldToplevel): WeldedMesh {
+  return meshOf((keep) => keep(keep(cupSolid(api, keep).rotate([180, 0, 0])).translate([0, 0, CUP.height])));
+}
+
+/** The inverted cup with a `diameter` hole through its wall at mid height, so its air is no longer sealed. */
+export function ventedInvertedCup(api: ManifoldToplevel, diameter: number): WeldedMesh {
+  return meshOf((keep) => {
+    const moved = keep(keep(cupSolid(api, keep).rotate([180, 0, 0])).translate([0, 0, CUP.height]));
+    const drill = keep(keep(keep(api.Manifold.cylinder(10, diameter / 2, diameter / 2, 64)).rotate([0, 90, 0])).translate([24, 0, CUP.height / 2]));
+    return keep(moved.subtract(drill));
+  });
+}
+
+/** A hollow cone standing on its open base, its wall `thickness` thick measured upward. */
+export function hollowCone(api: ManifoldToplevel, height: number, radius: number, thickness: number): WeldedMesh {
+  return meshOf((keep) => {
+    const outer = keep(api.Manifold.cylinder(height, radius, 0, ROUND));
+    const inner = keep(api.Manifold.cylinder(height - thickness, radius * (1 - thickness / height), 0, ROUND));
+    return keep(outer.subtract(inner));
+  });
+}
+
+export const MUSHROOM = { stemRadius: 6, stemHeight: 35, capRadius: 22 };
+
+/** A stem under a hemisphere dome, with the flat of the dome facing down. */
+export function mushroom(api: ManifoldToplevel): WeldedMesh {
+  const { stemRadius, stemHeight, capRadius } = MUSHROOM;
+  return meshOf((keep) => {
+    // The stem runs on into the dome so the two do not meet in a coplanar face.
+    const stem = keep(api.Manifold.cylinder(stemHeight + 1, stemRadius, stemRadius, ROUND));
+    const dome = keep(keep(keep(api.Manifold.sphere(capRadius, ROUND)).trimByPlane([0, 0, 1], 0)).translate([0, 0, stemHeight]));
+    return keep(stem.add(dome));
+  });
+}
+
+export const HOLED_BLOCK = { side: 40, height: 60, holeRadius: 10 };
+
+/** A block on z=0 with a round hole straight through it along y, at mid height. */
+export function holedBlock(api: ManifoldToplevel): WeldedMesh {
+  const { side, height, holeRadius } = HOLED_BLOCK;
+  return meshOf((keep) => {
+    const block = cuboid(api, keep, [-side / 2, -side / 2, 0], [side / 2, side / 2, height]);
+    const drill = keep(keep(keep(api.Manifold.cylinder(side + 2, holeRadius, holeRadius, ROUND, true)).rotate([90, 0, 0])).translate([0, 0, height / 2]));
+    return keep(block.subtract(drill));
+  });
+}
+
+/** A square pyramid standing on the plane with its tip at (x, y, height), and a base far narrower than a cell. */
+export function needle(x: number, y: number, height: number, baseHalf: number): WeldedMesh {
+  return {
+    positions: Float32Array.from([x - baseHalf, y - baseHalf, 0, x + baseHalf, y - baseHalf, 0, x + baseHalf, y + baseHalf, 0, x - baseHalf, y + baseHalf, 0, x, y, height]),
+    indices: Uint32Array.from([0, 2, 1, 0, 3, 2, 0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4]),
+  };
+}
+
 /** Rotates a mesh by a rotation matrix, with no rounding beyond float32. */
 export function rotated(mesh: WeldedMesh, r: readonly number[]): WeldedMesh {
   const out = new Float32Array(mesh.positions.length);

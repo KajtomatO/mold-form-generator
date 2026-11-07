@@ -24,6 +24,8 @@ These change or extend what you wrote, or correct what I told you earlier.
    | Barrel | 12 | 10.2 |
    | Wolf | 177 | 208 |
 
+   Measured at M2, in the same order: 42.8, 117.7, 541, 11.2, 86.0, 10.1, 202. They come out lower than these estimates because the raster clips triangles to each cell, which G3 allowed.
+
    The earlier barrel figure was wrong: it counted the 3.4 ml sealed void as silicone. The margin is what guarantees at least 3 mm of silicone everywhere. Without it, the delivered thickness was only about 2.3 to 2.9 mm.
 2. **Base stands 0.2 mm proud instead of exactly flush.** First-layer squish can make a printed base thinner than designed. If it ends up recessed, the cover wall lands on the table, tape stops loading the seal, and the seam opens under silicone pressure. Proud by one layer means the base always rests on the table. Tape still runs from the side walls across the base.
 3. **"Simplify first" is met differently.** The cover never simplifies the mesh before offsetting. Rasterising the model at 0.125 mm already removes finer detail, and it copes with non-watertight input. Simplification is used only for display and for Manifold operations above 2M triangles, and the printed `model_oriented.stl` always comes from your original mesh.
@@ -182,7 +184,7 @@ Units are mm unless noted. Every value is editable; rarely used ones sit in a co
 | Vents | enabled; `diameter` (2.5, 2 to 6); `persistence` (t/2) |
 | Seat | enabled; `depth` ds (3, 1 to 10); `halfAngleDeg` (30, 10 to 45) |
 | Funnel | generate; `topDiameter` (40); `height` (30); `neckHeight` (10); `wall` (1.2); `tipWall` (0.86); `seatClearance` (0.10) |
-| Grid | `nx`, `ny` (1, 1, up to 20); `spacing` between model bounding boxes (auto: 2 r_eff + 2 Hmax tan(draft) + 2, editable, 0 to 100); `edge`, distance from model bounding box to the outer box (auto minimum, 0 to 100) |
+| Grid | `nx`, `ny` (1, 1, up to 20); `spacing` between model bounding boxes (auto: 2 r_eff + 2 Hmax tan(draft) + a wall of 2 lines plus 1.2 mm, or the closing span plus a cell if wider, + 3 cells of rounding, editable, 0 to 100); `edge`, distance from model bounding box to the outer box (auto minimum, 0 to 100) |
 | Print | `layerHeight` (0.2); `nozzle` (0.4); bed X, Y, Z (220, 220, 250); infill (0.35); density (1.24); tape strip N (10) |
 | Quality | `cellFinal` (0.125, 0.05 to 0.5); `cellPreview` (auto `max(0.5, L/1024)`); `analysisCell` (0.25); `tinTolFinal` (0.05); `tinTolPreview` (0.1) |
 | Reports | `minVolumeMl` (0.05); underside persistence (0.3) |
@@ -241,7 +243,7 @@ Both only raise H, so clearance and nesting are preserved.
 
 ### G6. Grid
 
-Pitch = model XY size + spacing, snapped to a multiple of `cellFinal`; the UI shows the effective pitch. Tiles are max-composited at integer offsets. Overlaps merge into one cavity naturally. Pockets, Mode B unions and openings use the same snapped positions. Measure the minimum plastic wall on the conditioned composite, and warn below 2 lines plus margin, showing the spacing needed. Node cap 16M: raise the cell and warn.
+Pitch = model XY size + spacing, snapped to a multiple of `cellFinal`; the UI shows the effective pitch. Tiles are max-composited at integer offsets. Overlaps merge into one cavity naturally. Pockets, Mode B unions and openings use the same snapped positions. A preview cell may not divide the snapped pitch, so a preview field can sit up to one preview cell per tile wider than export (x8: 125.0 against 124.75). The pitch shown in the UI and used for placing parts always comes from a plan at `cellFinal`, and wall warnings are not read from a coarse preview. Measure the minimum plastic wall on the conditioned composite, and warn below 2 lines plus margin, showing the spacing needed. Node cap 16M: raise the cell and warn.
 
 ### G7. Closed tool
 
@@ -387,7 +389,7 @@ Part colours: model `#b9b4a7`, silicone `#2dd4bf`, cover neutral at 35% opacity,
 
 Each milestone ends with its checks green, then a commit with no Claude attribution. `scripts/ci.sh` is the quick suite (typecheck, unit, smoke e2e, under about 8 minutes). `scripts/ci.sh --full` runs all 7 models in the background before each milestone commit, and soak tests only at M5 and M11. Playwright uses `workers:1`, explicit timeouts, `channel:'chromium'`, swiftshader args, ports 5183 and 5184 with `dist-ci`, and `reuseExistingServer:false`, against the LAN IP. The user's server stays on 5173 from `dist`. `BENCHMARKS.md` is written only with `--record`.
 
-**Golden numbers:** state their parameters, and are frozen in M2 after review. A later change over 5% fails until reviewed. Independent oracles at no margin: cup 70.3 to 70.5, mushroom 74.6 to 75.2, block 48.5 ml.
+**Golden numbers:** state their parameters, and are frozen in M2 after review. A later change over 5% fails until reviewed. Independent oracles at no margin are closed forms: cup 72.595, inverted cup 45.497, mushroom 75.188, block 49.050 ml. (The plan's earlier figures were 0.5 mm voxel measurements, which read low.)
 
 ### M0: Repo, docs, install, spike
 
@@ -423,13 +425,13 @@ Checks:
 
 Checks:
 - Dilation equals brute force within 1e-4 on 3 synthetic and 2 real fields.
-- Silicone at t=3, no margin, no draft, no closing, cell 0.25, within 5%: Benchy 39.8, Goddess 103, VIS-35 485, jersey 10.3, x8 79.3, barrel 9.0, wolf 186. Barrel void excluded.
-- Oracle fixtures within 2%. Inverted cup reports 44.2 ml within 3%.
+- Silicone at t=3, no margin, no draft, no closing, cell 0.25, within 5%: Benchy 39.8, Goddess 103, VIS-35 485, jersey 10.3, x8 79.3, barrel 9.0, wolf 186. Barrel void excluded. At these settings r/cell is exactly 12, which adds one row of cliff to straight walls. At t=2.9999, x8 and jersey fall about 8% and 7.5% below these figures. Plan defaults are not affected, because their r/cell is 26.93.
+- Oracle fixtures within 2% of their closed forms at the export cell, and 1% at cell 0.05.
 - Vertex test on all 7: `H(v_xy) >= v_z + r_nominal` with margin on. Needle at a cell corner is covered.
 - Draft and closing never lower H. Closing is idempotent on the final field within 0.01. Draft on a known cliff within 10%.
 - Grid composite equals independent tile evaluation. Pitch is a multiple of `cellFinal`. Spacing 0 merges.
 - Cavities at defaults: x8 2, others 1. x8 with no margin and no closing: 8. Bodies: x8 8.
-- Thin-wall warning on Goddess 2x1 and VIS-35 2x1 with spacing 10. Auto spacing passes.
+- VIS-35 2x1 with spacing 10 warns of a thin wall. Goddess 2x1 with spacing 10 reports merged tiles, because closing fills that wall, and at spacing 11 it warns of a thin wall. Auto spacing passes.
 - Timing recorded; fail above 5 s on any example at 0.125 mm.
 
 ### M3: Tool, cover, base, joint, poses, fit-test
