@@ -3,6 +3,7 @@ import { unzipSync } from 'fflate';
 import { expect, test, type Page } from '@playwright/test';
 import Module from 'manifold-3d';
 import { runBench, type BenchResult } from '../src/core/bench/suite';
+import { firefoxHasDisplay, NO_FIREFOX_WEBGL } from './firefox';
 
 interface Diag {
   secureContext: boolean;
@@ -42,18 +43,23 @@ test('@smoke the app runs over plain http on the LAN address', async ({ page }) 
     expect(Math.abs(volume - expected) / expected).toBeLessThan(0.005);
   });
 
-  expect(diag.gl.error).toBeNull();
-  expect(diag.gl.webgl2).toBe(true);
-  expect(diag.gl.stencilBits).toBeGreaterThan(0);
-  expect(diag.gl.distinctColours).toBeGreaterThan(8);
-
   expect(diag.transferSourceLength).toBe(0);
   expect(diag.transferEchoLength).toBe(1024);
   expect(diag.indexedDb).toBe(true);
   expect(errors).toEqual([]);
 });
 
-test('@smoke page screenshots capture the WebGL canvas', async ({ page }) => {
+test('@smoke WebGL2 draws with stencil and a float height texture', async ({ page, browserName }) => {
+  test.skip(browserName === 'firefox' && !firefoxHasDisplay, NO_FIREFOX_WEBGL);
+  const { gl } = await runDiag(page);
+  expect(gl.error).toBeNull();
+  expect(gl.webgl2).toBe(true);
+  expect(gl.stencilBits).toBeGreaterThan(0);
+  expect(gl.distinctColours).toBeGreaterThan(8);
+});
+
+test('@smoke page screenshots capture the WebGL canvas', async ({ page, browserName }) => {
+  test.skip(browserName === 'firefox' && !firefoxHasDisplay, NO_FIREFOX_WEBGL);
   await runDiag(page);
   const png = await page.locator('#gl').screenshot();
   const distinct = await page.evaluate(async (b64) => {

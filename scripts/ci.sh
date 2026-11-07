@@ -14,12 +14,21 @@ for arg in "$@"; do
   esac
 done
 
+# Firefox has no WebGL unless it has a display, so give it a virtual one when possible.
+playwright=(npx playwright test)
+if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null; then
+  playwright=(xvfb-run -a -s "-screen 0 1366x768x24" "${playwright[@]}")
+fi
+
 npm run --silent typecheck
 if [ "$full" = "1" ]; then
   CFG_FULL=1 npx vitest run
-  CFG_FULL=1 npx playwright test
+  CFG_FULL=1 "${playwright[@]}"
 else
   npx vitest run
-  npx playwright test --grep @smoke
+  "${playwright[@]}" --grep @smoke
 fi
 echo "CI passed."
+if [ -z "${DISPLAY:-}" ] && ! command -v xvfb-run >/dev/null; then
+  echo "Firefox WebGL tests were skipped: xvfb is not installed. To run them: WITH_SYSTEM_DEPS=1 scripts/install.sh"
+fi
