@@ -1,7 +1,7 @@
 import type { DropResult } from '../core/analysis/validate';
 import type { Params } from '../core/params/schema';
 import type { CameraView } from '../view/scene';
-import type { Fault } from '../workers/protocol';
+import type { Fault, WorkerLike } from '../workers/protocol';
 import type { BudgetSettings } from './budgets';
 import { hashBytes, hashMesh } from './hash';
 import type { LogEntry } from './jobGate';
@@ -10,9 +10,12 @@ import { parseStl } from '../core/stl/parse';
 import { weld } from '../core/mesh/weld';
 import { setParamValue as setPath, type ParamPath } from './stages';
 import type { Project, WallStatus } from './pipeline';
+import type { ExportReport, ExportRequest } from '../workers/exportJob';
 
 export interface ExportSummary {
   files: Record<string, { bytes: number; hash: string; meshHash: string }>;
+  /** report.json as parsed, less its timings, which are the one part that differs from run to run. */
+  report: Omit<ExportReport, 'timings'> | null;
   zipBytes: number;
   clearance: { measured: number; error: number; raisedBy: number } | null;
   diagnostics: string[];
@@ -42,7 +45,8 @@ export interface TestHooks {
   openings(): { id: string; kind: string; x: number; y: number; pinned: boolean }[];
   drag(id: string, x: number, y: number): void;
   drop(id: string, x: number, y: number): DropResult | null;
-  armFault(gate: 'field' | 'solid', fault: Fault): void;
+  /** A fault on the next job of a worker, or on the next export, which a delay `at` a step holds there. */
+  armFault(gate: 'field' | 'solid' | 'export', fault: Fault): void;
   recycleSolid(): void;
   solidCached(): Record<string, string>;
   heap(): Promise<{ capacity: number | null; used: number | null; held: number }>;
@@ -60,10 +64,49 @@ export interface TestHooks {
   project(): Project;
   /** The box around a part on screen, in mold coordinates. */
   partBounds(part: 'cover' | 'base'): { min: [number, number, number]; max: [number, number, number] } | null;
-  exportParts(): Promise<ExportSummary>;
+  exportParts(request?: ExportRequest): Promise<ExportSummary>;
+  /** Whether an export runs, and whether the pipeline holds its worker. */
+  exporting(): { active: boolean; worker: boolean };
+  /** Every solid worker the page spawned, in order: whether it was terminated, and what it said after. */
+  solidWorkers(): WorkerRecord[];
 }
 
-export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>): TestHooks {
+/** One worker as a test sees it from outside the pipeline, which only a real terminate() can end. */
+export interface WorkerRecord {
+  terminated: boolean;
+  /** Messages it sent in all, and after terminate() was called. A terminated worker sends none. */
+  messages: number;
+  afterTerminate: number;
+}
+
+/**
+ * Wraps a spawn so a test can see each worker's end for itself, and not only the pipeline's word for
+ * it: Cancel must really terminate the export's worker, so that it stops building a mold nobody wants.
+ */
+export function recordWorkers(spawn: () => WorkerLike): { spawn: () => WorkerLike; records: WorkerRecord[] } {
+  const records: WorkerRecord[] = [];
+  return {
+    records,
+    spawn: () => {
+      const worker = spawn();
+      const record: WorkerRecord = { terminated: false, messages: 0, afterTerminate: 0 };
+      records.push(record);
+      // A listener of its own, beside the pipeline's onmessage, so it hears the worker whatever the pipeline does.
+      (worker as unknown as EventTarget).addEventListener?.('message', () => {
+        record.messages++;
+        if (record.terminated) record.afterTerminate++;
+      });
+      const end = worker.terminate.bind(worker);
+      worker.terminate = () => {
+        record.terminated = true;
+        end();
+      };
+      return worker;
+    },
+  };
+}
+
+export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>, solidWorkers: WorkerRecord[] = []): TestHooks {
   const hooks: TestHooks = {
     async load(name) {
       pipeline.load(await fetchModel(name), name);
@@ -123,18 +166,21 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
       }
       return { min, max };
     },
-    async exportParts() {
+    async exportParts(request) {
       const progress: string[] = [];
       const t0 = performance.now();
-      const outputs = await pipeline.exportParts((p) => progress.push(p.step));
+      const outputs = await pipeline.exportParts((p) => progress.push(p.step), undefined, request);
       const ms = performance.now() - t0;
       const files: ExportSummary['files'] = {};
       for (const [name, bytes] of Object.entries(outputs.files)) {
-        const mesh = weld(parseStl(bytes).positions);
-        files[name] = { bytes: bytes.length, hash: hashBytes(bytes), meshHash: hashMesh(mesh.positions, mesh.indices) };
+        const mesh = name.endsWith('.stl') ? weld(parseStl(bytes).positions) : null;
+        files[name] = { bytes: bytes.length, hash: hashBytes(bytes), meshHash: mesh ? hashMesh(mesh.positions, mesh.indices) : '' };
       }
-      return { files, zipBytes: outputs.zip.length, clearance: outputs.clearance, diagnostics: outputs.diagnostics.map((d) => d.code), progress, ms };
+      const report = outputs.report ? (({ timings: _timings, ...rest }) => rest)(outputs.report) : null;
+      return { files, report, zipBytes: outputs.zip.length, clearance: outputs.clearance, diagnostics: outputs.diagnostics.map((d) => d.code), progress, ms };
     },
+    exporting: () => ({ active: pipeline.exporting, worker: pipeline.exportWorkerAlive }),
+    solidWorkers: () => solidWorkers.map((record) => ({ ...record })),
   };
   (window as unknown as { __pipeline: TestHooks }).__pipeline = hooks;
   return hooks;

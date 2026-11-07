@@ -38,8 +38,11 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
       injectedCrash(message.fault);
       applyDelay(message.fault, now);
       if (message.t === 'export') {
-        const progress = (step: string, done: number, total: number): void => post({ t: 'progress', id, step, done, total });
-        const outputs = runExport(api, simplifier, message.params, message.inputs, progress, now, timings, message.cellScale);
+        const progress = (step: string, done: number, total: number): void => {
+          post({ t: 'progress', id, step, done, total });
+          applyDelay(message.fault, now, step);
+        };
+        const outputs = runExport(api, simplifier, message, progress, now, timings);
         post({ t: 'exported', id, outputs, timings }, buffersOf(outputs.zip, ...Object.values(outputs.files)));
         return;
       }

@@ -23,10 +23,14 @@ interface Shot {
   scroll?: 'pour' | 'grid' | 'advanced';
   /** Which sets take this shot: every size and theme in Chromium, and 1366 x 768 in both themes in Firefox, unless narrowed. */
   only?: (browser: Browser, width: number, theme: Theme) => boolean;
+  /** Export ZIP pressed: held at its clearance step with the stage bar showing, or done, with the clearance it measured. */
+  exporting?: 'mid' | 'done';
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
 const SIDEBAR_SETS = (browser: Browser, width: number, theme: Theme): boolean => (browser === 'firefox' ? width === 1366 && theme === 'dark' : (width === 1366) === (theme === 'dark'));
+// The export: every size and theme in Chromium, and the user's browser at 1366 x 768 in the dark theme.
+const EXPORT_SETS = (browser: Browser, width: number, theme: Theme): boolean => browser === 'chromium' || (width === 1366 && theme === 'dark');
 
 const CASES: Shot[] = [
   { name: 'benchy', file: EXAMPLE_FILES.benchy, grid: [1, 1] },
@@ -36,6 +40,8 @@ const CASES: Shot[] = [
   { name: 'x8-3x3-grid', file: EXAMPLE_FILES.x8, grid: [3, 3], scroll: 'grid', only: SIDEBAR_SETS },
   { name: 'wolf-advanced', file: EXAMPLE_FILES.wolf, grid: [1, 1], scroll: 'advanced', only: SIDEBAR_SETS },
   { name: 'empty', file: null, grid: [1, 1], only: SIDEBAR_SETS },
+  { name: 'benchy-exporting', file: EXAMPLE_FILES.benchy, grid: [1, 1], only: EXPORT_SETS, exporting: 'mid' },
+  { name: 'benchy-exported', file: EXAMPLE_FILES.benchy, grid: [1, 1], only: EXPORT_SETS, exporting: 'done' },
 ];
 
 const SIZES = [
@@ -90,9 +96,20 @@ test.describe('review screenshots', () => {
               sections.scrollTop = (section as HTMLElement).offsetTop - (sections as HTMLElement).offsetTop;
             });
           }
+          if (shot.exporting === 'mid') {
+            await hooks(page, (h) => h.armFault('export', { kind: 'delay', ms: 120_000, at: 'clearance' }));
+            await page.getByTestId('export-zip').click();
+            await expect(page.getByTestId('stage-bar')).toHaveAttribute('data-step', 'clearance', { timeout: 120_000 });
+          } else if (shot.exporting === 'done') {
+            const download = page.waitForEvent('download', { timeout: 180_000 });
+            await page.getByTestId('export-zip').click();
+            await download;
+            await expect(page.getByTestId('status-clearance')).toContainText('clearance measured');
+          }
           await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const path = join(DIR, `${browser}-${shot.name}-${size.width}x${size.height}-${theme}.png`);
           await page.screenshot({ path });
+          if (shot.exporting === 'mid') await page.getByTestId('export-cancel').click();
           console.log(`saved ${path}`);
           expect(watch.errors).toEqual([]);
           expect(watch.foreign).toEqual([]);

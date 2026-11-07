@@ -121,12 +121,25 @@ export function siliconeAdvice(params: Params, rim: Rim | null): Diagnostic[] {
 
 const RANK = { error: 0, warning: 1, info: 2 } as const;
 
-/** Everything the Diagnostics card lists: the pipeline's, its error, and the advice on t, problems first. */
+/**
+ * Everything the Diagnostics card lists: the pipeline's, its error, the advice on t, and what the last
+ * export found while its geometry is current, problems first.
+ */
 export function allDiagnostics(pipeline: Pipeline): ShownDiagnostic[] {
   const status = pipeline.status();
   const error: ShownDiagnostic[] = status.error ? [{ code: 'pipeline-error', severity: 'error', message: status.error }] : [];
-  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.params, pipeline.field?.value.rim ?? null)];
+  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.params, pipeline.field?.value.rim ?? null), ...pipeline.exportNotes()];
   return all.sort((a, b) => RANK[a.severity] - RANK[b.severity]);
+}
+
+/**
+ * Why the export buttons are off, or null when they can be used: with no model, and while a hard error
+ * stands. What an export found itself does not count, as exporting again is how to see it change.
+ */
+export function exportBlocked(pipeline: Pipeline): string | null {
+  if (!pipeline.modelName) return 'Load a model to export its mold.';
+  const error = allDiagnostics(pipeline).find((d) => d.severity === 'error' && !d.byExport);
+  return error ? `Fix this first: ${error.message}` : null;
 }
 
 /** Codes whose message names a place on the top as "at (x, y)": these get a Show toggle. */

@@ -125,7 +125,7 @@ The file names give each pair's clearances. Printed pieces are told apart by the
 How to read the result:
 1. Print the taper series, one pair at a time, in the material and settings of the real mold, in the poses of these files. The groove is generous here, so only the taper decides the fit.
 2. The best fit is the tightest pair whose base seats fully on the cover's shelf by hand. The base then stands proud of the cover by ${params.joint.baseProud} mm. If it rocks or stands higher, go one step looser. Set Taper clearance per side to that pair's value.
-3. Print the groove series. This ZIP builds it at a taper clearance of ${params.joint.taperClearance.toFixed(2)} mm, and a base that is too tight in the taper stops short whatever the groove does. So if step 2 gave you another value, enter it under Printer check on diag.html and download again first. Choose the tightest pair that still seats fully, and set Groove clearance per side to that pair's value.
+3. Print the groove series. This ZIP builds it at a taper clearance of ${params.joint.taperClearance.toFixed(2)} mm, and a base that is too tight in the taper stops short whatever the groove does. So if step 2 gave you another value, set Taper clearance per side to it under Cover & joint in the app, and save the fit test again with the Fit test button under Export (diag.html offers the same under Printer check). Choose the tightest pair that still seats fully, and set Groove clearance per side to that pair's value.
 4. For a leak test, seat the chosen pair, tape it as for a real pour, and fill it with water through the pour opening until water shows at the vent. The joint should stay dry for several minutes. A little Vaseline in the groove helps.
 
 If no pair seats:

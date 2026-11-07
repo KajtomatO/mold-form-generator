@@ -489,7 +489,8 @@ input[type='range']:disabled {
   margin-top: 6px;
 }
 
-.section > .note {
+.section > .note,
+.advanced .note {
   margin-bottom: 8px;
 }
 
@@ -529,8 +530,15 @@ input[type='range']:disabled {
   color: var(--accent);
 }
 
-.btn:disabled {
-  opacity: 0.45;
+.btn:disabled,
+.btn.primary:disabled {
+  /* Fading the accent fill still read as the button to press in the dark theme, so a disabled
+     button drops its fill and colour instead, and sits flat on the panel in both themes. */
+  background: var(--panel-2);
+  border-color: var(--line);
+  border-style: dashed;
+  color: color-mix(in srgb, var(--ink-2) 75%, var(--panel-2));
+  font-weight: 400;
   cursor: not-allowed;
 }
 
@@ -825,6 +833,110 @@ li + li > .candidate {
   padding: 0 4px;
 }
 
+.export .option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.export .option:has(input:disabled) {
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.export-note .line {
+  display: block;
+}
+
+.export-note {
+  margin: 8px 0 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.export-note.done {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+.export-note.warning {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.export-note.error {
+  color: var(--bad);
+  background: var(--bad-bg);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+}
+
+/* The stage bar takes the Export ZIP button's place and height while an export runs. */
+.stagebar {
+  height: 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 6px;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 4px;
+}
+
+.stagebar .stage-text {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.stagebar .stage-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stagebar .stage-count {
+  flex: none;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.stagebar .stage-track {
+  grid-column: 1;
+  grid-row: 2;
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.stagebar .stage-track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  transition: width 0.25s ease-out;
+}
+
+.stagebar .btn {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  height: 32px;
+}
+
 /* ----- status strip ----- */
 
 .status {
@@ -849,6 +961,10 @@ li + li > .candidate {
 .status .item b {
   color: var(--ink);
   font-weight: 500;
+}
+
+.status .item.warn {
+  color: var(--warn);
 }
 
 .status .toggles {

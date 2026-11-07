@@ -28,19 +28,16 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
   ],
 };
 
-/** Advanced's sub-headings, by schema group. */
-export const GROUP_TITLES: Record<string, string> = {
-  base: 'Base',
-  silicone: 'Silicone',
-  cover: 'Cover',
-  joint: 'Joint',
-  pour: 'Pour',
-  vents: 'Vents',
-  seat: 'Seat',
-  funnel: 'Funnel',
-  print: 'Printer',
-  quality: 'Quality',
-  reports: 'Reports',
+/** Advanced's sub-headings, by schema group, which README.txt's list of settings uses too. */
+export { GROUP_TITLES } from '../core/params/schema';
+
+/**
+ * Advanced groups holding settings that nothing reads yet but the stage keys: the print, clamp and air
+ * reports that use them come with M7. Said on screen, so a set bed size is not taken for a check.
+ */
+export const GROUP_NOTES: Partial<Record<string, string>> = {
+  print: 'Bed X, Y and Z, Plastic density and Tape strip holds are for the print and clamp reports of a later version, and change nothing yet. Infill, as a fraction, only sets the advice in README.txt.',
+  reports: 'Underside persistence is for the air report of a later version, and changes nothing yet.',
 };
 
 /**

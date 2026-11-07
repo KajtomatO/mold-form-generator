@@ -1,7 +1,9 @@
 import { signal, type Signal } from '@preact/signals';
 import type { DropResult } from '../core/analysis/validate';
 import { DEFAULT_LAYERS, type LayerName, type LayerStyle } from '../view/layers';
+import type { ExportWant } from '../workers/exportJob';
 import { samePlane, type PlaneChoice } from '../workers/fieldStages';
+import { downloadName, saveBytes } from './download';
 import type { Pipeline, Project } from './pipeline';
 import { setParamValue, type ParamPath } from './stages';
 
@@ -26,6 +28,27 @@ function writeTheme(theme: Theme): void {
     // Nothing to do: the choice still holds until the page is closed.
   }
 }
+
+/**
+ * Where the Export box stands: an export running with its step, or how the last one ended. A saved
+ * file keeps what it was built for, so the box can say once the screen has moved on from it, and the
+ * first error the export itself found, as such a file was saved all the same.
+ */
+export type ExportState =
+  | { phase: 'idle' }
+  | { phase: 'running'; want: ExportWant; step: string; done: number; total: number }
+  | { phase: 'saved'; want: ExportWant; file: string; key: string; error: string | null }
+  | { phase: 'cancelled'; want: ExportWant }
+  | { phase: 'failed'; want: ExportWant; message: string };
+
+/** What each button saves, named after the model: a file of the export's, or its ZIP. */
+const SAVES: Record<ExportWant, { suffix: string; file: string | null; mime: string }> = {
+  zip: { suffix: '-mold.zip', file: null, mime: 'application/zip' },
+  cover: { suffix: '-cover.stl', file: 'cover.stl', mime: 'application/octet-stream' },
+  base: { suffix: '-base.stl', file: 'base.stl', mime: 'application/octet-stream' },
+  funnel: { suffix: '-funnel.stl', file: 'funnel.stl', mime: 'application/octet-stream' },
+  'fit-test': { suffix: '-fit-test.zip', file: null, mime: 'application/zip' },
+};
 
 /**
  * The UI's state. The project, which is what undo and project files will keep, is the pipeline's:
@@ -53,6 +76,9 @@ export class Store {
   readonly lastMove = signal<{ id: string; result: DropResult } | null>(null);
   /** The renderer's name, once the view has one. */
   readonly renderer = signal('');
+  readonly exportState = signal<ExportState>({ phase: 'idle' });
+  /** The Export box's option to put the fit-test pieces in the ZIP as fit_test/. */
+  readonly fitTestInZip = signal(false);
 
   constructor(readonly pipeline: Pipeline) {
     this.project = signal(pipeline.project());
@@ -64,6 +90,8 @@ export class Store {
   }
 
   load(bytes: Uint8Array, name: string): void {
+    // An export that runs goes on, for the model it was asked for; how an earlier one ended is history.
+    if (this.exportState.value.phase !== 'running') this.exportState.value = { phase: 'idle' };
     this.pickMode.value = false;
     this.hoverCandidate.value = this.hoverTriangle.value = null;
     this.shown.value = [];
@@ -112,6 +140,33 @@ export class Store {
 
   restoreVents(): void {
     this.pipeline.setRemoved([]);
+  }
+
+  /**
+   * Runs one of the Export box's buttons and saves what it makes, named after the model it was asked
+   * for: the pipeline ends an export that waits for the preview when another file loads, so a file is
+   * never named after one model and made from another. One export at a time. Cancel leaves no file,
+   * and the box is ready again at once.
+   */
+  async exportFile(want: ExportWant): Promise<void> {
+    if (this.exportState.value.phase === 'running') return;
+    const save = SAVES[want];
+    const name = downloadName(this.pipeline.modelName ?? 'mold', save.suffix);
+    this.exportState.value = { phase: 'running', want, step: 'start', done: 0, total: 1 };
+    try {
+      const request = { want, fitTest: want === 'zip' && this.fitTestInZip.value };
+      const outputs = await this.pipeline.exportParts((progress) => (this.exportState.value = { phase: 'running', want, ...progress }), undefined, request);
+      saveBytes(name, save.file ? outputs.files[save.file] : outputs.zip, save.mime);
+      const error = outputs.diagnostics.find((d) => d.severity === 'error')?.message ?? null;
+      this.exportState.value = { phase: 'saved', want, file: name, key: outputs.key, error };
+    } catch (error) {
+      const e = error instanceof Error ? error : new Error(String(error));
+      this.exportState.value = e.name === 'Cancelled' ? { phase: 'cancelled', want } : { phase: 'failed', want, message: e.message };
+    }
+  }
+
+  cancelExport(): void {
+    this.pipeline.cancelExport();
   }
 
   setTheme(theme: Theme): void {

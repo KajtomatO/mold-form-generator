@@ -16,6 +16,10 @@ export function StatusStrip() {
   const t = store.project.value.params.silicone.t;
   const timing = pipeline.timing;
   const rebuild = pipeline.lastRebuild;
+  // The last export's measurement, for as long as the geometry it was measured on is what shows. An
+  // open mesh has no solid to measure, so after its export the clearance is unverified, not planned.
+  const exported = pipeline.currentExport();
+  const measured = exported?.clearance ?? null;
   return (
     <footer class="status" data-testid="status">
       {pipeline.modelName ? (
@@ -27,7 +31,15 @@ export function StatusStrip() {
           {oriented ? <span class="item" data-testid="status-size">{formatSize(modelSize(oriented.bounds))}</span> : null}
           {rim ? <span class="item" data-testid="status-box">box {formatSize(moldBox(rim))}</span> : null}
           {silicone ? <span class="item" data-testid="status-silicone">{silicone.ml.toFixed(1)} ml silicone</span> : null}
-          {rim ? (
+          {measured ? (
+            <span class="item" data-testid="status-clearance" title="The thinnest silicone between the model and the cover, measured on the parts the last export saved. It holds until a change to the mold.">
+              clearance measured {measured.measured.toFixed(2)} mm
+            </span>
+          ) : exported ? (
+            <span class="item warn" data-testid="status-clearance" title="The model's mesh has holes, so the last export could not measure the silicone between the model and the cover.">
+              clearance ≥ {t.toFixed(2)} mm, unverified
+            </span>
+          ) : rim ? (
             <span class="item" data-testid="status-clearance" title="The mold is built to leave at least this much silicone everywhere. Exporting measures it.">
               clearance ≥ {t.toFixed(2)} mm, planned
             </span>

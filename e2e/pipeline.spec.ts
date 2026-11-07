@@ -276,14 +276,20 @@ test.describe('the worker pipeline on pipeline.html', () => {
       const outputs = await p.exportParts();
       const files: Record<string, { bytes: number; hash: string; meshHash: string }> = {};
       for (const [name, bytes] of Object.entries(outputs.files)) {
-        const mesh = weld(parseStl(bytes).positions);
-        files[name] = { bytes: bytes.length, hash: hashBytes(bytes), meshHash: hashMesh(mesh.positions, mesh.indices) };
+        const mesh = name.endsWith('.stl') ? weld(parseStl(bytes).positions) : null;
+        files[name] = { bytes: bytes.length, hash: hashBytes(bytes), meshHash: mesh ? hashMesh(mesh.positions, mesh.indices) : '' };
       }
-      return { files, clearance: outputs.clearance };
+      const { timings: _timings, ...report } = outputs.report!;
+      return { files, report, clearance: outputs.clearance };
     });
     console.log(`export: clearance ${JSON.stringify(browser.clearance)}, ${Math.round(browser.ms)} ms, ${browser.zipBytes} bytes zipped`);
-    expect(Object.keys(browser.files).sort()).toEqual(['base.stl', 'cover.stl', 'funnel.stl', 'model_oriented.stl']);
-    expect(browser.files).toEqual(node.files);
+    expect(Object.keys(browser.files).sort()).toEqual(['README.txt', 'base.stl', 'cover.stl', 'funnel.stl', 'model_oriented.stl', 'project.json', 'report.json']);
+    // report.json records how long each step took, which is the one thing that differs between runs, so
+    // it is compared without those, and every other file byte for byte.
+    const { 'report.json': _browserReport, ...browserFiles } = browser.files;
+    const { 'report.json': _nodeReport, ...nodeFiles } = node.files;
+    expect(browserFiles).toEqual(nodeFiles);
+    expect(browser.report).toEqual(node.report);
     expect(browser.clearance).toEqual(node.clearance);
     expect(browser.clearance!.measured).toBeGreaterThanOrEqual(3);
     expect(browser.progress).toContain('clearance');

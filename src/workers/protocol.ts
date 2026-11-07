@@ -2,7 +2,7 @@ import type { Params } from '../core/params/schema';
 import type { StageId } from '../app/stages';
 import type { FieldInputs, FieldOutputs, FieldWanted } from './fieldStages';
 import type { SolidInputs, SolidOutputs, SolidWanted } from './solidStages';
-import type { ExportInputs, ExportOutputs } from './exportJob';
+import type { ExportJob, ExportOutputs } from './exportJob';
 import type { WallCheck, WallInputs } from './wallCheck';
 
 /**
@@ -14,7 +14,7 @@ import type { WallCheck, WallInputs } from './wallCheck';
  * Test-only faults, armed through the ?test=1 hooks. A leak keeps one CrossSection of the given number
  * of points in solid.worker's heap for good, which the soak's negative control must see.
  */
-export type Fault = { kind: 'oob' } | { kind: 'delay'; ms: number } | { kind: 'leak'; points: number };
+export type Fault = { kind: 'oob' } | { kind: 'delay'; ms: number; at?: string } | { kind: 'leak'; points: number };
 
 export interface FieldJobMessage {
   t: 'field';
@@ -37,13 +37,9 @@ export interface SolidJobMessage {
 }
 
 /** T3, sent to a fresh solid worker that is terminated when it answers. */
-export interface ExportJobMessage {
+export interface ExportJobMessage extends ExportJob {
   t: 'export';
   id: number;
-  params: Params;
-  inputs: ExportInputs;
-  /** Above 1 on the retry after a crash. */
-  cellScale: number;
   fault?: Fault;
 }
 
@@ -157,9 +153,12 @@ export function isInlineError(error: unknown): boolean {
   return error.name === 'ManifoldError' || error.name === 'StlError' || error.name === 'InlineError';
 }
 
-/** Busy-waits, as a stuck job would, so a test can see the gate end it. */
-export function applyDelay(fault: Fault | undefined, now: () => number): void {
-  if (fault?.kind !== 'delay') return;
+/**
+ * Busy-waits, as a stuck job would, so a test can see the gate end it. A delay `at` a step of an export
+ * waits when the export reaches that step instead, so a test can hold it there mid-way.
+ */
+export function applyDelay(fault: Fault | undefined, now: () => number, step?: string): void {
+  if (fault?.kind !== 'delay' || fault.at !== step) return;
   const until = now() + fault.ms;
   while (now() < until) {
     // Spin: a timer would let the worker take the next message, which a stuck job does not.

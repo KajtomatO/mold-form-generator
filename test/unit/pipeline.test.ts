@@ -619,7 +619,7 @@ describe('T3', () => {
     await p.idle();
     expect([solid.spawned(), solid.terminated()]).toEqual([1, 0]);
     const outputs = await p.exportParts();
-    expect(Object.keys(outputs.files).sort()).toEqual(['base.stl', 'cover.stl', 'funnel.stl', 'model_oriented.stl']);
+    expect(Object.keys(outputs.files).sort()).toEqual(['README.txt', 'base.stl', 'cover.stl', 'funnel.stl', 'model_oriented.stl', 'project.json', 'report.json']);
     expect([solid.spawned(), solid.terminated()]).toEqual([2, 1]);
     const retried = await p.exportParts(() => {}, { kind: 'oob' });
     expect([solid.spawned(), solid.terminated()]).toEqual([4, 3]);

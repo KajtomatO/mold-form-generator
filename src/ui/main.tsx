@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import { Pipeline, type PipelineOptions } from '../app/pipeline';
 import { Store } from '../app/store';
-import { installTestHooks } from '../app/testHooks';
+import { installTestHooks, recordWorkers } from '../app/testHooks';
 import { PreviewScene } from '../view/scene';
 import type { WorkerLike } from '../workers/protocol';
 import { App } from './App';
@@ -9,9 +9,12 @@ import './style.css';
 
 const query = new URLSearchParams(location.search);
 const test = query.get('test') === '1';
+const spawnSolid = (): WorkerLike => new Worker(new URL('../workers/solid.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike;
+// With the test hooks, every solid worker is recorded, so a test can see for itself that Cancel ends one.
+const solidWorkers = recordWorkers(spawnSolid);
 const options: PipelineOptions = {
   spawnField: () => new Worker(new URL('../workers/field.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
-  spawnSolid: () => new Worker(new URL('../workers/solid.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
+  spawnSolid: test ? solidWorkers.spawn : spawnSolid,
   frozen: test,
   checkWalls: true,
 };
@@ -38,6 +41,6 @@ if (test) {
     if (!response.ok) throw new Error(`Could not fetch ${name}: ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   };
-  installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel);
+  installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel, solidWorkers.records);
   (window as unknown as { __app: unknown }).__app = { store, scene };
 }

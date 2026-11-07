@@ -7,16 +7,20 @@ import { crossParameterErrors } from '../core/params/rules';
 import type { Params } from '../core/params/schema';
 import type { CutOpening } from '../core/parts/openings';
 import type { Diagnostic } from '../core/report/diagnostics';
-import type { ExportOutputs } from '../workers/exportJob';
+import type { ExportInputs, ExportMeta, ExportOutputs, ExportRequest } from '../workers/exportJob';
 import type { FieldWire, OrientedWire } from '../workers/fieldHost';
 import { DEFAULT_PLANE, PLAIN_IMPORT, samePlane, type FieldOutput, type FieldWanted, type ImportInput, type ParsedModel, type PlacementOutput, type PlaneChoice } from '../workers/fieldStages';
 import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type SolidJobMessage, type WallsJobMessage, type WorkerLike } from '../workers/protocol';
 import type { FootprintOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
 import type { WallCheck } from '../workers/wallCheck';
 import { Budgets } from './budgets';
+import { exportBlocked, siliconeAdvice } from './derived';
 import { hashFloats, hashMesh, hashString } from './hash';
-import { JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
+import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
+import type { Project } from './project';
 import { stageKeys, type StageId, type StageInputs } from './stages';
+
+export type { Project } from './project';
 
 /**
  * Everything a job needs, taken when it was asked for. A job is derived at dispatch, and by then main may
@@ -85,18 +89,13 @@ export interface PipelineOptions {
   checkWalls?: boolean;
 }
 
-/** A diagnostic as the card shows it. `exportCell` marks one read off the export field rather than the preview's. */
+/**
+ * A diagnostic as the card shows it. `exportCell` marks one read off the export field rather than the
+ * preview's, and `byExport` one that the last export found, which holds while its geometry is current.
+ */
 export interface ShownDiagnostic extends Diagnostic {
   exportCell?: boolean;
-}
-
-/** What the user has chosen, in one plain object, which undo and project files can keep as it is. */
-export interface Project {
-  params: Params;
-  plane: PlaneChoice;
-  pins: OpeningPin[];
-  /** Automatic vents the user deleted. */
-  removed: string[];
+  byExport?: boolean;
 }
 
 /** The wall check: running for the current state, done for it, or neither. */
@@ -139,10 +138,28 @@ function keep<T>(list: T[], entry: T): void {
 const CRASH_NAMES = new Set(['RuntimeError', 'RangeError', 'WorkerError']);
 
 export interface ExportProgress {
+  /** A step of exportSteps, or 'wait' while the preview catches up before the export starts. */
   step: string;
   done: number;
   total: number;
 }
+
+/** An export's result, with what it was built for, which exportKeyFor then tells apart from what shows now. */
+export interface ExportResult extends ExportOutputs {
+  key: string;
+}
+
+const ZIP_REQUEST: ExportRequest = { want: 'zip', fitTest: false };
+
+/** The single part each button saves, by its name in the ZIP. */
+const PART_FILES: Partial<Record<ExportRequest['want'], string>> = { cover: 'cover.stl', base: 'base.stl', funnel: 'funnel.stl' };
+
+function cancelledError(): Error {
+  return Object.assign(new Error('Export cancelled.'), { name: 'Cancelled' });
+}
+
+/** A diagnostic as core has it, without the card's marks, for the files of an export. */
+const plain = ({ code, severity, message }: Diagnostic): Diagnostic => ({ code, severity, message });
 
 /**
  * The worker pipeline. Main holds every input, both workers' caches are only ever what they say, and
@@ -207,7 +224,6 @@ export class Pipeline {
   private heavyChangedAt = 0;
   /** A target that failed and must not be asked for again until something changes. */
   private failed = new Set<string>();
-  private exportWorker: WorkerLike | null = null;
   private walls: { key: string; value: WallCheck } | null = null;
   private wallJob: { key: string; worker: WorkerLike } | null = null;
   /** In ms, per wall check that finished, for the record. */
@@ -225,6 +241,8 @@ export class Pipeline {
   // ----- what the user does -----
 
   load(bytes: Uint8Array, name: string): void {
+    // An export still waiting for the preview was asked for the model this one replaces, so it stops.
+    this.exportWait?.();
     this.file = { id: `f${++this.loads}`, name, bytes };
     this.plane = DEFAULT_PLANE;
     this.importInput = PLAIN_IMPORT;
@@ -351,9 +369,10 @@ export class Pipeline {
     return { field, openings, cover, base, all: hashString([field, openings, cover, base].join('|')) };
   }
 
-  /** Test hooks: a fault on the next job of a worker, and a recycle on demand. */
-  armFault(gate: 'field' | 'solid', fault: Fault): void {
-    (gate === 'field' ? this.fieldGate : this.solidGate).armFault(fault);
+  /** Test hooks: a fault on the next job of a worker, or on the next export, and a recycle on demand. */
+  armFault(gate: 'field' | 'solid' | 'export', fault: Fault): void {
+    if (gate === 'export') this.exportFault = fault;
+    else (gate === 'field' ? this.fieldGate : this.solidGate).armFault(fault);
   }
 
   recycleSolid(): void {
@@ -393,7 +412,7 @@ export class Pipeline {
   dispose(): void {
     this.fieldGate.dispose();
     this.solidGate.dispose();
-    this.exportWorker?.terminate();
+    this.endExportWorker();
     this.cancelWalls();
     if (this.debounce) this.timers.clear(this.debounce.handle);
   }
@@ -401,35 +420,211 @@ export class Pipeline {
   // ----- T3 -----
 
   /**
-   * T3 in a fresh solid worker, terminated when it answers. Only Cancel ends it early. A crash of the
-   * engine or the worker gets one retry at a coarser export cell, as the preview's does. Any other
-   * error, such as the export's own check that its field fits the rim, is a fault, shown as it is.
+   * The last export of the mold, kept while the geometry it was built from is what the screen shows:
+   * the single parts reuse its files, and the status strip shows its measured clearance.
    */
-  async exportParts(onProgress: (progress: ExportProgress) => void = () => {}, fault?: Fault): Promise<ExportOutputs> {
+  private lastExport: { key: string; outputs: ExportOutputs } | null = null;
+  /** The last export that failed, with why, kept in the same way. */
+  private exportFailure: { key: string; message: string } | null = null;
+  private exportFault: Fault | undefined;
+  private exportActive = false;
+  /** The export's own worker while it runs, with its bootstrap timer until it says ready. */
+  private exportWorker: { worker: WorkerLike; boot: unknown } | null = null;
+  /** Set while an export waits for the preview: a new file ends that wait, as the model it was asked for is gone. */
+  private exportWait: (() => void) | null = null;
+
+  /** True from the request until the export ends, including any wait for the preview. */
+  get exporting(): boolean {
+    return this.exportActive;
+  }
+
+  /** Whether an export's own worker is alive, as far as the pipeline knows. */
+  get exportWorkerAlive(): boolean {
+    return this.exportWorker !== null;
+  }
+
+  /**
+   * T3 in a fresh solid worker, terminated when it answers. Only Cancel ends it early: not a newer
+   * change, nor a new file. A crash of the engine or the worker gets one retry at a coarser export
+   * cell, as the preview's does. Any other error, such as the export's own check that its field fits
+   * the rim, is a fault, shown as it is. A request made while the preview catches up waits for it, as
+   * the export builds on the openings it placed; a new file during that wait ends it, and so does a
+   * hard error the caught-up preview shows. A single part the last export already holds, for the
+   * geometry on screen, is that export's file.
+   */
+  async exportParts(onProgress: (progress: ExportProgress) => void = () => {}, fault?: Fault, request: ExportRequest = ZIP_REQUEST): Promise<ExportResult> {
+    if (this.exportActive) throw new Error('An export is already running.');
+    this.exportActive = true;
+    const armed = fault ?? this.exportFault;
+    this.exportFault = undefined;
+    let stop: (error: Error) => void = () => {};
+    const ended = new Promise<never>((_, reject) => (stop = reject));
+    ended.catch(() => {});
+    this.cancelExport = () => {
+      this.endExportWorker();
+      stop(cancelledError());
+    };
+    const mold = request.want !== 'funnel' && request.want !== 'fit-test';
+    try {
+      if (mold && this.isStale() && this.error === null) {
+        onProgress({ step: 'wait', done: 0, total: 1 });
+        const asked = this.file?.name;
+        this.exportWait = () => stop(Object.assign(new Error(`A new model was loaded while the export of ${asked} waited for the preview, so nothing was saved. Export again for the model now loaded.`), { name: 'Replaced' }));
+        try {
+          await Promise.race([this.idle(), ended]);
+        } finally {
+          this.exportWait = null;
+        }
+      }
+      // The buttons go by what showed at the click, and the rim's errors come with the field the wait was for.
+      const blocked = mold ? exportBlocked(this) : null;
+      if (blocked) throw Object.assign(new Error(blocked), { name: 'Blocked' });
+      const key = this.exportKeyFor(request.want);
+      const part = PART_FILES[request.want];
+      // The funnel too is in the last export's files, which hold for as long as the mold's key does.
+      const held = this.lastExport?.key === this.exportKey() ? this.lastExport.outputs : null;
+      // The funnel's own build finds nothing about the mold, so it carries none of the mold's findings.
+      if (part && held?.files[part]) return { ...held, want: request.want, files: { [part]: held.files[part] }, zip: new Uint8Array(), report: null, diagnostics: mold ? held.diagnostics : [], key };
+      try {
+        const outputs = await Promise.race([this.runExportWorker(request, onProgress, armed), ended]);
+        if (mold) {
+          const files = this.lastExport?.key === key ? { ...this.lastExport.outputs.files, ...outputs.files } : outputs.files;
+          this.lastExport = { key, outputs: { ...outputs, files, zip: new Uint8Array() } };
+          if (this.exportFailure?.key === key) this.exportFailure = null;
+        }
+        return { ...outputs, key };
+      } catch (error) {
+        if (mold && error instanceof Error && error.name !== 'Cancelled') this.exportFailure = { key, message: error.message };
+        throw error;
+      }
+    } finally {
+      this.exportActive = false;
+      this.cancelExport = () => {};
+      this.notify();
+    }
+  }
+
+  /** Ends the export that runs, with no file. A no-op when none does. */
+  cancelExport: () => void = () => {};
+
+  private endExportWorker(): void {
+    if (!this.exportWorker) return;
+    this.timers.clear(this.exportWorker.boot);
+    this.exportWorker.worker.terminate();
+    this.exportWorker = null;
+  }
+
+  /**
+   * What a request's result depends on, so a saved file can tell when what shows has moved on from it:
+   * the mold's geometry for the ZIP, the cover and the base, the funnel's own stage for the funnel, and
+   * every setting for the fit test, which reads the joint through the real builders.
+   */
+  exportKeyFor(want: ExportRequest['want']): string {
+    if (want === 'funnel') return stageKeys(this.params, { ...this.inputs(), tier: 'export', cellScale: 1 }).S16;
+    if (want === 'fit-test') return hashString(JSON.stringify(this.params));
+    return this.exportKey();
+  }
+
+  /** What the last export found and measured, while the geometry it was built from is current. */
+  currentExport(): ExportOutputs | null {
+    // Most renders have no export to check, so the key is only worked out when there is one.
+    return this.lastExport !== null && this.lastExport.key === this.exportKey() ? this.lastExport.outputs : null;
+  }
+
+  /** Why the last export failed, while the geometry it was asked for is current. */
+  exportError(): string | null {
+    return this.exportFailure !== null && this.exportFailure.key === this.exportKey() ? this.exportFailure.message : null;
+  }
+
+  /**
+   * What only the export found, for the Diagnostics card: a failure, and the problems the preview does
+   * not report itself, such as a raise of the margin or a retry at a coarser cell.
+   */
+  exportNotes(): ShownDiagnostic[] {
+    const failed = this.exportError();
+    if (failed) return [{ code: 'export-failed', severity: 'error', message: `The export failed: ${failed}`, exportCell: true, byExport: true }];
+    const outputs = this.currentExport();
+    if (!outputs) return [];
+    const shown = new Set(this.diagnostics.map((d) => d.code));
+    return outputs.diagnostics.filter((d) => d.severity !== 'info' && !shown.has(d.code)).map((d) => ({ ...d, exportCell: true, byExport: true }));
+  }
+
+  /**
+   * What the export's result depends on: its own tier's stage keys, which hold every parameter and
+   * input, and the openings it is given, which the preview placed on its own field.
+   */
+  private exportKey(): string {
+    const keys = stageKeys(this.params, { ...this.inputs(), tier: 'export', cellScale: 1 });
+    const openings = this.placement?.value.placement.openings.map(({ kind, x, y }) => [kind, x, y]) ?? [];
+    return hashString(JSON.stringify([keys.S13, keys.S15, keys.S16, openings]));
+  }
+
+  /**
+   * What main knows that the export does not work out again for itself: the file's own warnings, the
+   * base plane and its levels, the placement of the openings it is given, the walls checked at the
+   * export cell, and the advice on t. The import, the footprint, the field, the rim, the cover, the base
+   * and the cross-parameter rules it finds afresh at its own cell, and the preview's notes on itself,
+   * such as a coarser preview cell after a crash, say nothing about the mold.
+   */
+  private exportMeta(): ExportMeta {
+    const parsed = this.parsed!.value, oriented = this.oriented!.value;
+    const { normal, offset, area } = oriented.chosen;
+    const notes = [
+      ...parsed.diagnostics,
+      ...oriented.diagnostics,
+      ...(this.footprint?.value.levels.diagnostics ?? []),
+      ...this.wallDiagnostics(),
+      ...(this.placement?.value.placement.diagnostics ?? []),
+      ...siliconeAdvice(this.params, this.field?.value.rim ?? null),
+    ];
+    return {
+      model: this.file!.name,
+      triangles: { format: parsed.format, inFile: parsed.rawTriangles, kept: parsed.triangles },
+      project: this.project(),
+      plane: { normal: [normal[0], normal[1], normal[2]], offset, area, planeTol: oriented.planeTol },
+      notes: notes.map(plain),
+    };
+  }
+
+  private runExportWorker(request: ExportRequest, onProgress: (progress: ExportProgress) => void, fault?: Fault): Promise<ExportOutputs> {
     const parsed = this.parsed?.value, oriented = this.oriented?.value, placement = this.placement?.value;
-    if (!parsed || !oriented || !placement || this.isStale()) throw new Error('Wait for the preview to finish before exporting.');
+    const mold = request.want !== 'funnel' && request.want !== 'fit-test';
+    if (mold && (!parsed || !oriented || !placement || this.isStale())) return Promise.reject(new Error(this.error ?? 'Wait for the preview to finish before exporting.'));
     // Built afresh for each run, as the transfer detaches the arrays it sends.
-    const inputsFor = (): ExportJobMessage['inputs'] => ({
-      welded: { positions: parsed.welded.positions.slice(), indices: parsed.welded.indices.slice() },
-      audit: parsed.audit,
-      candidate: { members: oriented.chosen.members.slice(), holes: oriented.chosen.holes },
-      transform: oriented.oriented.transform,
-      needsTrim: oriented.oriented.needsTrim,
-      planeTol: oriented.planeTol,
-      openings: placement.placement.openings.map(({ kind, x, y }) => ({ kind, x, y })),
-    });
+    const inputsFor = (): ExportInputs | null =>
+      mold
+        ? {
+            welded: { positions: parsed!.welded.positions.slice(), indices: parsed!.welded.indices.slice() },
+            audit: parsed!.audit,
+            candidate: { members: oriented!.chosen.members.slice(), holes: oriented!.chosen.holes },
+            transform: oriented!.oriented.transform,
+            needsTrim: oriented!.oriented.needsTrim,
+            planeTol: oriented!.planeTol,
+            openings: placement!.placement.openings.map(({ id, kind, x, y, pinned }) => ({ id, kind, x, y, pinned })),
+          }
+        : null;
     const params = this.params;
+    const meta = mold ? this.exportMeta() : null;
     const run = (cellScale: number, armed?: Fault): Promise<ExportOutputs> =>
       new Promise((resolve, reject) => {
         const worker = this.options.spawnSolid();
-        this.exportWorker = worker;
         const done = (): void => {
-          worker.terminate();
-          if (this.exportWorker === worker) this.exportWorker = null;
+          if (this.exportWorker?.worker === worker) this.endExportWorker();
+          else worker.terminate();
         };
+        // The Workers rule: a worker that has not said ready within 20 s gets an inline error, not a stage bar for good.
+        const boot = this.timers.set(() => {
+          if (this.exportWorker?.worker !== worker) return;
+          done();
+          reject(Object.assign(new Error('The geometry engine did not start within 20 s, so nothing was exported. Try again, or reload the page.'), { name: 'InitTimeout' }));
+        }, INIT_TIMEOUT_MS);
+        this.exportWorker = { worker, boot };
         worker.onmessage = ({ data }: { data: FromWorker }) => {
-          if (data.t === 'progress') onProgress(data);
-          else if (data.t === 'exported') {
+          if (data.t === 'ready') this.timers.clear(boot);
+          else if (data.t === 'progress') {
+            this.timers.clear(boot);
+            onProgress(data);
+          } else if (data.t === 'exported') {
             done();
             resolve(data.outputs);
           } else if (data.t === 'error') {
@@ -443,24 +638,19 @@ export class Pipeline {
           reject(Object.assign(new Error(event.message ?? 'The export worker failed.'), { name: 'WorkerError' }));
         };
         const inputs = inputsFor();
-        const message: ExportJobMessage = { t: 'export', id: 1, params, inputs, cellScale, ...(armed ? { fault: armed } : {}) };
-        worker.postMessage(message, [inputs.welded.positions.buffer, inputs.welded.indices.buffer, inputs.candidate.members.buffer]);
-        this.cancelExport = () => {
-          done();
-          reject(Object.assign(new Error('Export cancelled.'), { name: 'Cancelled' }));
-        };
+        const message: ExportJobMessage = { t: 'export', id: 1, ...request, params, inputs, meta, cellScale, ...(armed ? { fault: armed } : {}) };
+        worker.postMessage(message, inputs ? [inputs.welded.positions.buffer, inputs.welded.indices.buffer, inputs.candidate.members.buffer] : []);
       });
-    try {
-      return await run(1, fault);
-    } catch (error) {
-      if (!(error instanceof Error) || !CRASH_NAMES.has(error.name)) throw error;
-      return run(CRASH_SCALE);
-    } finally {
-      this.cancelExport = () => {};
-    }
+    const crashed = (error: unknown): error is Error => error instanceof Error && CRASH_NAMES.has(error.name);
+    return run(1, fault).catch((error: unknown) => {
+      if (!crashed(error)) throw error;
+      return run(CRASH_SCALE).catch((again: unknown) => {
+        if (!crashed(again)) throw again;
+        // The engine's own words, such as "memory access out of bounds", tell a maker nothing to do.
+        throw Object.assign(new Error(`The geometry engine failed twice, the second time at half the detail (${again.message}). Close other browser tabs to free memory and export again, or set a coarser Export cell under Advanced, Quality.`), { name: again.name });
+      });
+    });
   }
-
-  cancelExport: () => void = () => {};
 
   // ----- the flow -----
 
@@ -768,13 +958,7 @@ export class Pipeline {
     if (this.imported) all.push(...this.imported.value.diagnostics);
     if (this.oriented) all.push(...this.oriented.value.diagnostics);
     if (this.footprint) all.push(...this.footprint.value.diagnostics, ...this.footprint.value.levels.diagnostics);
-    const walls = this.wallStatus().result;
-    if (walls) {
-      all.push(...walls.diagnostics.map((d) => ({ ...d, exportCell: true })));
-      // A check that passed says so too, so the card shows that the walls were looked at.
-      const problem = walls.diagnostics.some((d) => d.code === 'tiles-merged' || d.code === 'thin-tile-wall' || d.code === 'wall-check-failed');
-      if (!problem && walls.minWall !== null) all.push({ code: 'tile-walls', severity: 'info', message: `The thinnest wall between models is ${walls.minWall.toFixed(2)} mm, enough to print.`, exportCell: true });
-    }
+    all.push(...this.wallDiagnostics());
     if (this.field) all.push(...this.field.value.diagnostics, ...this.field.value.rim.diagnostics);
     if (this.placement) all.push(...this.placement.value.placement.diagnostics);
     if (this.cover) all.push(...this.cover.value.diagnostics);
@@ -786,6 +970,17 @@ export class Pipeline {
       seen.add(key);
       return true;
     });
+  }
+
+  /** The wall check's findings for the state on screen, all read at the export cell. */
+  private wallDiagnostics(): ShownDiagnostic[] {
+    const walls = this.wallStatus().result;
+    if (!walls) return [];
+    const found: ShownDiagnostic[] = walls.diagnostics.map((d) => ({ ...d, exportCell: true }));
+    // A check that passed says so too, so the card shows that the walls were looked at.
+    const problem = walls.diagnostics.some((d) => d.code === 'tiles-merged' || d.code === 'thin-tile-wall' || d.code === 'wall-check-failed');
+    if (!problem && walls.minWall !== null) found.push({ code: 'tile-walls', severity: 'info', message: `The thinnest wall between models is ${walls.minWall.toFixed(2)} mm, enough to print.`, exportCell: true });
+    return found;
   }
 
   private isStale(): boolean {

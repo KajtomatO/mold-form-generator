@@ -12,7 +12,7 @@ import { coplanarTriangles } from '../src/view/picking';
 import { orientedExample } from '../test/fixtures/fieldRuns';
 import { exampleBytes, EXAMPLE_FILES, type ExampleId } from '../test/fixtures/loadExamples';
 import { SOLID_GOLDEN } from '../test/regression/golden';
-import { app, canDraw, canvasColour, canvasPixels, dropAndWait, dropExample, hooks, idle, openApp, tealPixels, type PageWatch } from './appHarness';
+import { app, canDraw, canvasColour, canvasPixels, checkLayout, dropAndWait, dropExample, hideParts, hooks, idle, openApp, tealPixels, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
 import { inNode, nodeHash } from './nodeRuns';
 
@@ -75,55 +75,6 @@ async function checkStatus(page: Page, id: ExampleId, ml: number): Promise<void>
   const rebuild = (await app(page, (a) => a.store.pipeline.lastRebuild))!;
   expect(rebuild.kind).toBe('t2');
   await expect(page.getByTestId('status-rebuild')).toHaveText(`rebuild ${Math.round(rebuild.ms)} ms`);
-}
-
-/** The layout rules of the plan's GUI section, measured on the page as it stands. */
-async function checkLayout(page: Page, watch: PageWatch): Promise<void> {
-  const m = await page.evaluate(() => {
-    const box = (selector: string): DOMRect => document.querySelector(selector)!.getBoundingClientRect();
-    const sections = document.querySelector('[data-testid="sections"]')!;
-    // Opening Advanced scrolled the sidebar to it. The rule is that Export shows without any scrolling.
-    sections.scrollTop = 0;
-    // html and body clip what overflows them, so the page itself never scrolls whatever is too tall:
-    // what must hold is that nothing is too tall or too wide for them in the first place.
-    const clipped = ['html', 'body', '#app', '.shell'].map((selector) => {
-      const el = document.querySelector(selector)!;
-      return [selector, el.scrollWidth - el.clientWidth, el.scrollHeight - el.clientHeight, el.scrollTop, el.scrollLeft];
-    });
-    const exportBox = box('[data-testid="export"]');
-    // clientWidth is 0 for an inline box by the CSSOM spec, and Firefox still gives such a span a
-    // scrollWidth, so only boxes that have a client width of their own are measured.
-    const overflowing = [...document.querySelectorAll<HTMLElement>('body *')]
-      .filter((el) => el.offsetParent !== null || el.tagName === 'CANVAS')
-      .filter((el) => getComputedStyle(el).display !== 'inline')
-      .filter((el) => el.scrollWidth > el.clientWidth)
-      .map((el) => `${el.tagName.toLowerCase()}.${el.className} (${el.scrollWidth} > ${el.clientWidth}): ${el.textContent?.slice(0, 40)}`);
-    const status = box('[data-testid="status"]');
-    return {
-      header: box('.header').height,
-      sidebar: box('.sidebar').width,
-      status: status.height,
-      overflowing,
-      clipped,
-      scroll: [window.scrollX, window.scrollY],
-      // The shell fills the window exactly, and the status strip, its lowest part, ends inside it.
-      shell: [box('.shell').width - window.innerWidth, box('.shell').height - window.innerHeight],
-      // Firefox lays out in 1/60 px, and its rects carry a float residue under that, such as 2^-16 px.
-      statusInView: status.bottom <= window.innerHeight + 1 / 60 && status.right <= window.innerWidth + 1 / 60,
-      exportInView: exportBox.top >= 0 && exportBox.bottom <= window.innerHeight && exportBox.height > 0,
-    };
-  });
-  expect(m.header).toBe(48);
-  expect(m.sidebar).toBe(380);
-  expect(m.status).toBeGreaterThanOrEqual(28);
-  expect(m.overflowing).toEqual([]);
-  expect(m.clipped).toEqual([['html', 0, 0, 0, 0], ['body', 0, 0, 0, 0], ['#app', 0, 0, 0, 0], ['.shell', 0, 0, 0, 0]]);
-  expect(m.scroll).toEqual([0, 0]);
-  expect(m.shell).toEqual([0, 0]);
-  expect(m.statusInView).toBe(true);
-  expect(m.exportInView).toBe(true);
-  expect(watch.errors).toEqual([]);
-  expect(watch.foreign).toEqual([]);
 }
 
 test.describe('the app on index.html', () => {
@@ -300,8 +251,9 @@ test.describe('the app on index.html', () => {
     const box = page.getByTestId('status-box');
     const boxBefore = await box.textContent();
     // The silicone alone, opaque: what the height preview draws is then the teal on the canvas.
+    // The funnel starts hidden, so these toggle the other parts off and, the second time, on again.
     const eyes = async (): Promise<void> => {
-      for (const part of ['model', 'cover', 'base', 'funnel']) await page.locator(`[data-part="${part}"] .eye`).click();
+      for (const part of ['model', 'cover', 'base']) await page.locator(`[data-part="${part}"] .eye`).click();
     };
     await eyes();
     await setRange(page.locator('[data-part="silicone"] input[type="range"]'), 1);
@@ -682,11 +634,14 @@ test.describe('the app on index.html', () => {
     for (const part of ['model', 'silicone', 'cover', 'base', 'funnel']) {
       const eye = page.locator(`[data-part="${part}"] .eye`);
       const start = (await drawn(part))!;
-      expect(start.visible, part).toBe(true);
+      // The funnel is a print of its own, so it starts hidden; every other part shows.
+      expect(start.visible, part).toBe(part !== 'funnel');
+      await expect(eye).toHaveAttribute('aria-pressed', String(start.visible));
       await redraws(() => eye.click());
-      expect((await drawn(part))!.visible, part).toBe(false);
+      expect((await drawn(part))!.visible, part).toBe(!start.visible);
       await redraws(() => eye.click());
-      expect((await drawn(part))!.visible, part).toBe(true);
+      expect((await drawn(part))!.visible, part).toBe(start.visible);
+      if (!start.visible) await redraws(() => eye.click());
       await redraws(() => setRange(page.locator(`[data-part="${part}"] input[type="range"]`), 0.75));
       expect((await drawn(part))!.opacity, part).toBe(0.75);
     }
@@ -736,7 +691,7 @@ test.describe('the app on index.html', () => {
   test('@smoke the height preview falls back to the CPU and draws the same field', async ({ page }) => {
     /** Where the silicone shows, alone and opaque, from one fixed camera: the teal pixels as a mask. */
     const siliconeMask = async (p: Page): Promise<string> => {
-      for (const part of ['model', 'cover', 'base', 'funnel']) await p.locator(`[data-part="${part}"] .eye`).click();
+      await hideParts(p, ['model', 'cover', 'base', 'funnel']);
       await setRange(p.locator('[data-part="silicone"] input[type="range"]'), 1);
       await hooks(p, (h) => h.setCamera({ position: [20, -70, 60], target: [0, 0, 8], fov: 35 }));
       return p.evaluate(async () => {

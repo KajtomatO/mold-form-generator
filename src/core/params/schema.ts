@@ -149,6 +149,22 @@ export const PARAM_SCHEMA = {
   },
 } as const satisfies Record<string, Record<string, ParamDef>>;
 
+/** Each group of PARAM_SCHEMA by the name the sidebar's Advanced section and README.txt give it. */
+export const GROUP_TITLES: Record<string, string> = {
+  base: 'Base',
+  silicone: 'Silicone',
+  cover: 'Cover',
+  joint: 'Joint',
+  pour: 'Pour',
+  vents: 'Vents',
+  seat: 'Seat',
+  funnel: 'Funnel',
+  grid: 'Grid',
+  print: 'Printer',
+  quality: 'Quality',
+  reports: 'Reports',
+} satisfies Record<keyof typeof PARAM_SCHEMA, string>;
+
 type ValueOf<D> = D extends AutoDef ? number | null : D extends NumberDef ? number : D extends FlagDef ? boolean : D extends ChoiceDef<infer T> ? T : never;
 
 export type Params = {

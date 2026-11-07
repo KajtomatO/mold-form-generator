@@ -36,7 +36,7 @@ export function DiagnosticsCard() {
                 <span class="sev" aria-label={d.severity} />
                 <span>
                   {units(d.message)}
-                  {d.exportCell ? <span class="where">Checked at full export detail</span> : null}
+                  {d.byExport ? <span class="where">Found by the last export</span> : d.exportCell ? <span class="where">Checked at full export detail</span> : null}
                 </span>
                 {located ? (
                   <button type="button" class="btn small" aria-pressed={shown.includes(key)} onClick={() => store.toggleShown(key)}>

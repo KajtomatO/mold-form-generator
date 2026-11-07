@@ -79,6 +79,15 @@ export async function dropAndWait(page: Page, name: string): Promise<void> {
   await idle(page);
 }
 
+/** Hides these parts by their eyes, clicking only the ones that show: the funnel starts hidden. */
+export async function hideParts(page: Page, parts: string[]): Promise<void> {
+  for (const part of parts) {
+    const eye = page.locator(`[data-part="${part}"] .eye`);
+    if ((await eye.getAttribute('aria-pressed')) === 'true') await eye.click();
+    await expect(eye).toHaveAttribute('aria-pressed', 'false');
+  }
+}
+
 /** Runs code in the page against the app's store and scene, as `hooks` does against the pipeline. */
 export function app<R>(page: Page, run: (a: { store: Store; scene: PreviewScene }, arg: never) => R | Promise<R>, arg?: unknown): Promise<R> {
   return page.evaluate(
@@ -141,6 +150,55 @@ export async function canvasColour(page: Page, at: { x: number; y: number }): Pr
     const [r, g, b] = context.getImageData(px, py, 1, 1).data;
     return [r, g, b] as [number, number, number];
   }, at);
+}
+
+/** The layout rules of the plan's GUI section, measured on the page as it stands. */
+export async function checkLayout(page: Page, watch: PageWatch): Promise<void> {
+  const m = await page.evaluate(() => {
+    const box = (selector: string): DOMRect => document.querySelector(selector)!.getBoundingClientRect();
+    const sections = document.querySelector('[data-testid="sections"]')!;
+    // Opening Advanced scrolled the sidebar to it. The rule is that Export shows without any scrolling.
+    sections.scrollTop = 0;
+    // html and body clip what overflows them, so the page itself never scrolls whatever is too tall:
+    // what must hold is that nothing is too tall or too wide for them in the first place.
+    const clipped = ['html', 'body', '#app', '.shell'].map((selector) => {
+      const el = document.querySelector(selector)!;
+      return [selector, el.scrollWidth - el.clientWidth, el.scrollHeight - el.clientHeight, el.scrollTop, el.scrollLeft];
+    });
+    const exportBox = box('[data-testid="export"]');
+    // clientWidth is 0 for an inline box by the CSSOM spec, and Firefox still gives such a span a
+    // scrollWidth, so only boxes that have a client width of their own are measured.
+    const overflowing = [...document.querySelectorAll<HTMLElement>('body *')]
+      .filter((el) => el.offsetParent !== null || el.tagName === 'CANVAS')
+      .filter((el) => getComputedStyle(el).display !== 'inline')
+      .filter((el) => el.scrollWidth > el.clientWidth)
+      .map((el) => `${el.tagName.toLowerCase()}.${el.className} (${el.scrollWidth} > ${el.clientWidth}): ${el.textContent?.slice(0, 40)}`);
+    const status = box('[data-testid="status"]');
+    return {
+      header: box('.header').height,
+      sidebar: box('.sidebar').width,
+      status: status.height,
+      overflowing,
+      clipped,
+      scroll: [window.scrollX, window.scrollY],
+      // The shell fills the window exactly, and the status strip, its lowest part, ends inside it.
+      shell: [box('.shell').width - window.innerWidth, box('.shell').height - window.innerHeight],
+      // Firefox lays out in 1/60 px, and its rects carry a float residue under that, such as 2^-16 px.
+      statusInView: status.bottom <= window.innerHeight + 1 / 60 && status.right <= window.innerWidth + 1 / 60,
+      exportInView: exportBox.top >= 0 && exportBox.bottom <= window.innerHeight && exportBox.height > 0,
+    };
+  });
+  expect(m.header).toBe(48);
+  expect(m.sidebar).toBe(380);
+  expect(m.status).toBeGreaterThanOrEqual(28);
+  expect(m.overflowing).toEqual([]);
+  expect(m.clipped).toEqual([['html', 0, 0, 0, 0], ['body', 0, 0, 0, 0], ['#app', 0, 0, 0, 0], ['.shell', 0, 0, 0, 0]]);
+  expect(m.scroll).toEqual([0, 0]);
+  expect(m.shell).toEqual([0, 0]);
+  expect(m.statusInView).toBe(true);
+  expect(m.exportInView).toBe(true);
+  expect(watch.errors).toEqual([]);
+  expect(watch.foreign).toEqual([]);
 }
 
 export { canDraw, hooks };

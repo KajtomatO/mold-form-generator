@@ -4,7 +4,7 @@ import { useContext } from 'preact/hooks';
 import { ProblemsContext, useStore } from '../context';
 import { formatNumber } from '../format';
 import { Chevron } from '../icons';
-import { GROUP_TITLES, SECTION_PARAMS, type SectionId } from '../layout';
+import { GROUP_NOTES, GROUP_TITLES, SECTION_PARAMS, type SectionId } from '../layout';
 import { ParamRow } from '../ParamRow';
 import { Section } from './Section';
 
@@ -104,6 +104,11 @@ export function AdvancedSection() {
       {groups.map((group) => (
         <div key={group}>
           <h3>{GROUP_TITLES[group]}</h3>
+          {GROUP_NOTES[group] ? (
+            <p class="note" data-testid={`group-note-${group}`}>
+              {GROUP_NOTES[group]}
+            </p>
+          ) : null}
           {SECTION_PARAMS.advanced
             .filter((path) => path.startsWith(`${group}.`))
             .map((path) => (
