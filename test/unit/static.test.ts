@@ -84,6 +84,33 @@ describe('source rules', () => {
     expect(seen.has('src/core/solid/arena.ts')).toBe(false);
   });
 
+  it('keeps the analyses and rules free of Manifold at run time, so field.worker and a drag on the main thread can load them', () => {
+    const byPath = new Map(all.map((file) => [file.path, file.text]));
+    const seen = new Set<string>();
+    const queue = [...all.filter((file) => file.path.startsWith('src/core/analysis/')).map((file) => file.path), 'src/core/params/rules.ts', 'src/core/parts/funnelProfile.ts'];
+    expect(queue.length).toBeGreaterThan(6);
+    while (queue.length > 0) {
+      const path = queue.pop()!;
+      if (seen.has(path)) continue;
+      seen.add(path);
+      for (const [, from] of byPath.get(path)!.matchAll(/^import (?!type )[^;]*?from '([^']+)';/gm)) {
+        expect(from, `${path} loads ${from}`).not.toMatch(/^manifold-3d|^three/);
+        if (!from.startsWith('.')) continue;
+        const target = join(dirname(path), from).replaceAll('\\', '/') + '.ts';
+        expect(byPath.has(target), `${path} imports ${from}`).toBe(true);
+        queue.push(target);
+      }
+    }
+    expect(seen.has('src/core/analysis/validate.ts')).toBe(true);
+    expect(seen.has('src/core/solid/arena.ts')).toBe(false);
+  });
+
+  it('never reads mesh genus where it counts bodies or places openings', () => {
+    for (const file of all.filter((f) => f.path.startsWith('src/core/analysis/'))) {
+      expect(/genus/.test(file.text.replace(/^.*Never from mesh genus.*$/gm, '')), `${file.path} reads genus`).toBe(false);
+    }
+  });
+
   it('keeps core free of DOM and three', () => {
     for (const file of all.filter((f) => f.path.startsWith('src/core/'))) {
       expect(/\b(document|window)\./.test(file.text), `${file.path} touches the DOM`).toBe(false);

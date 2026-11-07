@@ -3,6 +3,7 @@ import { unzipSync } from 'fflate';
 import { expect, test, type Page } from '@playwright/test';
 import Module from 'manifold-3d';
 import { runBench, type BenchResult } from '../src/core/bench/suite';
+import { withPreamble } from '../test/fixtures/benchmarks';
 import { firefoxHasDisplay, NO_FIREFOX_WEBGL } from './firefox';
 
 interface Diag {
@@ -129,9 +130,7 @@ test('browser-to-Node speed ratio', async ({ page }, info) => {
       ...rows.map((r) => `| ${r.name} | ${r.chromium} | ${r.node} | ${r.ratio} |`),
       '',
     ];
-    // The field and solid tables come from the unit tests in the same --record run, so they stay.
-    const existing = await readFile('docs/BENCHMARKS.md', 'utf8');
-    const sections = existing.search(/^## /m);
-    await writeFile('docs/BENCHMARKS.md', lines.join('\n') + (sections < 0 ? '' : `\n${existing.slice(sections)}`));
+    // The field, solid and openings tables come from the unit tests in the same --record run, so they stay.
+    await writeFile('docs/BENCHMARKS.md', withPreamble(await readFile('docs/BENCHMARKS.md', 'utf8'), lines.join('\n')));
   }
 });

@@ -283,6 +283,41 @@ export function ring(api: ManifoldToplevel, outer: number, hole: number, height:
   });
 }
 
+/**
+ * A plinth with a tall tower at one end and a low one at the other, far enough apart that the ceiling
+ * between them is the plinth's. So the low tower's persistence is known exactly: its height over the
+ * plinth, as the same radius lifts both.
+ */
+export const TOWERS = { length: 120, width: 30, plinth: 10, tall: 40, side: 12, tallX: 6, lowX: 102 } as const;
+
+export function towers(api: ManifoldToplevel, persistence: number): WeldedMesh {
+  const { length, width, plinth, tall, side, tallX, lowX } = TOWERS;
+  return meshOf((keep) => {
+    const base = cuboid(api, keep, [0, 0, 0], [length, width, plinth]);
+    const y0 = (width - side) / 2;
+    const high = cuboid(api, keep, [tallX, y0, 0], [tallX + side, y0 + side, tall]);
+    const low = cuboid(api, keep, [lowX, y0, 0], [lowX + side, y0 + side, plinth + persistence]);
+    return keep(api.Manifold.union([base, high, low]));
+  });
+}
+
+/**
+ * A 40 x 40 x 10 plinth with two 1 mm square spikes on it: one 20 tall at its middle, (20, 20), and a
+ * lower one 16 tall `apart` mm along x. Dilated, each is a cap of r_eff over its own little flat, so with
+ * the plinth's ceiling between them the low one is a leaf of 6 mm persistence.
+ */
+export const SPIKES = { plinth: 10, high: 20, low: 16, centre: 20 } as const;
+
+export function spikes(api: ManifoldToplevel, apart: number): WeldedMesh {
+  const { plinth, high, low, centre } = SPIKES;
+  return meshOf((keep) => {
+    const base = cuboid(api, keep, [0, 0, 0], [40, 40, plinth]);
+    const tall = cuboid(api, keep, [centre - 0.5, centre - 0.5, 0], [centre + 0.5, centre + 0.5, high]);
+    const short = cuboid(api, keep, [centre + apart - 0.5, centre - 0.5, 0], [centre + apart + 0.5, centre + 0.5, low]);
+    return keep(api.Manifold.union([base, tall, short]));
+  });
+}
+
 /** L profile: a 40 x 20 lower step of height 5 with a 10 x 20 tower of height 30 on one end. */
 export function stepped(api: ManifoldToplevel): WeldedMesh {
   return meshOf((keep) => {

@@ -20,7 +20,7 @@ export interface SiliconeVolume {
   integral: number;
   /** Footprint of the cavity at z = 0, in mm2. */
   area: number;
-  /** In ml. Bores join this in M4. */
+  /** In ml, without the bores: see boreSilicone, which needs the placed openings. */
   ml: number;
 }
 

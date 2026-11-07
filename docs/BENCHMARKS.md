@@ -83,3 +83,41 @@ Heaviest grids: TIN size and the stages it drives, in ms. The risk table asks fo
 |---|---|---|---|---|---|---|
 | wolf 3 x 3 | 7959805 | 673836 | 1735.5 | 3269.7 | 1948.5 | 2981.6 |
 | x8 3 x 3 | 6579573 | 563376 | 1570.1 | 2734.3 | 1555.8 | 2321.5 |
+
+## Openings
+
+Written by `scripts/ci.sh --full --record`, as it needs all 7 models.
+
+Plan defaults on the server, in Node, with Manifold's lazy booleans forced to run by a status check. Field is S3 to S6 for the export field, as Solid stages has it. A grid also builds the field of one tile on its own, which S7 places on: that is Tile field, and 0 for one tile, whose field is the same. Placement is S7 alone: the bodies, their peaks and the placement, with the composite checked, at the export cell, which a preview would run faster. Cut is S13, on a cached cover body: the batch difference of every cutter. T2b, a dragged opening, repeats it, so its last column is that estimate of under 200 ms.
+
+| Mold | Openings | Copies | Cover triangles | Field ms | Tile field ms | Placement ms | Cut, export ms | Cut, preview ms | Cut, one more opening ms |
+|---|---|---|---|---|---|---|---|---|---|
+| benchy | 3 | 3 | 24430 | 149.9 | 0 | 77.6 | 34.7 | 18.9 | 35.1 |
+| goddess | 4 | 4 | 42134 | 156.8 | 0 | 58.6 | 52.2 | 24.5 | 51.9 |
+| vis35 | 3 | 3 | 47058 | 248.2 | 0 | 129.9 | 52.3 | 22.8 | 52.8 |
+| jersey | 2 | 2 | 7496 | 28.6 | 0 | 25.8 | 15.4 | 11 | 15.9 |
+| x8 | 17 | 17 | 63906 | 246.5 | 0 | 486.1 | 139.4 | 95.9 | 138.7 |
+| barrel | 2 | 2 | 13376 | 30.7 | 0 | 17.3 | 19.8 | 11.6 | 20.2 |
+| wolf | 3 | 3 | 80596 | 281.9 | 0 | 156.6 | 78.5 | 26.7 | 78.2 |
+| x8 at 3 pours per body | 32 | 32 | 63906 | 247.4 | 0 | 510.3 | 226.4 | 174.9 | 225 |
+| benchy 2 x 3 | 3 | 18 | 144712 | 324.8 | 148.2 | 190.3 | 219.8 | 114.6 | 219.7 |
+| x8 3 x 3 | 17 | 153 | 582882 | 1759.1 | 248.9 | 1209.7 | 1451.7 | 965.2 | 1487 |
+
+A drop of a dragged opening on the main thread. The first drop that snaps on a new placement space builds its distance map, which the main thread pays once after every rebuild: that is the first column, a drop on the box's corner. The second is the worst of 100 random drops over the box after it, on the same space.
+
+| Model | Kind | Nodes | First drop, with the map, ms | Worst of 100 after it, ms |
+|---|---|---|---|---|
+| benchy | pour | 200566 | 11.8 | 2.1 |
+| benchy | vent | 200566 | 9.4 | 1.7 |
+| goddess | pour | 276172 | 16.2 | 4.5 |
+| goddess | vent | 276172 | 14.5 | 3.3 |
+| vis35 | pour | 675024 | 30.1 | 3.0 |
+| vis35 | vent | 675024 | 30.4 | 1.1 |
+| jersey | pour | 100111 | 4.4 | 0.5 |
+| jersey | vent | 100111 | 4.4 | 0.2 |
+| x8 | pour | 742159 | 31.8 | 6.9 |
+| x8 | vent | 742159 | 31.9 | 3.6 |
+| barrel | pour | 75625 | 3.9 | 1.7 |
+| barrel | vent | 75625 | 3.9 | 0.8 |
+| wolf | pour | 898317 | 43.4 | 10.7 |
+| wolf | vent | 898317 | 43.8 | 9.1 |

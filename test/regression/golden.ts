@@ -170,7 +170,7 @@ export interface FieldGolden {
    * Plan defaults: t=3, cell 0.125, printMargin 0.1 so r_eff=3.36625, TIN raise 0.05, draft 1 degree,
    * closing 1.2 mm (11 nodes), 1 x 1 grid. Silicone is the integral of H dA with the raise, less the
    * model's exterior volume from M1 (the barrel's void stays out), less sealed air above the 0.05 ml
-   * filter at analysisCell 0.25. No bores yet, as M4 adds them.
+   * filter at analysisCell 0.25. Without bores: OPENING_GOLDEN has those.
    */
   silicone: number;
   /**
@@ -230,4 +230,38 @@ export const SOLID_GOLDEN: Record<ExampleId, SolidGolden> = {
   x8: { silicone: 85.86, cover: 315919, glue: 55195, merged: 116058, gap: 3.2262, gapDraft0: 3.2262, tinTriangles: 60852, boxX: 143.746, boxY: 109.136, Zt: 29.085 },
   barrel: { silicone: 10.05, cover: 75171, glue: 8077, merged: 15611, gap: 3.2189, gapDraft0: 3.2039, tinTriangles: 11538, boxX: 51.687, boxY: 51.688, Zt: 33.918 },
   wolf: { silicone: 202.26, cover: 2436510, glue: 61824, merged: 319814, gap: 3.2104, gapDraft0: 3.1986, tinTriangles: 74904, boxX: 121.234, boxY: 142.435, Zt: 167.405 },
+};
+
+/**
+ * M4 numbers, at plan defaults in one tile. Leaves and the rest are read off the conditioned tile.
+ * Limits: exact on the counts, 1% on the rest. Measured again after the M4 review, once a peak on a
+ * flat went to the middle of that flat: Benchy's bores hold 0.457 -> 0.389 ml, VIS-35's 0.329 -> 0.2745,
+ * and x8's 1.705 -> 1.573, with its longest bore 6.2 -> 7.75 mm (a vent beside the broken barrier's pour).
+ */
+export interface OpeningGolden {
+  bodies: number;
+  cavities: number;
+  /** Merge-tree leaves over one height step. */
+  leaves: number;
+  /** Of those, at or over the default vent persistence of 1.5 mm. */
+  significant: number;
+  plateauBodies: number;
+  pours: number;
+  vents: number;
+  /** The longest bore, from the flat top to the ceiling at its centre, in mm. */
+  longestBore: number;
+  /** Silicone in the bores, in ml: to the seat's floor for a pour and to the top for a vent. */
+  boreMl: number;
+  /** Volume of the cover once cut, in mm3. */
+  cover: number;
+}
+
+export const OPENING_GOLDEN: Record<ExampleId, OpeningGolden> = {
+  benchy: { bodies: 1, cavities: 1, leaves: 4, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 25.7, boreMl: 0.389, cover: 244416 },
+  goddess: { bodies: 1, cavities: 1, leaves: 4, significant: 3, plateauBodies: 0, pours: 1, vents: 3, longestBore: 9.4, boreMl: 0.334, cover: 533995 },
+  vis35: { bodies: 1, cavities: 1, leaves: 4, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 6.5, boreMl: 0.2745, cover: 1262706 },
+  jersey: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 5.1, boreMl: 0.19, cover: 80372 },
+  x8: { bodies: 8, cavities: 2, leaves: 16, significant: 9, plateauBodies: 7, pours: 8, vents: 9, longestBore: 7.75, boreMl: 1.573, cover: 311767 },
+  barrel: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 5.8, boreMl: 0.206, cover: 74644 },
+  wolf: { bodies: 1, cavities: 1, leaves: 2, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 147.3, boreMl: 1.049, cover: 2435148 },
 };

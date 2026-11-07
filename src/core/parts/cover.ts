@@ -4,6 +4,7 @@ import { checked, type Arena } from '../solid/arena';
 import { contains, outset, type Rect } from '../solid/rect';
 import type { ToolMesh } from '../solid/tool';
 import { grooveSolid, ringHull } from './joint';
+import { openingCutters, type CutOpening } from './openings';
 import { rebateOutset, type Rim } from './rim';
 
 /** The cover's bottom edge: `proud` above the base's underside, so the base always rests on the table. */
@@ -55,6 +56,16 @@ function notchSolids(arena: Arena, rim: Rim): Manifold[] {
 export function buildCoverBody(arena: Arena, rim: Rim, tool: Manifold): Manifold {
   const { Manifold } = arena.api;
   return checked(arena.track(Manifold.difference([blockSolid(arena, rim), rebateSolid(arena, rim), grooveSolid(arena, rim), tool, ...notchSolids(arena, rim)])), 'The cover');
+}
+
+/**
+ * G9, S13: the cover with its openings. This is the one step a dragged opening repeats on the cached
+ * body, and it runs all the cutters as one batch, as a run of single subtractions costs far more.
+ */
+export function buildCoverFinal(arena: Arena, body: Manifold, rim: Pick<Rim, 'Zt'>, openings: CutOpening[]): Manifold {
+  if (openings.length === 0) return body;
+  const cutters = openings.flatMap((opening) => openingCutters(arena, rim, opening));
+  return checked(arena.track(arena.api.Manifold.difference([body, ...cutters])), 'The cover with its openings');
 }
 
 /**
