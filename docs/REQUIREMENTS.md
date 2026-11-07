@@ -201,8 +201,9 @@ Base-mounted displacers for overhangs, bottom-fill channel, shell-and-rib cover,
 
 | Item | Who | Status |
 |---|---|---|
-| Does Chrome prompt or block saving STL and ZIP from `http://192.168.0.153:5173/diag.html`? | User | open, asked after M0 |
-| `bench.html` numbers from the user's machine | User | open, asked after M0 |
+| Does the user's browser (Firefox 158 on Windows) prompt or block saving STL and ZIP from `http://192.168.0.153:5173/diag.html`? | User | open, asked after M0 |
+| `bench.html` numbers from the user's machine | User | answered 2026-11-07, see `docs/DEPLOY.md` |
+| Run browser tests in Firefox too, since the user's browser is Firefox and the plan assumed Chromium | Builder | open, next step after M1 |
 | Whether 3 mm holds up in use, whether a top pour behaves as modelled, tape sealing, cure inhibition | User, by test pour | open |
 
 ## 10. Verification matrix
