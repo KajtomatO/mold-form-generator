@@ -1,6 +1,7 @@
 import { replicateOpenings, type OpeningPin } from '../core/analysis/placement';
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
 import type { SolidReport } from '../core/mesh/shells';
+import type { WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import type { Params } from '../core/params/schema';
@@ -8,9 +9,10 @@ import type { CutOpening } from '../core/parts/openings';
 import type { Diagnostic } from '../core/report/diagnostics';
 import type { ExportOutputs } from '../workers/exportJob';
 import type { FieldWire, OrientedWire } from '../workers/fieldHost';
-import { DEFAULT_PLANE, PLAIN_IMPORT, type FieldOutput, type FieldWanted, type ImportInput, type ParsedModel, type PlacementOutput, type PlaneChoice } from '../workers/fieldStages';
-import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type SolidJobMessage, type WorkerLike } from '../workers/protocol';
-import type { PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
+import { DEFAULT_PLANE, PLAIN_IMPORT, samePlane, type FieldOutput, type FieldWanted, type ImportInput, type ParsedModel, type PlacementOutput, type PlaneChoice } from '../workers/fieldStages';
+import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type SolidJobMessage, type WallsJobMessage, type WorkerLike } from '../workers/protocol';
+import type { FootprintOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
+import type { WallCheck } from '../workers/wallCheck';
 import { Budgets } from './budgets';
 import { hashFloats, hashMesh, hashString } from './hash';
 import { JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
@@ -58,7 +60,7 @@ export interface PlacementShown extends PlacementOutput {
 
 export interface PipelineEvent {
   kind: 'applied' | 'rejected';
-  slot: 'parsed' | 'oriented' | 'import' | 'field' | 'placement' | 'cover' | 'base' | 'funnel';
+  slot: 'parsed' | 'oriented' | 'import' | 'footprint' | 'field' | 'placement' | 'cover' | 'base' | 'funnel';
   rev: number;
   /** The result was older than the latest request when it arrived, so it shows with the badge. */
   stale: boolean;
@@ -76,6 +78,32 @@ export interface PipelineOptions {
   timers?: Timers;
   /** The ?test=1 flag: budgets frozen, so tests see fixed values. */
   frozen?: boolean;
+  /**
+   * Once the preview has settled on a grid, check the walls between tiles on the export field, in a
+   * field.worker of its own that any newer change terminates. G6 keeps that check off the coarse preview.
+   */
+  checkWalls?: boolean;
+}
+
+/** A diagnostic as the card shows it. `exportCell` marks one read off the export field rather than the preview's. */
+export interface ShownDiagnostic extends Diagnostic {
+  exportCell?: boolean;
+}
+
+/** What the user has chosen, in one plain object, which undo and project files can keep as it is. */
+export interface Project {
+  params: Params;
+  plane: PlaneChoice;
+  pins: OpeningPin[];
+  /** Automatic vents the user deleted. */
+  removed: string[];
+}
+
+/** The wall check: running for the current state, done for it, or neither. */
+export interface WallStatus {
+  running: boolean;
+  /** The result for the current state, or null until one exists. */
+  result: WallCheck | null;
 }
 
 /** The plan's out-of-date badge and the error line, as the UI shows them. */
@@ -147,12 +175,16 @@ export class Pipeline {
   parsed: Shown<ParsedModel> | null = null;
   oriented: Shown<OrientedWire> | null = null;
   imported: Shown<SolidReport> | null = null;
+  /** G1.8: the lighter copy the viewport draws above 300k triangles, from the import. */
+  displayProxy: PartMesh | null = null;
+  footprint: Shown<FootprintOutput> | null = null;
   field: Shown<FieldOutput> & { mold: string } | null = null;
   placement: Shown<PlacementShown> | null = null;
-  cover: Shown<NonNullable<SolidOutputs['S13']>> | null = null;
-  base: Shown<NonNullable<SolidOutputs['S15']>> | null = null;
+  /** The cover and base also carry the rim key they were built on, so the view knows when its box proxies are newer. */
+  cover: Shown<NonNullable<SolidOutputs['S13']>> & { mold: string } | null = null;
+  base: Shown<NonNullable<SolidOutputs['S15']>> & { mold: string } | null = null;
   funnel: Shown<PartMesh | null> | null = null;
-  diagnostics: Diagnostic[] = [];
+  diagnostics: ShownDiagnostic[] = [];
   /** What the pipeline itself has to say, such as a coarser cell after a crash. Kept until the next file. */
   private notes: Diagnostic[] = [];
   error: string | null = null;
@@ -161,6 +193,8 @@ export class Pipeline {
    * base too, and T2b for one that only cuts, apart for a drag and for the full cut after a drop.
    */
   readonly timing = { t1: [] as number[], t2: [] as number[], drag: [] as number[], cut: [] as number[] };
+  /** The latest solid rebuild of any kind, which the status strip shows: one that only cuts is a rebuild too. */
+  lastRebuild: { kind: 't2' | 'cut' | 'drag'; ms: number } | null = null;
 
   private readonly fieldGate: JobGate<FieldTarget>;
   private readonly solidGate: JobGate<SolidTarget>;
@@ -174,6 +208,10 @@ export class Pipeline {
   /** A target that failed and must not be asked for again until something changes. */
   private failed = new Set<string>();
   private exportWorker: WorkerLike | null = null;
+  private walls: { key: string; value: WallCheck } | null = null;
+  private wallJob: { key: string; worker: WorkerLike } | null = null;
+  /** In ms, per wall check that finished, for the record. */
+  readonly wallTimes: number[] = [];
 
   constructor(private readonly options: PipelineOptions) {
     this.now = options.now ?? (() => performance.now());
@@ -196,9 +234,12 @@ export class Pipeline {
     this.crashScale = this.tuneScale = 1;
     this.budgets.restartT1();
     this.notes = [];
-    this.parsed = this.oriented = this.imported = this.field = this.placement = this.cover = this.base = this.funnel = null;
+    this.parsed = this.oriented = this.imported = this.footprint = this.field = this.placement = this.cover = this.base = this.funnel = null;
+    this.displayProxy = null;
+    this.walls = null;
     // Timings belong to the model they were taken on.
     for (const list of Object.values(this.timing)) list.length = 0;
+    this.lastRebuild = null;
     this.changed();
   }
 
@@ -209,7 +250,9 @@ export class Pipeline {
     this.changed();
   }
 
+  /** Another plane places the openings afresh, so pins and removed vents go. The same plane again is no change. */
   setPlane(plane: PlaneChoice): void {
+    if (samePlane(plane, this.plane)) return;
     this.plane = plane;
     this.pins = [];
     this.removed = [];
@@ -243,10 +286,35 @@ export class Pipeline {
     this.changed();
   }
 
+  /** The automatic vents the user deleted, by id. Placement leaves them out. */
+  setRemoved(removed: string[]): void {
+    this.removed = removed;
+    this.changed();
+  }
+
   // ----- what the UI reads -----
 
   get modelName(): string | null {
     return this.file?.name ?? null;
+  }
+
+  /** The loaded file's size in bytes. */
+  get fileBytes(): number {
+    return this.file?.bytes.length ?? 0;
+  }
+
+  project(): Project {
+    return { params: this.params, plane: this.plane, pins: this.pins, removed: this.removed };
+  }
+
+  /** The mesh the base plane orients: the welded one, or the import's when it flipped or rebuilt it. */
+  modelMesh(): WeldedMesh | null {
+    return this.importInput.mesh ?? this.parsed?.value.welded ?? null;
+  }
+
+  wallStatus(): WallStatus {
+    const key = this.wallKey();
+    return { running: this.wallJob?.key === key, result: this.walls?.key === key ? this.walls.value : null };
   }
 
   status(): PipelineStatus {
@@ -326,6 +394,7 @@ export class Pipeline {
     this.fieldGate.dispose();
     this.solidGate.dispose();
     this.exportWorker?.terminate();
+    this.cancelWalls();
     if (this.debounce) this.timers.clear(this.debounce.handle);
   }
 
@@ -416,6 +485,7 @@ export class Pipeline {
     this.rev++;
     this.failed.clear();
     this.error = null;
+    this.cancelWalls();
     this.update();
   }
 
@@ -437,6 +507,7 @@ export class Pipeline {
     }
     this.notify();
     this.checkIdle();
+    this.startWalls();
   }
 
   private target<T extends Target>(keys: Record<StageId, string>, extra: Omit<T, keyof Target>, idParts: unknown[]): T {
@@ -468,6 +539,8 @@ export class Pipeline {
     const want: SolidWanted[] = [];
     const parsed = this.parsed?.key === keys.S1 ? this.parsed.value : null;
     if (parsed && this.imported?.key !== keys.S1) want.push('S1');
+    // The footprint's level report is what base confirmation shows, so it goes with the import, ahead of T2.
+    if (parsed && this.oriented?.key === keys.S2 && this.footprint?.key !== keys.S2) want.push('S2');
     // T2 builds on a field, a placement and a plane that are all current, never on stale ones.
     const field = this.field?.key === keys.S6 && this.field.mold === keys.S10 ? this.field.value : null;
     const ready = parsed && field && this.oriented?.key === keys.S2 && this.placement?.key === keys.S7;
@@ -495,9 +568,10 @@ export class Pipeline {
           this.update();
         }, wait) };
       }
-      // The import does not wait for the debounce.
-      if (!want.includes('S1')) return;
-      want.splice(0, want.length, 'S1');
+      // The import and the footprint do not wait for the debounce.
+      const quick = want.filter((stage) => stage === 'S1' || stage === 'S2');
+      if (quick.length === 0) return;
+      want.splice(0, want.length, ...quick);
     }
 
     const placement = this.placement?.value;
@@ -534,7 +608,7 @@ export class Pipeline {
     const { keys, want, params } = target;
     const transfer: Transferable[] = [];
     const { parsed, oriented } = target.source;
-    const needsModel = (want.includes('S1') || want.includes('S15')) && cached.S1 !== keys.S1;
+    const needsModel = (want.includes('S1') || want.includes('S2') || want.includes('S15')) && cached.S1 !== keys.S1;
     const model = needsModel && parsed ? { welded: { positions: parsed.welded.positions.slice(), indices: parsed.welded.indices.slice() }, audit: parsed.audit } : null;
     if (model) transfer.push(model.welded.positions.buffer, model.welded.indices.buffer);
     const needsField = want.includes('S13') && cached.S12 !== keys.S12 && cached.S11 !== keys.S11;
@@ -556,7 +630,7 @@ export class Pipeline {
         inputs: {
           model,
           plane: {
-            candidate: { members, holes: oriented?.chosen.holes ?? [] },
+            candidate: oriented ? { ...oriented.chosen, members } : { normal: [0, 0, -1], support: 0, offset: 0, area: 0, members, levels: [], source: 'histogram', holes: [], faceArea: 0 },
             transform: oriented?.oriented.transform ?? { rotation: [1, 0, 0, 0, 1, 0, 0, 0, 1], translation: [0, 0, 0] },
             needsTrim: oriented?.oriented.needsTrim ?? false,
             planeTol: oriented?.planeTol ?? 0,
@@ -637,10 +711,14 @@ export class Pipeline {
     const { target } = event;
     if (event.kind === 'result') {
       const outputs = event.message.outputs as SolidOutputs;
-      if (outputs.S15) keep(this.timing.t2, event.ms);
-      else if (outputs.S13) keep(outputs.S13.provisional ? this.timing.drag : this.timing.cut, event.ms);
+      const kind = outputs.S15 ? 't2' : outputs.S13 ? (outputs.S13.provisional ? 'drag' : 'cut') : null;
+      if (kind) {
+        keep(this.timing[kind], event.ms);
+        this.lastRebuild = { kind, ms: event.ms };
+      }
       if (outputs.S1 && this.accept('import', target, this.imported)) {
         this.imported = { key: target.keys.S1, rev: target.rev, value: outputs.S1.report };
+        this.displayProxy = outputs.S1.display;
         // Field.worker started on the welded mesh. If the import changed it, S2 and all after it go again.
         if (outputs.S1.import.key !== this.importInput.key) {
           this.importInput = outputs.S1.import;
@@ -651,8 +729,9 @@ export class Pipeline {
           this.error = null;
         }
       }
-      if (outputs.S13 && this.accept('cover', target, this.cover)) this.cover = { key: target.keys.S13, rev: target.rev, value: outputs.S13 };
-      if (outputs.S15 && this.accept('base', target, this.base)) this.base = { key: target.keys.S15, rev: target.rev, value: outputs.S15 };
+      if (outputs.S2 && this.accept('footprint', target, this.footprint)) this.footprint = { key: target.keys.S2, rev: target.rev, value: outputs.S2 };
+      if (outputs.S13 && this.accept('cover', target, this.cover)) this.cover = { key: target.keys.S13, mold: target.keys.S10, rev: target.rev, value: outputs.S13 };
+      if (outputs.S15 && this.accept('base', target, this.base)) this.base = { key: target.keys.S15, mold: target.keys.S10, rev: target.rev, value: outputs.S15 };
       if (outputs.S16 !== undefined && this.accept('funnel', target, this.funnel)) this.funnel = { key: target.keys.S16, rev: target.rev, value: outputs.S16 };
       this.collectDiagnostics();
       const heap = event.message.heapBytes;
@@ -684,10 +763,18 @@ export class Pipeline {
   }
 
   private collectDiagnostics(): void {
-    const all: Diagnostic[] = [...this.notes, ...crossParameterErrors(this.params)];
+    const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.params)];
     if (this.parsed) all.push(...this.parsed.value.diagnostics);
     if (this.imported) all.push(...this.imported.value.diagnostics);
     if (this.oriented) all.push(...this.oriented.value.diagnostics);
+    if (this.footprint) all.push(...this.footprint.value.diagnostics, ...this.footprint.value.levels.diagnostics);
+    const walls = this.wallStatus().result;
+    if (walls) {
+      all.push(...walls.diagnostics.map((d) => ({ ...d, exportCell: true })));
+      // A check that passed says so too, so the card shows that the walls were looked at.
+      const problem = walls.diagnostics.some((d) => d.code === 'tiles-merged' || d.code === 'thin-tile-wall' || d.code === 'wall-check-failed');
+      if (!problem && walls.minWall !== null) all.push({ code: 'tile-walls', severity: 'info', message: `The thinnest wall between models is ${walls.minWall.toFixed(2)} mm, enough to print.`, exportCell: true });
+    }
     if (this.field) all.push(...this.field.value.diagnostics, ...this.field.value.rim.diagnostics);
     if (this.placement) all.push(...this.placement.value.placement.diagnostics);
     if (this.cover) all.push(...this.cover.value.diagnostics);
@@ -708,6 +795,7 @@ export class Pipeline {
       this.field?.key !== keys.S6 ||
       this.field.mold !== keys.S10 ||
       this.placement?.key !== keys.S7 ||
+      this.footprint?.key !== keys.S2 ||
       this.cover?.key !== keys.S13 ||
       this.base?.key !== keys.S15 ||
       this.funnel?.key !== keys.S16
@@ -725,5 +813,57 @@ export class Pipeline {
 
   private notify(): void {
     this.listeners.forEach((listener) => listener());
+  }
+
+  // ----- the export field's wall check -----
+
+  /** The export-tier key of the conditioned field, which is all the wall check reads. */
+  private wallKey(): string {
+    return stageKeys(this.params, { ...this.inputs(), tier: 'export', cellScale: 1 }).S6;
+  }
+
+  private cancelWalls(): void {
+    this.wallJob?.worker.terminate();
+    this.wallJob = null;
+  }
+
+  /** Starts the check once nothing else runs or waits and what shows is current: it is the lowest priority there is. */
+  private startWalls(): void {
+    const { nx, ny } = this.params.grid;
+    if (!this.options.checkWalls || !this.file || nx * ny < 2) return;
+    const quiet = !this.fieldGate.busy && !this.solidGate.busy && this.debounce === null;
+    const mesh = this.modelMesh(), oriented = this.oriented?.value;
+    if (!quiet || this.error !== null || this.isStale() || !mesh || !oriented) return;
+    const key = this.wallKey();
+    if (this.walls?.key === key || this.wallJob?.key === key) return;
+    this.cancelWalls();
+    const worker = this.options.spawnField();
+    this.wallJob = { key, worker };
+    const done = (): boolean => {
+      worker.terminate();
+      if (this.wallJob?.worker !== worker) return false;
+      this.wallJob = null;
+      return true;
+    };
+    worker.onmessage = ({ data }: { data: FromWorker }) => {
+      if (data.t === 'walls-done' && done()) {
+        this.walls = { key, value: data.result };
+        keep(this.wallTimes, data.result.ms);
+      } else if (data.t === 'error' && done()) {
+        this.walls = { key, value: { minWall: null, merged: false, requiredWall: 0, cell: this.params.quality.cellFinal, ms: 0, diagnostics: [{ code: 'wall-check-failed', severity: 'warning', message: `The walls between models could not be checked at the export cell: ${data.message}` }] } };
+      } else return;
+      this.collectDiagnostics();
+      this.notify();
+    };
+    worker.onerror = (event) => {
+      event.preventDefault?.();
+      if (!done()) return;
+      this.walls = { key, value: { minWall: null, merged: false, requiredWall: 0, cell: this.params.quality.cellFinal, ms: 0, diagnostics: [{ code: 'wall-check-failed', severity: 'warning', message: `The walls between models could not be checked at the export cell: ${event.message ?? 'the worker failed'}.` }] } };
+      this.collectDiagnostics();
+      this.notify();
+    };
+    const sent = { positions: mesh.positions.slice(), indices: mesh.indices.slice() };
+    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform } };
+    worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer]);
   }
 }

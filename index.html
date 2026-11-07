@@ -4,18 +4,20 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Casting Form Generator</title>
+    <link rel="icon" href="data:," />
     <style>
-      body { margin: 0; padding: 32px; background: #101418; color: #e6ebf0; font: 14px/1.5 system-ui, sans-serif; }
-      a { color: #3ea6ff; }
+      html { background: #101418; color-scheme: dark; }
+      html[data-theme='light'] { background: #f2f4f7; color-scheme: light; }
     </style>
+    <script>
+      // Before the first paint, so a light theme never flashes dark. Storage may be blocked: then dark.
+      try {
+        if (localStorage.getItem('cfg-theme') === 'light') document.documentElement.dataset.theme = 'light';
+      } catch (e) {}
+    </script>
   </head>
   <body>
-    <h1>Casting Form Generator</h1>
-    <p>The application is being built. For now these pages check that your browser can run it:</p>
-    <ul>
-      <li><a href="./diag.html">Diagnostics</a></li>
-      <li><a href="./bench.html">Benchmark</a></li>
-      <li><a href="./pipeline.html">Pipeline harness</a>: load an STL and see its preview cover and base</li>
-    </ul>
+    <div id="app"></div>
+    <script type="module" src="/src/ui/main.tsx"></script>
   </body>
 </html>

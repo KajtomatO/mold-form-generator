@@ -1,6 +1,6 @@
 import { funnelProfile } from '../parts/funnelProfile';
 import type { Diagnostic } from '../report/diagnostics';
-import type { Params } from './schema';
+import { PARAM_SCHEMA, type Params } from './schema';
 
 /**
  * The plan's hard rule on the seat: the cone keeps a millimetre of plastic over the highest ceiling.
@@ -65,6 +65,12 @@ export function crossParameterErrors(params: Params): Diagnostic[] {
   const { seat, cover, funnel } = params;
   if (seat.enabled && seat.depth > cover.topCap - SEAT_ROOF) {
     problems.push({ code: 'seat-too-deep', severity: 'error', message: `A seat ${seat.depth} mm deep leaves under ${SEAT_ROOF} mm of plastic in a top cap of ${cover.topCap} mm: use a seat of at most ${cover.topCap - SEAT_ROOF} mm, or a thicker cap.` });
+  }
+  // A pocket that follows the layer height must still be one the pocket's own range allows.
+  const { min = 0, max = Infinity } = PARAM_SCHEMA.base.pocketDepth;
+  const layer = params.print.layerHeight;
+  if (params.base.pocketDepth === null && !(layer >= min && layer <= max)) {
+    problems.push({ code: 'pocket-range', severity: 'error', message: `The pocket follows the layer height of ${layer} mm, outside the pocket's range of ${min} to ${max} mm: set the pocket depth yourself.` });
   }
   if (funnel.generate) problems.push(...funnelProblems(params));
   return problems;

@@ -36,6 +36,20 @@ describe('the plan\'s hard rules between parameters', () => {
     expect(codes((p) => ((p.seat.depth = 10), (p.seat.enabled = false), (p.funnel.generate = false)))).toEqual([]);
   });
 
+  it('a pocket that follows the layer height stays within the pocket\'s own range, with its ends allowed', () => {
+    expect(codes((p) => (p.print.layerHeight = 0.05))).toEqual([]);
+    expect(codes((p) => (p.print.layerHeight = 2))).toEqual([]);
+    expect(codes((p) => (p.print.layerHeight = 0))).toEqual(['pocket-range']);
+    expect(codes((p) => (p.print.layerHeight = 0.04))).toEqual(['pocket-range']);
+    expect(codes((p) => (p.print.layerHeight = 2.5))).toEqual(['pocket-range']);
+    expect(codes((p) => (p.print.layerHeight = Number.NaN))).toEqual(['pocket-range']);
+    // A pocket set by hand is its own control's to check, whatever the layer.
+    expect(codes((p) => ((p.print.layerHeight = 0), (p.base.pocketDepth = 0.2)))).toEqual([]);
+    const params = defaultParams();
+    params.print.layerHeight = 3;
+    expect(crossParameterErrors(params)[0].message).toContain('0.05 to 2 mm');
+  });
+
   it('says what would fit', () => {
     const params = defaultParams();
     params.seat.depth = 6;

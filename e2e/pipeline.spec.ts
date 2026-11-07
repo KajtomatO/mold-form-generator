@@ -6,10 +6,10 @@ import { hashBytes, hashMesh } from '../src/app/hash';
 import { weld } from '../src/core/mesh/weld';
 import { parseStl } from '../src/core/stl/parse';
 import { exampleBytes, EXAMPLE_FILES, type ExampleId } from '../test/fixtures/loadExamples';
-import { inProcessField, inProcessSolid } from '../test/fixtures/inProcessWorker';
 import { budgetFromNode, PLAN_TARGETS, tableBudgetMs } from '../src/app/budgets';
 import { withRows } from '../test/fixtures/benchmarks';
 import { NO_FIREFOX_WEBGL } from './firefox';
+import { inNode, nodeHash } from './nodeRuns';
 import { canDraw, hooks, loadAndWait, openPipeline } from './pipelineHarness';
 
 const FULL = process.env.CFG_FULL === '1';
@@ -20,21 +20,6 @@ const FULL = process.env.CFG_FULL === '1';
  */
 const DEV_SKIP = 'measures the workers, which run the same on the dev server: see DEV_SKIP';
 
-/** The same state built in Node by the same stage code, in workers of its own. */
-async function inNode<R>(id: ExampleId, change: (p: Pipeline) => void, read: (p: Pipeline) => R | Promise<R>): Promise<R> {
-  const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
-  try {
-    p.load(exampleBytes(id), EXAMPLE_FILES[id]);
-    await p.idle();
-    change(p);
-    await p.idle();
-    return await read(p);
-  } finally {
-    p.dispose();
-  }
-}
-
-const nodeHash = (id: ExampleId, change: (p: Pipeline) => void = () => {}): Promise<ReturnType<Pipeline['geometryHash']>> => inNode(id, change, (p) => p.geometryHash());
 
 const logCount = (page: Page, gate: string, event: string): Promise<number> => hooks(page, (h, a: [string, string]) => h.jobLog().filter((e) => e.gate === a[0] && e.event === a[1]).length, [gate, event]);
 

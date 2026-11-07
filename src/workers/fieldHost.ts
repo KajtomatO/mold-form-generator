@@ -4,6 +4,7 @@ import { applyDelay, buffersOf, injectedCrash, isInlineError, type FromWorker, t
 import type { BaseCandidate } from '../core/base/candidates';
 import type { Bounds } from '../core/mesh/weld';
 import type { Diagnostic } from '../core/report/diagnostics';
+import { checkWalls } from './wallCheck';
 
 export type Post = (message: FromWorker, transfer?: Transferable[]) => void;
 
@@ -14,6 +15,7 @@ export interface OrientedWire {
   oriented: Omit<OrientedModel, 'mesh'>;
   bounds: Bounds;
   planeTol: number;
+  modelVolume: number;
   diagnostics: Diagnostic[];
 }
 
@@ -37,11 +39,12 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
     arrays.push(welded.positions, welded.indices);
   }
   if (outputs.S2) {
-    const { oriented, chosen, ...rest } = outputs.S2;
+    const { oriented, chosen, candidates, ...rest } = outputs.S2;
     const { mesh: _mesh, ...orientedRest } = oriented;
     const members = chosen.members.slice();
-    out.S2 = { ...rest, chosen: { ...chosen, members }, oriented: orientedRest };
-    arrays.push(members);
+    const listed = candidates.map((c) => ({ ...c, members: c.members.slice() }));
+    out.S2 = { ...rest, candidates: listed, chosen: { ...chosen, members }, oriented: orientedRest };
+    arrays.push(members, ...listed.map((c) => c.members));
   }
   if (outputs.S6) {
     const values = outputs.S6.field.values.slice();
@@ -60,6 +63,15 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
 export function fieldHost(post: Post, now: () => number): (message: ToWorker) => void {
   const stages = new FieldStages(now);
   return (message) => {
+    if (message.t === 'walls') {
+      try {
+        post({ t: 'walls-done', id: message.id, result: checkWalls(message.params, message.inputs, now) });
+      } catch (error) {
+        const e = error instanceof Error ? error : new Error(String(error));
+        post({ t: 'error', id: message.id, name: e.name, message: e.message, inline: false, cached: {} });
+      }
+      return;
+    }
     if (message.t !== 'field') return;
     const { id, keys, params, inputs } = message;
     const timings: Record<string, number> = {};

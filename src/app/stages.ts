@@ -121,6 +121,12 @@ export function paramValue(params: Params, path: ParamPath): unknown {
   return (params[group] as Record<string, unknown>)[key];
 }
 
+/** Sets one parameter in place. The caller owns `params`, as Pipeline.setParams hands over a copy. */
+export function setParamValue(params: Params, path: ParamPath, value: unknown): void {
+  const [group, key] = path.split('.') as [keyof Params, string];
+  (params[group] as Record<string, unknown>)[key] = value;
+}
+
 /**
  * Every stage's key. A key is a hash of the stage's own parameter values and inputs and of the keys of
  * the stages it builds on, so equal keys mean equal results.

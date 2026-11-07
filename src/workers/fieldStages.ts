@@ -1,13 +1,15 @@
 import { findBodies } from '../core/analysis/bodies';
 import { placementSettings, placeOpenings, type OpeningPin, type Placement } from '../core/analysis/placement';
 import { openingSizes, placementSpace, primeSpace, type OpeningKind } from '../core/analysis/validate';
-import { candidateAtLevel, candidateFromPick, findBaseCandidates, upperLevel, type BaseCandidate } from '../core/base/candidates';
+import { candidateAtLevel, candidateFromPick, findBaseCandidates, levelNear, type BaseCandidate } from '../core/base/candidates';
 import { orientToBase, type OrientedModel } from '../core/base/orient';
 import { conditionField } from '../core/field/build';
 import { compositeTiles } from '../core/field/composite';
 import { dilate } from '../core/field/dilate';
 import { emptyField, fieldSettings, planField, type Field, type FieldPlan, type FieldSettings, type Grid } from '../core/field/grid';
 import { NO_SOURCE, rasterize } from '../core/field/raster';
+import { exteriorMesh } from '../core/field/sealed';
+import { volumeAbovePlane } from '../core/field/silicone';
 import { auditEdges, type MeshAudit, type OpenLoop } from '../core/mesh/audit';
 import { meshBounds, weld, type Bounds, type WeldedMesh } from '../core/mesh/weld';
 import { baseOptions, resolveAuto } from '../core/params/defaults';
@@ -18,10 +20,18 @@ import type { Rect } from '../core/solid/rect';
 import { parseStl } from '../core/stl/parse';
 import type { StageId } from '../app/stages';
 
-/** Which base plane: one of the ranked candidates, or the plane through a clicked triangle, and whether to use its upper level. */
-export type PlaneChoice = { rank: number; upper: boolean } | { pick: number; upper: boolean };
+/**
+ * Which base plane: one of the ranked candidates, or the plane through a clicked triangle. `upper` is
+ * false, or the offset of the level to stand on instead, as the footprint's level report offered it. It
+ * names the level, because only that report knows which level silicone can reach (G2.6).
+ */
+export type PlaneChoice = { rank: number; upper: number | false } | { pick: number; upper: number | false };
 
 export const DEFAULT_PLANE: PlaneChoice = { rank: 0, upper: false };
+
+export function samePlane(a: PlaneChoice, b: PlaneChoice): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 /**
  * What the import in solid.worker did to the mesh. Field.worker starts on the welded mesh at once, as
@@ -67,12 +77,13 @@ export interface ParsedModel {
   diagnostics: Diagnostic[];
 }
 
-/** A candidate as the list shows it. Only the chosen one carries its triangles. */
+/** A candidate as the list shows it, with its triangles, so main can highlight one before it is chosen. */
 export interface CandidateSummary {
   normal: [number, number, number];
   area: number;
   offset: number;
   source: BaseCandidate['source'];
+  members: Uint32Array;
 }
 
 export interface OrientedStage {
@@ -82,6 +93,8 @@ export interface OrientedStage {
   bounds: Bounds;
   /** Of the whole mesh before orienting, as G2 detects the plane with it. */
   planeTol: number;
+  /** The model above the plane in mm3, voids left out: what one tile takes off the silicone under H. */
+  modelVolume: number;
   diagnostics: Diagnostic[];
 }
 
@@ -245,19 +258,28 @@ export class FieldStages {
         const ranked = findBaseCandidates(mesh, base, soup);
         if (ranked.length === 0) throw new InlineError('no-base', 'This model has no flat face to stand on a base.');
         let chosen = 'rank' in plane ? ranked[Math.min(plane.rank, ranked.length - 1)] : candidateFromPick(mesh, plane.pick, base, ranked);
-        if (plane.upper) {
-          const level = upperLevel(chosen, planeTol);
+        const diagnostics: Diagnostic[] = [];
+        if (plane.upper !== false) {
+          const level = levelNear(chosen, plane.upper, planeTol);
           if (level) chosen = candidateAtLevel(mesh, chosen, level.offset, base);
+          else diagnostics.push({ code: 'upper-level-gone', severity: 'warning', message: `The upper level ${plane.upper.toFixed(2)} mm in is not found at this plane tolerance, so the model stands on the plane itself.` });
         }
         const oriented = orientToBase(mesh, chosen, { planeTol, soup: outcome.soup, openLoops: outcome.openLoops });
-        const candidates = ranked.map((c): CandidateSummary => ({ normal: c.normal, area: c.area, offset: c.offset, source: c.source }));
-        return { candidates, chosen, oriented, bounds: meshBounds(oriented.mesh.positions), planeTol, diagnostics: oriented.diagnostics };
+        const candidates = ranked.map((c): CandidateSummary => ({ normal: c.normal, area: c.area, offset: c.offset, source: c.source, members: c.members }));
+        const modelVolume = volumeAbovePlane(exteriorMesh(oriented.mesh));
+        return { candidates, chosen, oriented, bounds: meshBounds(oriented.mesh.positions), planeTol, modelVolume, diagnostics: [...diagnostics, ...oriented.diagnostics] };
       });
       this.s2 = { key: keys.S2, value };
       return value;
     };
 
-    const cellOf = (oriented: OrientedStage): number => previewCell(params, oriented.bounds) * inputs.cellScale;
+    const cellOf = (oriented: OrientedStage): number => {
+      const cell = previewCell(params, oriented.bounds) * inputs.cellScale;
+      // A cell of 0, from a typed value or a project file, asks for an endless lattice. That is the
+      // user's input and no crash, so it must not be retried at a coarser cell as one.
+      if (!(cell > 0) || !Number.isFinite(cell)) throw new InlineError('cell', `A preview cell of ${cell} mm cannot be built: give it a value above 0.`);
+      return cell;
+    };
     const settingsOf = (oriented: OrientedStage, cell: number): FieldSettings => fieldSettings(params, oriented.bounds, cell);
 
     const s3 = (): Lattice => {

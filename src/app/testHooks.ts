@@ -8,7 +8,8 @@ import type { LogEntry } from './jobGate';
 import { Pipeline, type PipelineEvent, type PipelineOptions, type PipelineStatus } from './pipeline';
 import { parseStl } from '../core/stl/parse';
 import { weld } from '../core/mesh/weld';
-import type { ParamPath } from './stages';
+import { setParamValue as setPath, type ParamPath } from './stages';
+import type { Project, WallStatus } from './pipeline';
 
 export interface ExportSummary {
   files: Record<string, { bytes: number; hash: string; meshHash: string }>;
@@ -52,15 +53,14 @@ export interface TestHooks {
   shownCover(): { rev: number; provisional: boolean } | null;
   /** Called after every change the pipeline makes, after the page itself has drawn it. */
   subscribe(listener: () => void): () => void;
-  diagnostics(): { code: string; severity: string }[];
+  diagnostics(): { code: string; severity: string; exportCell: boolean }[];
+  /** The export field's wall check, and how long each one took. */
+  walls(): WallStatus;
+  wallTimes(): number[];
+  project(): Project;
   /** The box around a part on screen, in mold coordinates. */
   partBounds(part: 'cover' | 'base'): { min: [number, number, number]; max: [number, number, number] } | null;
   exportParts(): Promise<ExportSummary>;
-}
-
-function setPath(params: Params, path: ParamPath, value: unknown): void {
-  const [group, key] = path.split('.') as [keyof Params, string];
-  (params[group] as Record<string, unknown>)[key] = value;
 }
 
 export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>): TestHooks {
@@ -76,7 +76,7 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     async freshHash() {
       const snapshot = pipeline.snapshot();
       if (!snapshot) throw new Error('Nothing is loaded.');
-      const fresh = new Pipeline({ ...options, frozen: true });
+      const fresh = new Pipeline({ ...options, frozen: true, checkWalls: false });
       try {
         fresh.restore(snapshot);
         await fresh.idle();
@@ -108,7 +108,10 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     cellScale: () => pipeline.cellScale(),
     shownCover: () => (pipeline.cover ? { rev: pipeline.cover.rev, provisional: pipeline.cover.value.provisional } : null),
     subscribe: (listener) => pipeline.subscribe(listener),
-    diagnostics: () => pipeline.diagnostics.map(({ code, severity }) => ({ code, severity })),
+    diagnostics: () => pipeline.diagnostics.map(({ code, severity, exportCell }) => ({ code, severity, exportCell: exportCell === true })),
+    walls: () => pipeline.wallStatus(),
+    wallTimes: () => pipeline.wallTimes,
+    project: () => pipeline.project(),
     partBounds(part) {
       const shown = part === 'cover' ? pipeline.cover : pipeline.base;
       if (!shown) return null;

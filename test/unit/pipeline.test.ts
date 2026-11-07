@@ -199,6 +199,23 @@ describe('the pipeline in one process, on the real stage code', () => {
     expect(p.geometryHash().all).toBe(await fresh(p));
   }, 120_000);
 
+  it('a preview cell of 0 is the user\'s input and no crash: an inline error, no coarser cell, and back to normal once undone', async () => {
+    const p = pipeline();
+    load(p, 'jersey');
+    await p.idle();
+    const cell = p.field!.value.cell;
+    p.setParams((params) => (params.quality.cellPreview = 0));
+    await p.idle();
+    expect(p.status().error).toMatch(/preview cell of 0 mm/);
+    expect(logged(p, 'field', 'crashed')).toBe(0);
+    expect(p.cellScale()).toBe(1);
+    p.setParams((params) => (params.quality.cellPreview = null));
+    await p.idle();
+    expect(p.status()).toMatchObject({ stale: false, error: null });
+    expect(p.field!.value.cell).toBe(cell);
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('preview-coarser');
+  }, 120_000);
+
   it('a result past the heap limit recycles solid.worker between jobs, and the next job builds on the fresh one', async () => {
     const p = pipeline();
     load(p, 'jersey');
@@ -383,6 +400,195 @@ describe('what a coarse preview may say', () => {
     expect(buildField(mesh, planField(bounds, { ...coarse, spacing: 10 }), { ...coarse, spacing: 10 }).diagnostics.map((d) => d.code)).not.toContain('thin-tile-wall');
     const exported = await p.exportParts();
     expect(exported.diagnostics.map((d) => d.code)).toContain('thin-tile-wall');
+  }, 180_000);
+});
+
+describe('base confirmation', () => {
+  it('VIS-35: the footprint\'s level report comes with the import, ahead of T2, and "Use upper level" clears it', async () => {
+    const p = pipeline();
+    load(p, 'vis35');
+    await p.idle();
+    // One job for the import and the footprint, one for the parts: the report costs no job of its own.
+    expect(logged(p, 'solid', 'dispatch')).toBe(2);
+    expect(p.footprint!.value.levels.useUpper!.gap).toBeCloseTo(0.405, 2);
+    expect(p.diagnostics.map((d) => d.code)).toContain('upper-level');
+    expect(p.oriented!.value.candidates[0].members).toEqual(p.oriented!.value.chosen.members);
+
+    p.setPlane({ rank: 0, upper: p.footprint!.value.levels.useUpper!.offset });
+    await p.idle();
+    expect(p.oriented!.value.chosen.offset).toBeCloseTo(0.405, 2);
+    expect(p.footprint!.value.levels.useUpper).toBeNull();
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('upper-level');
+    expect(p.status().stale).toBe(false);
+    expect(p.geometryHash().all).toBe(await fresh(p));
+  }, 120_000);
+
+  it('"Use upper level" stands on the level the warning offered, not the largest one: the barrel\'s +Z face', async () => {
+    const p = pipeline();
+    load(p, 'barrel');
+    await p.idle();
+    p.setPlane({ rank: 1, upper: false });
+    await p.idle();
+    expect(p.oriented!.value.chosen.normal).toEqual([0, 0, 1]);
+    // Two levels: an enclosed recess at 0.2 mm, the larger by area, and the open one at 0.5 mm, which is offered.
+    const { levels, useUpper } = p.footprint!.value.levels;
+    const recess = levels.find((l) => Math.abs(l.offset - 0.2) < 0.01)!;
+    expect(recess.exposedArea).toBe(0);
+    expect(recess.enclosedArea).toBeGreaterThan(useUpper!.exposedArea + useUpper!.enclosedArea);
+    expect(useUpper!.offset).toBeCloseTo(0.501, 3);
+    expect(p.diagnostics.map((d) => d.code)).toContain('upper-level');
+
+    p.setPlane({ rank: 1, upper: useUpper!.offset });
+    await p.idle();
+    expect(p.oriented!.value.chosen.offset).toBe(useUpper!.offset);
+    // Nothing further is offered, so the warning is gone rather than left with no button to act on it.
+    expect(p.footprint!.value.levels.useUpper).toBeNull();
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('upper-level');
+    expect(p.diagnostics.map((d) => d.code)).toContain('below-plane');
+  }, 120_000);
+
+  it('the same plane chosen again is no change: pins, removed vents and the shown parts stay', async () => {
+    const p = pipeline();
+    load(p, 'jersey');
+    await p.idle();
+    const [pour] = p.placement!.value.placement.openings.filter((o) => o.kind === 'pour');
+    const vent = p.placement!.value.placement.openings.find((o) => o.kind === 'vent')!;
+    p.dropOpening(pour.id, pour.x + 1, pour.y);
+    p.setRemoved([vent.id]);
+    await p.idle();
+    const before = { project: p.project(), hash: p.geometryHash().all, jobs: p.log.length };
+    p.setPlane({ rank: 0, upper: false });
+    await p.idle();
+    expect(p.project()).toEqual(before.project);
+    expect(p.geometryHash().all).toBe(before.hash);
+    expect(p.log.length).toBe(before.jobs);
+    // Another plane does place afresh.
+    p.setPlane({ rank: 1, upper: false });
+    await p.idle();
+    expect(p.project().pins).toEqual([]);
+    expect(p.project().removed).toEqual([]);
+  }, 120_000);
+
+  it('a named upper level that the tolerance no longer finds leaves the model on the plane, and says so', async () => {
+    const p = pipeline();
+    load(p, 'jersey');
+    await p.idle();
+    p.setPlane({ rank: 0, upper: 0.4 });
+    await p.idle();
+    expect(p.oriented!.value.chosen.offset).toBe(0);
+    expect(p.diagnostics.map((d) => d.code)).toContain('upper-level-gone');
+  }, 120_000);
+
+  it('a vent the user removes stays out until it is restored, and the result is a fresh build', async () => {
+    const p = pipeline();
+    load(p, 'jersey');
+    await p.idle();
+    const vent = p.placement!.value.placement.openings.find((o) => o.kind === 'vent')!;
+    p.setRemoved([vent.id]);
+    await p.idle();
+    expect(p.placement!.value.placement.openings.map((o) => o.id)).not.toContain(vent.id);
+    expect(p.project().removed).toEqual([vent.id]);
+    expect(p.geometryHash().all).toBe(await fresh(p));
+    p.setRemoved([]);
+    await p.idle();
+    expect(p.placement!.value.placement.openings.map((o) => o.id)).toContain(vent.id);
+  }, 120_000);
+});
+
+describe('the export field\'s wall check, once the preview settles (G6)', () => {
+  function counted(): { spawn: () => WorkerLike; spawned: () => number; terminated: () => number } {
+    let spawned = 0, terminated = 0;
+    return {
+      spawn: () => {
+        spawned++;
+        const worker = inProcessField();
+        const end = worker.terminate.bind(worker);
+        worker.terminate = () => {
+          terminated++;
+          end();
+        };
+        return worker;
+      },
+      spawned: () => spawned,
+      terminated: () => terminated,
+    };
+  }
+
+  function walled(field: ReturnType<typeof counted>): Pipeline {
+    const p = new Pipeline({ spawnField: field.spawn, spawnSolid: inProcessSolid, frozen: true, checkWalls: true });
+    pipelines.push(p);
+    return p;
+  }
+
+  it('Goddess 2 x 1: spacing 10 merges and 11 is too thin, as M2 measured, each read in a field.worker of its own that a newer change ends', async () => {
+    const field = counted();
+    const p = walled(field);
+    p.setParams((params) => {
+      params.grid.nx = 2;
+      params.grid.spacing = 10;
+    });
+    load(p, 'goddess');
+    await p.idle();
+    // idle() does not wait for it: it starts once everything else is done.
+    expect(p.wallStatus()).toEqual({ running: true, result: null });
+    expect(field.spawned()).toBe(2);
+    await until(() => p.wallStatus().result !== null, 60_000);
+    expect(field.terminated()).toBe(1);
+    const merged = p.diagnostics.filter((d) => d.code === 'tiles-merged');
+    expect(merged).toHaveLength(1);
+    expect(merged[0].exportCell).toBe(true);
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('tile-walls');
+    expect(p.wallStatus().result!.cell).toBe(0.125);
+    // The preview's own diagnostics come as they did, unmarked.
+    expect(p.diagnostics.filter((d) => d.code !== 'tiles-merged').every((d) => !d.exportCell)).toBe(true);
+
+    // A change ends the check, whatever it was doing, and the old answer no longer shows.
+    p.setParams((params) => (params.grid.spacing = 11));
+    expect(p.wallStatus()).toEqual({ running: false, result: null });
+    await p.idle();
+    expect(field.spawned()).toBe(3);
+    await until(() => p.wallStatus().result !== null, 60_000);
+    expect(field.terminated()).toBe(2);
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('tiles-merged');
+    expect(p.diagnostics.filter((d) => d.code === 'thin-tile-wall').map((d) => d.exportCell)).toEqual([true]);
+  }, 180_000);
+
+  it('VIS-35 2 x 1 at spacing 10: the thin wall the preview cannot see is reported before any export', async () => {
+    const p = walled(counted());
+    p.setParams((params) => {
+      params.grid.nx = 2;
+      params.grid.spacing = 10;
+    });
+    load(p, 'vis35');
+    await p.idle();
+    // As 'what a coarse preview may say' shows, the preview's own field sees no thin wall here.
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('thin-tile-wall');
+    await until(() => p.wallStatus().result !== null, 60_000);
+    expect(p.diagnostics.filter((d) => d.code === 'thin-tile-wall').map((d) => d.exportCell)).toEqual([true]);
+    expect(p.wallStatus().result!.minWall).toBeLessThan(p.wallStatus().result!.requiredWall);
+  }, 180_000);
+
+  it('a change while it runs terminates its worker, and one tile has no check at all', async () => {
+    const field = counted();
+    const p = walled(field);
+    p.setParams((params) => (params.grid.nx = 2));
+    load(p, 'jersey');
+    await p.idle();
+    expect(p.wallStatus().running).toBe(true);
+    p.setParams((params) => (params.grid.spacing = 30));
+    // The in-process worker had not started on it, so this is the cancel and not the end of a job.
+    expect(field.terminated()).toBe(1);
+    await p.idle();
+    await until(() => p.wallStatus().result !== null, 60_000);
+    expect(p.wallStatus().result!.minWall).toBeGreaterThan(20);
+    expect(p.diagnostics.map((d) => d.code)).not.toContain('thin-tile-wall');
+    // A check that passed is listed as well, so the card shows the walls were looked at.
+    expect(p.diagnostics.filter((d) => d.code === 'tile-walls').map((d) => d.exportCell)).toEqual([true]);
+
+    p.setParams((params) => (params.grid.nx = 1));
+    await p.idle();
+    expect(p.wallStatus()).toEqual({ running: false, result: null });
+    expect(field.spawned()).toBe(3);
   }, 180_000);
 });
 

@@ -641,6 +641,19 @@ export function candidateAtLevel(mesh: WeldedMesh, candidate: BaseCandidate, off
   return candidateAt(mesh, shape, dots, candidate.normal, candidate.support, offset, candidate.levels, options.planeTol, candidate.source);
 }
 
+/**
+ * The level above the chosen plane nearest an offset, within the tolerance: "Use upper level" names the
+ * level the footprint's report offered, and a level's offset moves a little when the tolerance does.
+ */
+export function levelNear(candidate: BaseCandidate, offset: number, planeTol: number): PlaneLevel | null {
+  let best: PlaneLevel | null = null;
+  for (const level of candidate.levels) {
+    if (level.offset <= candidate.offset + planeTol || Math.abs(level.offset - offset) > planeTol) continue;
+    if (!best || Math.abs(level.offset - offset) < Math.abs(best.offset - offset)) best = level;
+  }
+  return best;
+}
+
 /** The largest level above the chosen plane, if any. Whether it matters is for classifyLevels. */
 export function upperLevel(candidate: BaseCandidate, planeTol: number): PlaneLevel | null {
   let best: PlaneLevel | null = null;

@@ -18,9 +18,11 @@ scripts/serve.sh     # then browse to http://<server-ip>:5173
 
 Port 5173 serves the last build, so a server started before you updated has an old page without this button. Stop it and run `scripts/serve.sh` again, which rebuilds first.
 
-## See the pipeline
+## Use it
 
-`http://<server-ip>:5173/pipeline.html` is a bare page for the worker pipeline, until the app itself arrives: pick an STL and it builds the preview cover and base in the browser and draws them. The status line shows how long each preview tier took.
+`http://<server-ip>:5173/` is the app. Drop an STL on the view, or open one, and check the base face it found: the ranked candidates are listed with the best one chosen, and you can pick another face on the model. The preview follows every change: the silicone surface and the box first, then the real cover and base. The status strip shows the size, the box, the silicone and how long the last rebuild took. Export arrives with the next milestone.
+
+`pipeline.html`, `diag.html` and `bench.html` are linked from the Advanced section: a bare page for the worker pipeline, the browser check with the fit-test download, and the benchmark.
 
 ## Test it
 
@@ -32,4 +34,4 @@ scripts/ci.sh --full --record  # also rewrites docs/BENCHMARKS.md
 
 Browser tests run against the LAN address on purpose, because `127.0.0.1` counts as a secure context and would hide problems that only appear over plain http. Set `CFG_LAN_IP` if this machine's address is not `192.168.0.153`.
 
-They run in Chromium and Firefox. Firefox has no WebGL without a display, so its WebGL tests skip themselves unless `xvfb` is installed, and `scripts/ci.sh` says so when that happens. `WITH_SYSTEM_DEPS=1 scripts/install.sh` installs it, using sudo.
+They run in Chromium and Firefox. `CFG_SHOTS=1` adds the review screenshots of the app, written to `test-results/shots` or to `CFG_SHOTS_DIR`. Firefox has no WebGL without a display, so its WebGL tests skip themselves unless `xvfb` is installed, and `scripts/ci.sh` says so when that happens. `WITH_SYSTEM_DEPS=1 scripts/install.sh` installs it, using sudo.

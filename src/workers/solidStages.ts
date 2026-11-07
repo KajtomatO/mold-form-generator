@@ -1,10 +1,11 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import type { BaseCandidate } from '../core/base/candidates';
-import { buildFootprint, type Footprint } from '../core/base/footprint';
+import { buildFootprint, classifyLevels, type Footprint, type LevelReport } from '../core/base/footprint';
 import { transformPositions, type RigidTransform } from '../core/base/orient';
 import type { Field } from '../core/field/grid';
 import type { MeshAudit } from '../core/mesh/audit';
 import { importSolid, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
+import { displayProxy, type MeshSimplifier } from '../core/mesh/simplify';
 import type { WeldedMesh } from '../core/mesh/weld';
 import { crossParameterErrors } from '../core/params/rules';
 import type { Params } from '../core/params/schema';
@@ -29,7 +30,8 @@ export interface PartMesh {
 export interface SolidInputs {
   /** The welded mesh and its audit, sent only while the worker does not hold S1. */
   model: { welded: WeldedMesh; audit: MeshAudit } | null;
-  plane: { candidate: Pick<BaseCandidate, 'members' | 'holes'>; transform: RigidTransform; needsTrim: boolean; planeTol: number; pocketDepth: number };
+  /** The whole candidate, as G2.6's report on the footprint reads its levels. */
+  plane: { candidate: BaseCandidate; transform: RigidTransform; needsTrim: boolean; planeTol: number; pocketDepth: number };
   /** Null in a job that only imports, which runs before any field exists. */
   rim: Rim | null;
   /** The export plan's tile offsets. */
@@ -48,10 +50,19 @@ export interface ImportOutput {
   report: SolidReport;
   /** What field.worker must use for S2. */
   import: ImportInput;
+  /** G1.8: a lighter copy for the viewport above 300k triangles, or null. Picking still uses the real mesh. */
+  display: PartMesh | null;
+}
+
+/** The footprint as main needs it before any part is built: G2.6's levels, and the islands it dropped. */
+export interface FootprintOutput {
+  levels: LevelReport;
+  diagnostics: Diagnostic[];
 }
 
 export interface SolidOutputs {
   S1?: ImportOutput;
+  S2?: FootprintOutput;
   S13?: PartMesh & { provisional: boolean; diagnostics: Diagnostic[] };
   S15?: PartMesh & { diagnostics: Diagnostic[] };
   S16?: PartMesh | null;
@@ -105,6 +116,8 @@ export class SolidStages {
   constructor(
     private readonly api: ManifoldToplevel,
     private readonly now: () => number = () => 0,
+    /** For the display proxy. Without one, a heavy model is drawn as it is. */
+    private readonly simplifier: MeshSimplifier | null = null,
   ) {}
 
   cached(): Partial<Record<StageId, string>> {
@@ -228,7 +241,14 @@ export class SolidStages {
     const outputs: SolidOutputs = {};
     if (want.includes('S1')) {
       const { solid, outcome } = imported();
-      outputs.S1 = { report: solid.report, import: outcome };
+      const proxy = this.simplifier ? displayProxy(solid.mesh, this.simplifier) : null;
+      outputs.S1 = { report: solid.report, import: outcome, display: proxy ? { positions: proxy.positions, indices: proxy.indices } : null };
+    }
+
+    if (want.includes('S2')) {
+      const { footprint: print, mesh } = footprint();
+      const { candidate, planeTol } = inputs.plane;
+      outputs.S2 = timed('levels', () => ({ levels: classifyLevels(mesh, candidate, print, planeTol), diagnostics: print.diagnostics }));
     }
 
     if (want.includes('S13')) {

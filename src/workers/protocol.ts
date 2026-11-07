@@ -3,6 +3,7 @@ import type { StageId } from '../app/stages';
 import type { FieldInputs, FieldOutputs, FieldWanted } from './fieldStages';
 import type { SolidInputs, SolidOutputs, SolidWanted } from './solidStages';
 import type { ExportInputs, ExportOutputs } from './exportJob';
+import type { WallCheck, WallInputs } from './wallCheck';
 
 /**
  * Messages between main and the workers. Every job names the full key of each stage it touches, and
@@ -52,7 +53,18 @@ export interface HeapProbeMessage {
   id: number;
 }
 
-export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage;
+/**
+ * The export field's wall check, sent to a field.worker of its own once the preview has settled, and
+ * terminated by any newer change, so it never holds up the preview's worker or its cache.
+ */
+export interface WallsJobMessage {
+  t: 'walls';
+  id: number;
+  params: Params;
+  inputs: WallInputs;
+}
+
+export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage | WallsJobMessage;
 
 export type Cached = Partial<Record<StageId, string>>;
 
@@ -123,7 +135,13 @@ export interface HeapMessage {
   held: number;
 }
 
-export type FromWorker = ReadyMessage | StageMessage | ResultMessage | MissMessage | ErrorMessage | ProgressMessage | ExportResultMessage | HeapMessage;
+export interface WallsResultMessage {
+  t: 'walls-done';
+  id: number;
+  result: WallCheck;
+}
+
+export type FromWorker = ReadyMessage | StageMessage | ResultMessage | MissMessage | ErrorMessage | ProgressMessage | ExportResultMessage | HeapMessage | WallsResultMessage;
 
 /** The part of Worker the pipeline uses, so tests can stand an in-process worker in for it. */
 export interface WorkerLike {

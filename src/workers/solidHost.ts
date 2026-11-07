@@ -17,13 +17,15 @@ function wire(outputs: SolidOutputs): { outputs: SolidOutputs; transfer: ArrayBu
     out.S1 = { ...outputs.S1, import: { ...outputs.S1.import, mesh } };
     arrays.push(mesh.positions, mesh.indices);
   }
+  // The proxy is made for this message and kept nowhere, so it goes as it is.
+  arrays.push(outputs.S1?.display?.positions, outputs.S1?.display?.indices);
   for (const part of [outputs.S13, outputs.S15, outputs.S16]) arrays.push(part?.positions, part?.indices);
   return { outputs: out, transfer: buffersOf(...arrays) };
 }
 
 /** solid.worker's message handler, apart from `self` and the WASM boot, so a Node test can drive the same code. */
 export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heapBytes: () => number | null, post: Post, now: () => number): (message: ToWorker) => void {
-  const stages = new SolidStages(api, now);
+  const stages = new SolidStages(api, now, simplifier);
   return (message) => {
     if (message.t === 'heap') {
       post({ t: 'heap', id: message.id, capacity: heapBytes(), used: usedHeap(api, heapBytes), held: stages.heldEntries() });
