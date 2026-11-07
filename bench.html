@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Casting Form Generator: benchmark</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #101418; color: #e6ebf0; font: 14px/1.5 system-ui, sans-serif; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      table { border-collapse: collapse; margin: 12px 0; font-variant-numeric: tabular-nums; }
+      td, th { padding: 3px 16px 3px 0; text-align: left; }
+      p { max-width: 640px; color: #93a1b0; }
+      pre { background: #171c22; padding: 12px; border-radius: 8px; max-width: 640px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Benchmark</h1>
+    <p id="status">Running. This takes up to a minute.</p>
+    <table id="table"></table>
+    <pre id="copy" hidden></pre>
+    <script type="module" src="/src/diag/bench.ts"></script>
+  </body>
+</html>

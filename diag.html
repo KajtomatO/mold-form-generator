@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Casting Form Generator: diagnostics</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #101418; color: #e6ebf0; font: 14px/1.5 system-ui, sans-serif; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      table { border-collapse: collapse; margin: 12px 0; }
+      td { padding: 3px 12px 3px 0; vertical-align: top; }
+      td:first-child { color: #93a1b0; }
+      button { background: #3ea6ff; color: #0b1218; border: 0; border-radius: 8px; padding: 8px 14px; font: 600 13px system-ui, sans-serif; cursor: pointer; margin-right: 8px; }
+      canvas { display: block; margin: 12px 0; border: 1px solid #303a45; }
+      p { max-width: 640px; color: #93a1b0; }
+    </style>
+  </head>
+  <body>
+    <h1>Browser diagnostics</h1>
+    <p>Press both buttons and note whether Chrome asks you to keep or discard the file, or blocks it.</p>
+    <button id="dl-stl">Download test STL</button>
+    <button id="dl-zip">Download test ZIP</button>
+    <table id="results"></table>
+    <canvas id="gl" width="256" height="256"></canvas>
+    <script type="module" src="/src/diag/diag.ts"></script>
+  </body>
+</html>
