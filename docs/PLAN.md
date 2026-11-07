@@ -451,6 +451,23 @@ Checks, all 7 at defaults in Mode A and B, plus the parameter matrix on jersey, 
 
 User: fit-test piece available on `diag.html` for an early printer check.
 
+Measured at M3, where a check above reads differently on the real solids:
+- **Mirrored cover on Benchy:** a plain z flip reflects the cavity in y, and Benchy is symmetric in y to well within its margin. Its gap stays 3.2178, the same as the true cover, and such a cover would fit. So on Benchy the z flip is caught by comparing surfaces, and a reflection in x fails by gap. The L-shaped fixture fails by gap and by intersection, as planned.
+- **Sealed recesses in Mode B:** besides the barrel's void, the plate closes off recesses in the model's own underside: Benchy's 8 letters and wolf's 13. Silicone cannot reach those either, so Mode B fills them too and reports the sum, which matches G2.6's level figures within 3%. Otherwise they would be extra negative shells in the closed-volume list.
+- **Ridge gap:** `cG*cos(ridgeDraft)` holds until it passes `grooveExtraDepth`, at cG of about 0.305. Past that, the groove's roof is the nearer face, so the check takes the smaller of the two. Defaults are not affected.
+- **Flat top:** just below `Zt` the section is the box less the chamfer left at that height. Under the chamfer it is the full box area. Both are checked.
+- **minGap search length:** 8 mm cannot see t=10, so the check uses `max(8, t + 0.7)`. A grid uses `t + 0.7` per tile, which gives the same pass or fail, since minGap is the smaller of the true gap and the search length.
+- **Corners:** rebate and plate corners move with their sides, as a true offset. With a fixed radius, as a plain reading of G9 and G10 gives, a corner's slant is steeper than the sides, and at 15 degrees the gap there is `0.934*cT` against `0.966*cT`. That passes at the default but fails the 0.01 limit at cT 0.4.
+- **Slack in D:** the 0.5 mm covers a source half a cell past its vertex plus one cell for the surface to come down through z=0, which is 1.5 cells. So at an export cell above 1/3 mm the slack follows the cell. Defaults are not affected.
+- **Mode B crumbs:** a flat underside on the plate's top can leave a sheet with no volume (VIS-35 on its upper level). Shells under 0.001 mm3 are dropped, so they do not count as bodies.
+- **Corner radius:** the rings' corners follow the plate's, so a large radius would bring the groove's inner wall inside s1 at D's corner, and at last open it into the cavity (jersey at 15 mm), while the plate's corner cut into the outer land. G8 says that cannot happen, so the radius gives way to the room between D and B, 6.1 mm at defaults, with an info message. Up to that radius every land holds, to within the chords of the corner polygon (2.4 microns at s1 = 2).
+- **Groove depth:** `grooveExtraDepth <= 0` is an added cross-parameter error. At 0 the ridge meets the groove's roof, holds the base off the shelf, and splits the one groove void in two.
+- **Feet under `minIsland`:** when the filter leaves no footprint, Mode A's pocket comes from the model's section at z=d alone, and Mode B's stubs come from the islands, or feet within planeTol above the plate would print loose. A model with neither a footprint nor a section at z=d gets no pocket and a warning.
+- **Groove series:** the taper fits first, so a groove pair cannot seat on a printer that needs a looser taper than it was built with. So the groove series is built at the taper clearance on `diag.html`, and the user downloads it again once the taper series has given that value. Its cG starts at `max(0.25, cT + 0.15)`.
+- **Float32 in STL files:** where two walls of a solid pass within a float step, a reader welds their edges into one with 4 faces (wolf's Mode A base has 2, VIS-35's Mode B base 3). The exporter moves the corners of just those edges one float step apart, so all 21 parts at defaults read back with 0 open, 0 non-manifold and 0 misoriented edges. The round trip checks all three.
+- **Mode B model overhang:** read off the final merged part, so a recess it filled has no ceiling left to count. Benchy's reported figure drops by 78 mm2 per copy and wolf's by 109 mm2, which are their sealed recesses.
+- **Clearance goldens:** minGap at draft 1 and draft 0 are golden numbers at 1%, since `>= t` alone would let the margin run out unnoticed.
+
 ### M4: Peaks, placement, openings, funnel
 
 Checks:

@@ -120,6 +120,34 @@ function checkIndexedDb(): Promise<boolean> {
   });
 }
 
+/** G12: built by the real builders in a fresh worker, as an export is. */
+function downloadFitTest(): Promise<void> {
+  const status = document.querySelector('#fit-status') as HTMLElement;
+  const taperClearance = (document.querySelector('#fit-taper') as HTMLInputElement).valueAsNumber;
+  if (!(taperClearance > 0)) {
+    status.textContent = 'Please enter a taper clearance above 0 mm.';
+    return Promise.resolve();
+  }
+  status.textContent = 'Building 8 pairs...';
+  const worker = new Worker(new URL('../workers/diag.worker.ts', import.meta.url), { type: 'module' });
+  return new Promise<void>((resolve) => {
+    const finish = (message: string): void => {
+      status.textContent = message;
+      worker.terminate();
+      resolve();
+    };
+    worker.onerror = (event) => finish(`Could not build the pieces: ${event.message}`);
+    worker.onmessage = (event) => {
+      const message = event.data;
+      if (message.t !== 'fit-test') return;
+      saveBytes('fit-test.zip', message.zip, 'application/zip');
+      finish(`Saved fit-test.zip, ${Math.round(message.zip.length / 1024)} KB. Its README.txt says how to read the result.`);
+    };
+    worker.postMessage({ t: 'fit-test', taperClearance });
+  });
+}
+
+document.querySelector('#dl-fit')?.addEventListener('click', () => void downloadFitTest());
 document.querySelector('#dl-stl')?.addEventListener('click', () => saveBytes('cfg-test.stl', stlBytes, 'model/stl'));
 document.querySelector('#dl-zip')?.addEventListener('click', () => saveBytes('cfg-test.zip', zipBytes, 'application/zip'));
 

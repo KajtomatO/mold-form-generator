@@ -82,7 +82,7 @@ function reversed(indices: Uint32Array): Uint32Array {
 }
 
 /** Generalised winding number: 1 inside a closed positive surface, 0 outside, robust at edges. */
-function windingNumber(mesh: Mesh, x: number, y: number, z: number): number {
+export function windingNumber(mesh: Mesh, x: number, y: number, z: number): number {
   const p = mesh.vertProperties;
   const stride = mesh.numProp;
   const tv = mesh.triVerts;
@@ -332,7 +332,9 @@ export function importSolid(arena: Arena, welded: WeldedMesh, audit: MeshAudit):
     diagnostics.push({ code: 'shell-inverted', severity: 'warning', message: `A separate body of ${fixed.volume().toFixed(0)} mm3 was inside out, so its faces were flipped.` });
   }
   if (flippedParts.length > 0) {
-    solid = arena.track(arena.api.Manifold.compose([...positives, ...flippedParts, ...voidParts]));
+    // compose drops negative shells, so voids stay out of this solid. Nothing needs them in it:
+    // voidVolume reports them, silicone works from the exterior, and Mode B fills them anyway.
+    solid = arena.track(arena.api.Manifold.compose([...positives, ...flippedParts]));
     const composed = solid.getMesh();
     result = { positions: composed.vertProperties, indices: composed.triVerts };
   }

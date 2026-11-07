@@ -1,5 +1,3 @@
-import { writeFile, readFile } from 'node:fs/promises';
-import { join as joinPath } from 'node:path';
 import type { ManifoldToplevel } from 'manifold-3d';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { candidateAtLevel, findBaseCandidates, upperLevel } from '../../src/core/base/candidates';
@@ -19,6 +17,7 @@ import { importSolid, type SolidReport } from '../../src/core/mesh/shells';
 import { meshBounds, type Bounds, type WeldedMesh } from '../../src/core/mesh/weld';
 import { defaultParams } from '../../src/core/params/defaults';
 import { withArena } from '../../src/core/solid/arena';
+import { recordSection } from '../fixtures/benchmarks';
 import { bruteDilate } from '../fixtures/bruteDilate';
 import { cornerRaster } from '../fixtures/cornerRaster';
 import { ANALYTIC_SHAPES, cupAir, cupSilicone, holedBlockSilicone, invertedCupInterior, invertedCupSilicone, mushroomSilicone, voxelSilicone } from '../fixtures/fieldOracles';
@@ -560,7 +559,7 @@ describe('timing', () => {
     expect(t1 - t0).toBeLessThan(1000);
   });
 
-  afterAll(async () => {
+  afterAll(() => {
     const tables = [
       ['One tile, in ms. Sealed air runs at the 0.25 mm analysis cell.', '', '| Model | Nodes | Raster | Dilate | Draft | Closing | Cavities | Sealed air | Total |', '|---|---|---|---|---|---|---|---|---|', ...stages],
       ['2 x 2 at auto spacing, in ms. Raster and dilate are per tile, so they are as above.', '', '| Model | Nodes | Composite | Draft | Closing | Cavities | Wall check | Total |', '|---|---|---|---|---|---|---|---|', ...grids],
@@ -569,9 +568,6 @@ describe('timing', () => {
     const text = tables.map((lines) => lines.join('\n')).join('\n\n');
     console.log(text);
     if (process.env.CFG_RECORD !== '1') return;
-    const path = joinPath(import.meta.dirname, '..', '..', 'docs', 'BENCHMARKS.md');
-    const heading = '## Field stages';
-    const before = (await readFile(path, 'utf8')).split(heading)[0].trimEnd();
-    await writeFile(path, `${before}\n\n${heading}\n\nNode on the server, plan defaults at cell 0.125 mm. Written by \`scripts/ci.sh --record\`.\n\n${text}\n`);
+    recordSection('Field stages', `Node on the server, plan defaults at cell 0.125 mm. Written by \`scripts/ci.sh --record\`.\n\n${text}`);
   });
 });

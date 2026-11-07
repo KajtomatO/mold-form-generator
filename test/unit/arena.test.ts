@@ -15,6 +15,23 @@ beforeEach(async () => {
   ledger = countHandles(api);
 });
 
+describe('a section from no contours', () => {
+  it('is empty and usable, where the glue on its own throws, and is freed with the rest', () => {
+    expect(() => api.CrossSection.ofPolygons([])).toThrow();
+    withArena(api, (arena) => {
+      const { track } = arena;
+      const empty = arena.crossSection([]);
+      expect(empty.isEmpty()).toBe(true);
+      expect(empty.area()).toBe(0);
+      expect(track(empty.offset(1)).isEmpty()).toBe(true);
+      expect(track(empty.extrude(1)).volume()).toBe(0);
+      const square = arena.crossSection([[[0, 0], [2, 0], [2, 2], [0, 2]]]);
+      expect(track(empty.add(square)).area()).toBe(4);
+    });
+    expect(ledger.live()).toEqual([]);
+  });
+});
+
 describe('the handle counter itself', () => {
   it('sees handles from statics, methods, arrays and the constructor, and real deletions', () => {
     const cube = api.Manifold.cube(10); // static

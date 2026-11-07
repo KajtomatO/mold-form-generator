@@ -166,3 +166,20 @@ export function planField(bounds: Bounds, settings: FieldSettings): FieldPlan {
   }
   return plan;
 }
+
+/**
+ * The plan of the export field, whatever cell a preview is running at. Anything placed on the tiles,
+ * and the rim around them, takes its pitch from here: a preview field can sit a cell per tile wider.
+ */
+export function exportPlan(bounds: Bounds, settings: FieldSettings): FieldPlan {
+  return planField(bounds, { ...settings, cell: settings.cellFinal });
+}
+
+/** The shift of each tile in mm, row by row. Pass the export plan. */
+export function tileOffsets(plan: FieldPlan): [number, number][] {
+  const offsets: [number, number][] = [];
+  for (let ty = 0; ty < plan.ny; ty++) {
+    for (let tx = 0; tx < plan.nx; tx++) offsets.push([tx * plan.pitchXmm, ty * plan.pitchYmm]);
+  }
+  return offsets;
+}

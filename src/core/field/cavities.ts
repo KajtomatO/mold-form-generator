@@ -145,3 +145,53 @@ export function tileWalls(field: Field, owners: Uint16Array): TileWalls {
   }
   return { minWall: best === Infinity ? null : best, merged };
 }
+
+export interface CavityInfo {
+  /** Under the surface the tool will have, so with the raise, in mm3. */
+  volume: number;
+  /** In mm2. */
+  area: number;
+  /** The highest node: x, y and the height there with the raise. */
+  peak: [number, number, number];
+}
+
+export interface CavityMap {
+  cavities: CavityInfo[];
+  /** Which of `cavities` holds a point, or -1 if none does. */
+  at(x: number, y: number): number;
+}
+
+/** Each connected cavity on its own, so a closed-volume list can name what it expects. */
+export function mapCavities(field: Field, raise: number): CavityMap {
+  const { nx, ny, cell, x0, y0, values } = field;
+  const labels = new Int32Array(values.length).fill(-1);
+  const { find } = cavityRuns(field, labels);
+  const indexOfRoot = new Map<number, number>();
+  const cavities: CavityInfo[] = [];
+  const cellArea = cell * cell;
+  for (let j = 0, n = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++, n++) {
+      if (labels[n] < 0) continue;
+      const root = find(labels[n]);
+      let index = indexOfRoot.get(root);
+      if (index === undefined) {
+        index = cavities.length;
+        indexOfRoot.set(root, index);
+        cavities.push({ volume: 0, area: 0, peak: [0, 0, -Infinity] });
+      }
+      labels[n] = index;
+      const cavity = cavities[index];
+      const h = values[n] + raise;
+      cavity.volume += h * cellArea;
+      cavity.area += cellArea;
+      if (h > cavity.peak[2]) cavity.peak = [x0 + i * cell, y0 + j * cell, h];
+    }
+  }
+  return {
+    cavities,
+    at(x, y) {
+      const i = Math.round((x - x0) / cell), j = Math.round((y - y0) / cell);
+      return i < 0 || j < 0 || i >= nx || j >= ny ? -1 : labels[i + j * nx];
+    },
+  };
+}

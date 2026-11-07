@@ -12,11 +12,18 @@ scripts/install.sh   # Node 24+ required; no root needed
 scripts/serve.sh     # then browse to http://<server-ip>:5173
 ```
 
+## Check your printer
+
+`http://<server-ip>:5173/diag.html` has a button that downloads fit-test pieces: small molds with the real joint, for finding the clearances that suit your printer and for a leak test. The README in the ZIP says how to read the result, and the page rebuilds the groove pairs at the taper clearance you find.
+
+Port 5173 serves the last build, so a server started before you updated has an old page without this button. Stop it and run `scripts/serve.sh` again, which rebuilds first.
+
 ## Test it
 
 ```sh
 scripts/ci.sh         # typecheck, unit tests, browser smoke tests
 scripts/ci.sh --full  # everything, on all example models
+scripts/ci.sh --full --record  # also rewrites docs/BENCHMARKS.md
 ```
 
 Browser tests run against the LAN address on purpose, because `127.0.0.1` counts as a secure context and would hide problems that only appear over plain http. Set `CFG_LAN_IP` if this machine's address is not `192.168.0.153`.

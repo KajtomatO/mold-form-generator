@@ -4,5 +4,5 @@
     "lib": ["ES2023"],
     "types": []
   },
-  "include": ["src/core"]
+  "include": ["src/core", "src/types"]
 }

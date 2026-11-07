@@ -1,4 +1,7 @@
+import { zipSync } from 'fflate';
 import { runBench } from '../core/bench/suite';
+import { defaultParams } from '../core/params/defaults';
+import { fitTestFiles } from '../core/parts/fitTest';
 import { withArena } from '../core/solid/arena';
 import { bootManifold } from './bootManifold';
 
@@ -25,6 +28,11 @@ function handle(event: MessageEvent): void {
   } else if (job.t === 'bench') {
     const results = runBench(api, () => performance.now());
     self.postMessage({ t: 'bench', results, heapBytes: heapBytes() });
+  } else if (job.t === 'fit-test') {
+    const params = defaultParams();
+    params.joint.taperClearance = job.taperClearance;
+    const zip = zipSync(fitTestFiles(api, params));
+    self.postMessage({ t: 'fit-test', zip }, { transfer: [zip.buffer] });
   }
 }
 

@@ -201,3 +201,33 @@ export const FIELD_GOLDEN: Record<ExampleId, FieldGolden> = {
   barrel: { silicone: 10.06, bare: 8.87, bareOffLattice: 8.82, planEstimate: 10.2, planBare: 9.0 },
   wolf: { silicone: 202.48, bare: 182.83, bareOffLattice: 182.03, planEstimate: 208, planBare: 186 },
 };
+
+/**
+ * M3 numbers, at plan defaults in one tile. Volumes in mm3 except silicone, which is ml: the voids of
+ * the Mode B union with the plate top at +0.01, without the groove. Measured on the real solids.
+ * Limits: 1% both ways on silicone, volumes and both gaps; TIN only upward, by 5%; box sizes 0.1%.
+ */
+export interface SolidGolden {
+  silicone: number;
+  cover: number;
+  glue: number;
+  merged: number;
+  /** minGap between model and cover, in mm. The check against t alone lets this fall to t unnoticed. */
+  gap: number;
+  /** The same with draft 0, where nothing widens the cavity past its margin. */
+  gapDraft0: number;
+  tinTriangles: number;
+  boxX: number;
+  boxY: number;
+  Zt: number;
+}
+
+export const SOLID_GOLDEN: Record<ExampleId, SolidGolden> = {
+  benchy: { silicone: 42.74, cover: 245127, glue: 17474, merged: 33150, gap: 3.2178, gapDraft0: 3.2097, tinTriangles: 21872, boxX: 88.925, boxY: 59.88, Zt: 56.416 },
+  goddess: { silicone: 117.62, cover: 534651, glue: 22432, merged: 111333, gap: 3.2231, gapDraft0: 3.1933, tinTriangles: 39408, boxX: 93.259, boxY: 71.886, Zt: 110.016 },
+  vis35: { silicone: 540.97, cover: 1263304, glue: 51155, merged: 295836, gap: 3.2232, gapDraft0: 3.2082, tinTriangles: 44554, boxX: 63.597, boxY: 230.59, Zt: 139.302 },
+  jersey: { silicone: 11.15, cover: 80885, glue: 10256, merged: 18367, gap: 3.2406, gapDraft0: 3.2406, tinTriangles: 6462, boxX: 77.746, boxY: 43.136, Zt: 29.085 },
+  x8: { silicone: 85.86, cover: 315919, glue: 55195, merged: 116058, gap: 3.2262, gapDraft0: 3.2262, tinTriangles: 60852, boxX: 143.746, boxY: 109.136, Zt: 29.085 },
+  barrel: { silicone: 10.05, cover: 75171, glue: 8077, merged: 15611, gap: 3.2189, gapDraft0: 3.2039, tinTriangles: 11538, boxX: 51.687, boxY: 51.688, Zt: 33.918 },
+  wolf: { silicone: 202.26, cover: 2436510, glue: 61824, merged: 319814, gap: 3.2104, gapDraft0: 3.1986, tinTriangles: 74904, boxX: 121.234, boxY: 142.435, Zt: 167.405 },
+};

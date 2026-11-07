@@ -103,11 +103,11 @@ export function buildFootprint(arena: Arena, oriented: WeldedMesh, candidate: Pi
     });
   }
   if (components.length === 0 && islands.length > 0) {
-    // A model on small feet only: glue mode would silently get a base with no pocket at all.
+    // A model on small feet only: the pocket no longer follows its real base, which the user should know.
     diagnostics.push({
       code: 'footprint-empty',
       severity: 'warning',
-      message: `Every part of this base is smaller than the ${minIsland} mm2 island limit, so the base would have no pocket; lower the limit to keep them.`,
+      message: `Every part of this base is smaller than the ${minIsland} mm2 island limit, so the pocket follows only the model's section at the pocket's depth; lower the limit to keep them.`,
     });
   }
   return {

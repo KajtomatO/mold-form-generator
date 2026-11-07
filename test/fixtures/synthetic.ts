@@ -242,6 +242,16 @@ export function plateOnLegs(foot: number): WeldedMesh {
   return join(box([0, 0, 2], [40, 40, 7]), ...corners.map(([x, y]) => box([x, y, 0], [x + foot, y + foot, 2.5])));
 }
 
+/** A 20 x 10 block on two feet 2 mm tall, each `foot` wide: at the default size, under the island limit. */
+export function blockOnFeet(api: ManifoldToplevel, foot: [number, number] = [2, 1.5]): WeldedMesh {
+  return meshOf((keep) => {
+    const block = cuboid(api, keep, [0, 0, 2], [20, 10, 10]);
+    const left = cuboid(api, keep, [2, 4, 0], [2 + foot[0], 4 + foot[1], 3]);
+    const right = cuboid(api, keep, [16, 4, 0], [16 + foot[0], 4 + foot[1], 3]);
+    return keep(keep(block.add(left)).add(right));
+  });
+}
+
 /** A sphere with an 8 x 8 pad under it: one real base among many almost flat directions. */
 export function sphereOnPad(api: ManifoldToplevel, radius: number, segments: number): WeldedMesh {
   return meshOf((keep) => keep(keep(api.Manifold.sphere(radius, segments)).add(cuboid(api, keep, [-4, -4, -radius - 1], [4, 4, -radius + 1]))));
@@ -450,4 +460,16 @@ export function nextFloat(value: number, ulps = 1): number {
   const f = new Float32Array([value]);
   new Uint32Array(f.buffer)[0] += ulps;
   return f[0];
+}
+
+/**
+ * An L seen from above, with its bounding box centred on the origin: a tall arm down the -x side and
+ * a low arm along the -y side. No mirror of it lands on itself, so a mirrored cavity cannot pass.
+ */
+export function lShape(api: ManifoldToplevel): WeldedMesh {
+  return meshOf((keep) => {
+    const low = cuboid(api, keep, [-20, -20, 0], [20, -10, 15]);
+    const tall = cuboid(api, keep, [-20, -20, 0], [-10, 20, 25]);
+    return keep(low.add(tall));
+  });
 }

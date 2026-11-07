@@ -43,6 +43,9 @@ export class Arena {
   }
 
   crossSection(contours: Polygons, fillRule?: FillRule): CrossSection {
+    // The glue reads contours[0] unchecked, and no contours is a real case: a model standing only on
+    // feet under the island limit, or an open mesh with no wall at the height asked for.
+    if (contours.length === 0) return this.track(this.api.CrossSection.compose([]));
     return this.track(this.withoutGlueLeaks(() => this.api.CrossSection.ofPolygons(contours, fillRule)));
   }
 
@@ -100,4 +103,14 @@ export function withArena<R>(api: ManifoldToplevel, build: (arena: Arena) => R):
   } finally {
     arena.dispose();
   }
+}
+
+/**
+ * Manifold defers booleans until something reads the result, so this is where one really runs. A
+ * status other than NoError would otherwise show up much later as a wrong part.
+ */
+export function checked<T extends { status(): string }>(solid: T, what: string): T {
+  const status = solid.status();
+  if (status !== 'NoError') throw new Error(`${what} is not a closed solid: ${status}.`);
+  return solid;
 }

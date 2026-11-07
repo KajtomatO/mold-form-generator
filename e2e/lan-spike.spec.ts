@@ -129,9 +129,9 @@ test('browser-to-Node speed ratio', async ({ page }, info) => {
       ...rows.map((r) => `| ${r.name} | ${r.chromium} | ${r.node} | ${r.ratio} |`),
       '',
     ];
-    // The field tables come from the unit tests in the same --record run, so they stay.
+    // The field and solid tables come from the unit tests in the same --record run, so they stay.
     const existing = await readFile('docs/BENCHMARKS.md', 'utf8');
-    const fieldTables = existing.indexOf('## Field stages');
-    await writeFile('docs/BENCHMARKS.md', lines.join('\n') + (fieldTables < 0 ? '' : `\n${existing.slice(fieldTables)}`));
+    const sections = existing.search(/^## /m);
+    await writeFile('docs/BENCHMARKS.md', lines.join('\n') + (sections < 0 ? '' : `\n${existing.slice(sections)}`));
   }
 });
