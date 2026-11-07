@@ -46,10 +46,19 @@ describe('source rules', () => {
     }
   });
 
-  it('creates Manifolds only through the arena', () => {
+  it('creates Manifolds and CrossSections from meshes and polygons only in the arena', () => {
+    // Catches `new Manifold(`, `new api.Manifold(` and the static forms that do the same job, plus
+    // toPolygons, whose leak only the arena's own call plugs.
+    const direct = /new\s+[\w.]*\b(Manifold|CrossSection)\s*\(|\.(ofMesh|ofPolygons|toPolygons)\s*\(/;
     for (const file of all) {
       if (file.path === 'src/core/solid/arena.ts') continue;
-      expect(file.text.includes('new Manifold('), `${file.path} calls new Manifold`).toBe(false);
+      expect(direct.test(file.text), `${file.path} builds a handle outside the arena`).toBe(false);
+    }
+  });
+
+  it('has no reflection or scale anywhere in core, so transforms stay rigid', () => {
+    for (const file of all.filter((f) => f.path.startsWith('src/core/'))) {
+      expect(/\.(mirror|scale)\s*\(/.test(file.text), `${file.path} mirrors or scales`).toBe(false);
     }
   });
 

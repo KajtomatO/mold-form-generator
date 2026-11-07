@@ -1,0 +1,223 @@
+import type { Diagnostic } from '../report/diagnostics';
+
+export type StlErrorCode = 'not-stl' | 'non-finite' | 'truncated' | 'empty' | 'bad-facet';
+
+/** A file the app cannot use. The message is shown inline to the user. */
+export class StlError extends Error {
+  constructor(
+    readonly code: StlErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'StlError';
+  }
+}
+
+export interface ParsedStl {
+  format: 'binary' | 'ascii';
+  /** Triangle soup, 9 floats per triangle, with collapsed triangles already removed. */
+  positions: Float32Array;
+  triangleCount: number;
+  /** Triangles in the file, before collapsed ones were dropped. */
+  rawTriangleCount: number;
+  degenerateCount: number;
+  diagnostics: Diagnostic[];
+}
+
+// Text read as binary floats is finite but astronomically large, so the finite check alone
+// would accept a mislabelled file. No printable model comes near 10 km.
+const MAX_COORDINATE = 1e7;
+
+function checkCoordinate(value: number): void {
+  if (Math.abs(value) <= MAX_COORDINATE) return;
+  if (!Number.isFinite(value)) throw new StlError('non-finite', 'The file has a vertex coordinate that is not a finite number.');
+  throw new StlError('not-stl', 'This does not look like an STL file: a vertex coordinate is impossibly large.');
+}
+
+function readBinary(bytes: Uint8Array, count: number): Float32Array {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const positions = new Float32Array(count * 9);
+  let w = 0;
+  for (let t = 0; t < count; t++) {
+    // Each record is a 12-byte normal, 36 bytes of corners and a 2-byte attribute.
+    let o = 84 + 50 * t + 12;
+    for (let i = 0; i < 9; i++, o += 4) {
+      const value = view.getFloat32(o, true);
+      checkCoordinate(value);
+      positions[w++] = value;
+    }
+  }
+  return positions;
+}
+
+function isSpace(byte: number): boolean {
+  return byte === 32 || (byte >= 9 && byte <= 13);
+}
+
+const word = (text: string): number[] => Array.from(text, (c) => c.charCodeAt(0));
+const SOLID = word('solid');
+const ENDSOLID = word('endsolid');
+const VERTEX = word('vertex');
+const FACET = word('facet');
+const NORMAL = word('normal');
+const ENDLOOP = word('endloop');
+const ENDFACET = word('endfacet');
+
+/** `| 32` folds upper case, because some exporters write VERTEX. */
+function isWord(bytes: Uint8Array, start: number, end: number, word: number[]): boolean {
+  return end - start === word.length && word.every((c, k) => (bytes[start + k] | 32) === c);
+}
+
+/** Where the text starts, past a byte order mark and blank space, which some exporters leave. */
+function textStart(bytes: Uint8Array): number {
+  let i = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  while (i < bytes.length && isSpace(bytes[i])) i++;
+  return i;
+}
+
+function startsWithSolid(bytes: Uint8Array): boolean {
+  const start = textStart(bytes);
+  return bytes.length >= start + SOLID.length && SOLID.every((c, i) => (bytes[start + i] | 32) === c);
+}
+
+/** Returns null when the file holds no vertex at all, so it was never really ASCII. */
+function readAscii(bytes: Uint8Array): Float32Array | null {
+  let positions = new Float32Array(9 * 1024);
+  let w = 0;
+  const end = bytes.length;
+
+  // A solid's name runs to the end of the "solid <name>" and "endsolid <name>" lines, and it may
+  // contain any word, even "vertex". A file written on one line carries on with "facet normal".
+  let i = textStart(bytes);
+  const skipToken = (): void => {
+    while (i < end && !isSpace(bytes[i])) i++;
+  };
+  const skipBlanks = (): void => {
+    while (i < end && isSpace(bytes[i]) && bytes[i] !== 10 && bytes[i] !== 13) i++;
+  };
+  const skipName = (): void => {
+    while (i < end && bytes[i] !== 10 && bytes[i] !== 13) {
+      const start = i;
+      skipToken();
+      const after = i;
+      skipBlanks();
+      const next = i;
+      skipToken();
+      if (isWord(bytes, start, after, FACET) && isWord(bytes, next, i, NORMAL)) {
+        i = start;
+        return;
+      }
+      i = next;
+    }
+  };
+  skipToken();
+  skipName();
+
+  // Vertices since the last facet boundary. A boundary is where a wrong count first shows, and
+  // grouping by threes would otherwise turn a quad into wrong triangles without a word.
+  let cornerCount = 0;
+  const checkFacet = (): void => {
+    if (cornerCount !== 0 && cornerCount !== 3) throw new StlError('bad-facet', `The ASCII STL has a facet with ${cornerCount} vertices, and only triangles can be read.`);
+    cornerCount = 0;
+  };
+
+  while (i < end) {
+    while (i < end && isSpace(bytes[i])) i++;
+    const start = i;
+    while (i < end && !isSpace(bytes[i])) i++;
+    if (isWord(bytes, start, i, SOLID) || isWord(bytes, start, i, ENDSOLID)) {
+      skipName();
+      continue;
+    }
+    if (isWord(bytes, start, i, FACET) || isWord(bytes, start, i, ENDLOOP) || isWord(bytes, start, i, ENDFACET)) {
+      checkFacet();
+      continue;
+    }
+    if (!isWord(bytes, start, i, VERTEX)) continue;
+
+    cornerCount++;
+    if (w + 3 > positions.length) {
+      const grown = new Float32Array(positions.length * 2);
+      grown.set(positions);
+      positions = grown;
+    }
+    for (let axis = 0; axis < 3; axis++) {
+      while (i < end && isSpace(bytes[i])) i++;
+      const from = i;
+      while (i < end && !isSpace(bytes[i])) i++;
+      // A number never needs 64 characters, and the spread would overflow on a huge junk token.
+      const token = String.fromCharCode(...bytes.subarray(from, Math.min(i, from + 64)));
+      const value = token === '' ? NaN : Number(token);
+      if (Number.isNaN(value)) throw new StlError('non-finite', `The ASCII STL has a vertex value that is not a number: "${token.slice(0, 20)}".`);
+      checkCoordinate(value);
+      positions[w++] = value;
+    }
+  }
+  if (w === 0) return null;
+  if (w % 9 !== 0) throw new StlError('truncated', 'The ASCII STL ends in the middle of a triangle.');
+  return positions.subarray(0, w);
+}
+
+/**
+ * Drops triangles with two identical corners, in place. Collinear triangles with three distinct
+ * corners also have zero area but must stay, because they fill T-junctions: Benchy has 552 of
+ * the first kind and 11 of the second, and dropping those 11 as well opens 29 edges.
+ */
+function dropCollapsed(soup: Float32Array): number {
+  let kept = 0;
+  const count = soup.length / 9;
+  for (let t = 0; t < count; t++) {
+    const i = t * 9;
+    const ax = soup[i], ay = soup[i + 1], az = soup[i + 2];
+    const bx = soup[i + 3], by = soup[i + 4], bz = soup[i + 5];
+    const cx = soup[i + 6], cy = soup[i + 7], cz = soup[i + 8];
+    const collapsed =
+      (ax === bx && ay === by && az === bz) || (ax === cx && ay === cy && az === cz) || (bx === cx && by === cy && bz === cz);
+    if (collapsed) continue;
+    if (kept !== t) soup.copyWithin(kept * 9, i, i + 9);
+    kept++;
+  }
+  return kept;
+}
+
+function finish(format: ParsedStl['format'], soup: Float32Array, diagnostics: Diagnostic[]): ParsedStl {
+  const rawTriangleCount = soup.length / 9;
+  const triangleCount = dropCollapsed(soup);
+  if (triangleCount === 0) throw new StlError('empty', 'The STL file contains no usable triangles.');
+  return {
+    format,
+    positions: soup.subarray(0, triangleCount * 9),
+    triangleCount,
+    rawTriangleCount,
+    degenerateCount: rawTriangleCount - triangleCount,
+    diagnostics,
+  };
+}
+
+/**
+ * Size decides first because a binary STL may legally start with "solid", as 3dbenchy.stl does.
+ * Only positions are kept: stored normals are often wrong and winding is checked later anyway.
+ */
+export function parseStl(bytes: Uint8Array): ParsedStl {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const declared = bytes.length >= 84 ? view.getUint32(80, true) : -1;
+  if (declared >= 0 && bytes.length === 84 + 50 * declared) return finish('binary', readBinary(bytes, declared), []);
+
+  if (startsWithSolid(bytes)) {
+    const ascii = readAscii(bytes);
+    if (ascii) return finish('ascii', ascii, []);
+  }
+
+  if (bytes.length < 84) throw new StlError('not-stl', 'This does not look like an STL file: it is too small.');
+  const fits = Math.floor((bytes.length - 84) / 50);
+  // A header count of 0 with records after it is a writer that never filled the count in.
+  const count = declared === 0 ? fits : Math.min(declared, fits);
+  if (count === 0) throw new StlError('empty', 'The STL file contains no usable triangles.');
+  return finish('binary', readBinary(bytes, count), [
+    {
+      code: 'stl-count-mismatch',
+      severity: 'warning',
+      message: `The file header says ${declared} triangles but its size fits ${fits}, so ${count} were read and the file may be damaged.`,
+    },
+  ]);
+}

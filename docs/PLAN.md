@@ -198,22 +198,22 @@ Hard cross-parameter rules, each giving an inline error and covered by a fuzz te
 ### G1. Import
 
 1. Binary if `size == 84+50n`, else ASCII if it starts with `solid`, else binary with a clamped count and a warning. `3dbenchy.stl` is binary despite a `solid` header; the barrel is the only ASCII example. Own byte parser, positions only.
-2. Reject non-finite values. Drop zero-area triangles (Benchy loses 552).
+2. Reject non-finite values. Drop triangles with two identical corners (Benchy loses 552). Keep collinear triangles with three distinct corners: Benchy has 11, and dropping them opens 29 edges so Manifold refuses the mesh.
 3. Exact weld, then compact the vertex buffer. Compacting is required before simplify.
 4. Edge audit: open, non-manifold, misoriented.
-5. `new Manifold(mesh)`; on `NotManifold`, `Mesh.merge()` and retry. All 7 examples pass here.
-6. Last resort is soup mode: cover and Mode A still work from the raster, Mode B is disabled, and a warning covers missing top surfaces. The soup-mode pocket is the footprint mask plus a direct triangle contour at z=d.
+5. `new Manifold(mesh)`; on `NotManifold`, `Mesh.merge()` at a tolerance of 0.002 mm and retry. The library's default tolerance only closes seams one float step wide. All 7 examples pass on the first try.
+6. Last resort is soup mode: cover and Mode A still work from the raster, Mode B is disabled, and a warning covers missing top surfaces. The soup-mode pocket is the footprint mask plus a direct triangle contour at z=d. An inverted open mesh is flipped by signed volume, base detection tries both sides of a face, a flat-rimmed hole can be offered as the base, and connected pieces are reported as unverified bodies. M4 must filter out detached fragments when placing pours.
 7. `decompose()` before any simplify. Negative total volume: flip. Negative shell inside a positive one: void, recorded (barrel, +7,489 and -3,432 mm3). Sum of shells versus union detects overlaps. Negative genus alone is not an error (x8 is -7).
 8. Above 2M triangles, simplify for the Manifold path only, with the measured error shown as a warning in Mode B. Above 300k, use `simplifySloppy` for the display proxy. Mode A's `model_oriented.stl` always comes from the original soup.
 
 ### G2. Model-base detection
 
 1. Area-weighted normal histogram at 1.5 degree bins, top 8 candidates.
-2. Support plane is the extreme vertex along the outward normal. Non-support ledges are rejected, except near-support levels within the slider tolerance.
+2. Support plane is the extreme vertex along the outward normal. Non-support ledges are rejected, except near-support levels within the slider tolerance (1 mm, its maximum). A deeper ledge is kept when what lies beyond it is stray, at most 2% of its area, and then gets the below-plane warning and trim. Real steps start at 13.6% on the examples.
 3. Membership by vertex distance to the plane, not by normal. Score by area projected onto the plane. This handles disconnected faces such as legs.
 4. **User confirmation is the default**, because a big flat top is also a support plane. Ranked candidates are listed, and click-to-pick highlights all coplanar triangles.
-5. Small islands under `minIsland` are dropped and listed in Diagnostics with their areas (wolf has 9 components, 3 above the threshold).
-6. Two-level bases: VIS-35 has a 361 mm2 pad at z=0 and a 764 mm2 face at z=0.41. Selecting z=0 warns that a film of silicone will enter a 0.41 mm gap. One click on "Use upper level" moves the plane to z=0.41 and trims the pad with `trimByPlane` in both modes. Benchy gets the same warning at z=0.30.
+5. Small islands under `minIsland` are dropped and listed in Diagnostics with their areas (wolf has 9 components, 3 above the threshold). `minIsland` filters the footprint only, and detection uses a fixed 2 mm2 floor. If the filter leaves no footprint at all, a warning says so.
+6. Two-level bases: VIS-35 has a 361 mm2 pad at z=0 and a 764 mm2 face at z=0.41. Selecting z=0 warns that a film of silicone will enter a 0.41 mm gap. One click on "Use upper level" moves the plane to z=0.41 and trims the pad with `trimByPlane` in both modes. A level that lies entirely inside enclosed holes of the footprint is a recess that silicone cannot reach, so it gets an info note and no trim offer: Benchy at z=0.30 (the lettering, 78.1 mm2) and wolf at 0.917 mm above its base (108.5 mm2).
 7. Vertices below the plane beyond tolerance cause a warning. The raster clips them. Mode B and `model_oriented.stl` trim them. Soup mode shows an inline error asking for another plane.
 8. Only rotations and translations, with a test that every transform has determinant +1.
 

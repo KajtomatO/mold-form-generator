@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { unzipSync } from 'fflate';
 import { expect, test, type Page } from '@playwright/test';
 import Module from 'manifold-3d';
-import { runBench, type BenchManifold, type BenchResult } from '../src/core/bench/suite';
+import { runBench, type BenchResult } from '../src/core/bench/suite';
 
 interface Diag {
   secureContext: boolean;
@@ -101,7 +101,7 @@ test('browser-to-Node speed ratio', async ({ page }, info) => {
 
   const api = await Module();
   api.setup();
-  const node = runBench(api.Manifold as unknown as BenchManifold, () => performance.now());
+  const node = runBench(api, () => performance.now());
 
   const rows = browser.results.map((b, i) => ({
     name: b.name,

@@ -1,17 +1,11 @@
+import type { ManifoldToplevel } from 'manifold-3d';
+import { withArena } from '../solid/arena';
+
 /**
  * Fixed benchmark run in both Node and a browser worker, so the ratio between them
  * can correct server timings. It covers the two kinds of work the app does: typed-array
  * loops in plain JS and booleans in WASM.
  */
-export interface BenchManifold {
-  sphere(radius: number, circularSegments: number): BenchSolid;
-}
-export interface BenchSolid {
-  translate(x: number, y: number, z: number): BenchSolid;
-  subtract(other: BenchSolid): BenchSolid;
-  numTri(): number;
-  delete(): void;
-}
 export interface BenchResult {
   name: string;
   ms: number;
@@ -58,7 +52,7 @@ function median(values: number[]): number {
   return sorted[sorted.length >> 1];
 }
 
-export function runBench(manifold: BenchManifold, now: () => number, repeats = 3): BenchResult[] {
+export function runBench(api: ManifoldToplevel, now: () => number, repeats = 3): BenchResult[] {
   const results: BenchResult[] = [];
   const measure = (name: string, fn: () => void): void => {
     const times: number[] = [];
@@ -75,15 +69,11 @@ export function runBench(manifold: BenchManifold, now: () => number, repeats = 3
   });
   for (const segments of [128, 256, 512]) {
     measure(`wasm: sphere minus sphere, ${segments} segments`, () => {
-      const a = manifold.sphere(30, segments);
-      const moved = manifold.sphere(30, segments);
-      const b = moved.translate(20, 5, 3);
-      const d = a.subtract(b);
-      d.numTri();
-      d.delete();
-      b.delete();
-      moved.delete();
-      a.delete();
+      withArena(api, ({ track }) => {
+        const a = track(api.Manifold.sphere(30, segments));
+        const b = track(track(api.Manifold.sphere(30, segments)).translate(20, 5, 3));
+        track(a.subtract(b)).numTri();
+      });
     });
   }
   return results;
