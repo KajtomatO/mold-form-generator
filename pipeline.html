@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Casting Form Generator: pipeline</title>
+    <link rel="icon" href="data:," />
+    <style>
+      html, body { margin: 0; height: 100%; background: #101418; color: #e6ebf0; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+      header { height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: #171c22; border-bottom: 1px solid #303a45; box-sizing: border-box; }
+      header label { color: #93a1b0; }
+      #badge { display: none; background: #2a2316; color: #f59e0b; border-radius: 6px; padding: 2px 8px; }
+      #badge.on { display: inline-block; }
+      #error { color: #f59e0b; }
+      #status { color: #93a1b0; margin-left: auto; font-variant-numeric: tabular-nums; }
+      #view { display: block; width: 100%; height: calc(100% - 48px); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <label>STL <input id="file" type="file" accept=".stl" /></label>
+      <span id="model"></span>
+      <span id="badge">out of date</span>
+      <span id="error"></span>
+      <span id="status"></span>
+    </header>
+    <canvas id="view"></canvas>
+    <script type="module" src="/src/diag/pipelinePage.ts"></script>
+  </body>
+</html>

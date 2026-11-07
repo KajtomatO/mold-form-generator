@@ -10,6 +10,12 @@ interface PolygonVectors {
   Vector2_vec2: { prototype: { get(index: number): Handle & { isDeleted(): boolean } } };
 }
 
+/** The raw calls behind CrossSection.extrude and revolve, which the typings leave out. */
+interface SweepGlue {
+  _Extrude(polygons: Handle, height: number, nDivisions: number, twistDegrees: number, scaleTop: { x: number; y: number }): Manifold;
+  _Revolve(polygons: Handle, circularSegments: number, revolveDegrees: number): Manifold;
+}
+
 /**
  * Owns the WASM handles of one build, because the JS garbage collector never frees them.
  * Every Manifold and CrossSection goes through track(), or is created here.
@@ -19,7 +25,9 @@ interface PolygonVectors {
  * disposable worker absorbs, and heap.test.ts holds that route to a limit of its own.
  *
  * Its polygon glue (3.5.4) also loses one vector per contour, both ways, and the footprint makes
- * one contour per triangle. Those are in reach, so withoutGlueLeaks frees them.
+ * one contour per triangle. Those are in reach, so withoutGlueLeaks frees them. Its extrude and
+ * revolve lose the whole outline they pass on, about 100 KB per Benchy pocket, so those go through
+ * here as well.
  */
 export class Arena {
   private readonly owned = new Set<Handle>();
@@ -52,6 +60,25 @@ export class Arena {
   /** section.toPolygons(), without the glue's leak. */
   polygons(section: CrossSection): SimplePolygon[] {
     return this.withoutGlueLeaks(() => section.toPolygons());
+  }
+
+  /** section.extrude(height), without the glue's leak: it never frees the polygons it hands to _Extrude. */
+  extrude(section: CrossSection, height: number): Manifold {
+    return this.sweep(section, (glue, polygons) => glue._Extrude(polygons, height, 0, 0, { x: 1, y: 1 }));
+  }
+
+  /** section.revolve(segments), without the same leak. */
+  revolve(section: CrossSection, circularSegments: number): Manifold {
+    return this.sweep(section, (glue, polygons) => glue._Revolve(polygons, circularSegments, 360));
+  }
+
+  private sweep(section: CrossSection, call: (glue: SweepGlue, polygons: Handle) => Manifold): Manifold {
+    const polygons = (section as unknown as { _ToPolygons(): Handle })._ToPolygons();
+    try {
+      return this.track(call(this.api as unknown as SweepGlue, polygons));
+    } finally {
+      polygons.delete();
+    }
   }
 
   /**

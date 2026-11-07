@@ -48,8 +48,8 @@ describe('source rules', () => {
 
   it('creates Manifolds and CrossSections from meshes and polygons only in the arena', () => {
     // Catches `new Manifold(`, `new api.Manifold(` and the static forms that do the same job, plus
-    // toPolygons, whose leak only the arena's own call plugs.
-    const direct = /new\s+[\w.]*\b(Manifold|CrossSection)\s*\(|\.(ofMesh|ofPolygons|toPolygons)\s*\(/;
+    // toPolygons, extrude and revolve, whose leaks only the arena's own calls plug.
+    const direct = /new\s+[\w.]*\b(Manifold|CrossSection)\s*\(|\.(ofMesh|ofPolygons|toPolygons)\s*\(|(?<!arena)\.(extrude|revolve)\s*\(/;
     for (const file of all) {
       if (file.path === 'src/core/solid/arena.ts') continue;
       expect(direct.test(file.text), `${file.path} builds a handle outside the arena`).toBe(false);

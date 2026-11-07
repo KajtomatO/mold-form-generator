@@ -18,6 +18,10 @@ scripts/serve.sh     # then browse to http://<server-ip>:5173
 
 Port 5173 serves the last build, so a server started before you updated has an old page without this button. Stop it and run `scripts/serve.sh` again, which rebuilds first.
 
+## See the pipeline
+
+`http://<server-ip>:5173/pipeline.html` is a bare page for the worker pipeline, until the app itself arrives: pick an STL and it builds the preview cover and base in the browser and draws them. The status line shows how long each preview tier took.
+
 ## Test it
 
 ```sh

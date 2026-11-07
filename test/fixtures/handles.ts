@@ -68,6 +68,15 @@ export function countHandles(api: ManifoldToplevel): HandleLedger {
   }
 
   const module = api as unknown as Record<string, unknown>;
+  // The arena calls these raw sweeps itself, to free the outline the public extrude and revolve lose.
+  for (const name of ['_Extrude', '_Revolve']) {
+    const original = module[name] as (...args: unknown[]) => unknown;
+    module[name] = (...args: unknown[]): unknown => {
+      const result = original(...args);
+      register(result);
+      return result;
+    };
+  }
   for (const name of ['Manifold', 'CrossSection']) {
     module[name] = new Proxy(module[name] as object, {
       construct(target, args, newTarget) {

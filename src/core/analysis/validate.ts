@@ -239,6 +239,16 @@ function clearanceOf(space: PlacementSpace): Float32Array {
   return space.clearance;
 }
 
+/**
+ * Builds the distance map and both fit boxes now, as the first snap would. field.worker calls this and
+ * hands the space over ready, so a drop on the main thread never pays for the map (up to 44 ms on wolf).
+ */
+export function primeSpace(space: PlacementSpace): void {
+  clearanceOf(space);
+  fitBox(space, 'pour');
+  fitBox(space, 'vent');
+}
+
 /** How far a node must be from too little ceiling for a disc there to stand a chance, given the rounding to it. */
 function certainReach(space: PlacementSpace, kind: OpeningKind): number {
   return boreRadius(space.sizes, kind) + (space.field.cell * Math.SQRT2) / 2;

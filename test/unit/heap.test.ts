@@ -88,6 +88,28 @@ it('negative control: keeping one solid per run shows up clearly, in used memory
   expect(capacity()).toBeGreaterThan(before + 20 * MB);
 });
 
+it('the pocket and the funnel, extruded and revolved through the arena, show a flat heap', async () => {
+  const measured = await loadMeasuredManifold();
+  const { api } = measured;
+  const grown = growth(measured, (arena) => {
+    const outline = arena.track(build(arena).offset(0.2, 'Round', undefined, 32));
+    arena.extrude(outline, 1.2);
+    arena.revolve(arena.crossSection([[[1, 0], [5, 0], [5, 3], [1, 3]]]), 48);
+  });
+  console.log(`sweeps: ${(grown / KB).toFixed(0)} KB growth over ${RUNS} runs`);
+  expect(grown).toBeLessThan(FLAT_LIMIT);
+});
+
+it('negative control: the library\'s own extrude loses the outline it passes on', async () => {
+  const measured = await loadMeasuredManifold();
+  const grown = growth(measured, (arena) => {
+    const outline = arena.track(build(arena).offset(0.2, 'Round', undefined, 32));
+    arena.track(outline.extrude(1.2));
+  });
+  console.log(`extrude control: ${(grown / KB).toFixed(0)} KB growth over ${RUNS} runs`);
+  expect(grown).toBeGreaterThan(FLAT_LIMIT);
+});
+
 it('negative control: the footprint leaks without the arena plugging the polygon glue', async () => {
   const measured = await loadMeasuredManifold();
   const { api } = measured;

@@ -121,3 +121,43 @@ A drop of a dragged opening on the main thread. The first drop that snaps on a n
 | barrel | vent | 75625 | 3.9 | 0.8 |
 | wolf | pour | 898317 | 43.4 | 10.7 |
 | wolf | vent | 898317 | 43.8 | 9.1 |
+
+## Pipeline
+
+Written by `scripts/ci.sh --full --record`, from the production build in Chromium and from Firefox, on the server.
+
+In ms, from the job's dispatch on main to its result on main, after three rebuilds by t and three drags of the pour, each of three steps and a drop, with the 400 ms debounce frozen to 0. T1 is a change of t until the field arrives, and T2 the rebuild of cover and base after it. A drag's first step cuts every other opening into the cover, which solid.worker then holds, and the dragged one into that; each step after it cuts only the dragged one. T2b cut is the full cut after the drop, which makes the end the same as a fresh build. Each is the median of three, and T2b drag the median of six.
+
+Budgets are twice what Node takes, times the M0 ratio of 1.0, plus 50 ms for the job itself. T1, T2 and the cut come from the Node tables above: Field, then TIN to Mode A plus "Cut, preview", then "Cut, preview" alone, which is the first step's budget too. A drag step after the first has no row there, so its budget comes from the Node rows below, as does a grid's T2, which the tables do not have at the preview cell. Those rows are fixed: the check reads them as they were recorded, and only `--record` measures them again, by the same steps on the same code in Node. Node's worker shares main's thread, so its field reaches main only after placement and its T1 is no budget; a grid's T1 budget is the plan's 150 ms. A single model is also held to the plan's own targets, 150 ms for T1, 2000 for T2 and 200 for each T2b, as upper limits apart from its budget. The grids take longer than the plan's 2 s for T2, and x8 3 x 3 longer than its 200 ms for a drag step, as recorded under M5 in `docs/PLAN.md`, so they are held to their budgets alone.
+
+The page does not draw while this runs: it is opened with `draw=0`, which leaves out its 3D view. With a display, Firefox on the server has software WebGL on its main thread, and drawing the parts there holds the field's message back by a frame: Benchy's T1 goes from about 6 to 72 ms. These Firefox rows were taken headless, without WebGL at all. Chromium draws in its GPU process, and the user's Firefox on Windows draws on the GPU.
+
+| Browser | Model | T1 ms | T2 ms | T2b first drag ms | T2b drag ms | T2b cut ms | T1 budget | T2 budget | T2b first drag budget | T2b drag budget | T2b cut budget |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Chromium | barrel | 1.4 | 40.3 | 13.2 | 7.2 | 11.5 | 58 | 134 | 73 | 69 | 73 |
+| Chromium | benchy 2 x 3 | 11.9 | 1922.7 | 139.7 | 68.4 | 105.4 | 150 | 3974 | 279 | 203 | 279 |
+| Chromium | benchy | 7.5 | 305.3 | 22.2 | 10.3 | 18.3 | 113 | 660 | 88 | 76 | 88 |
+| Chromium | goddess | 5.6 | 82.4 | 31.6 | 14 | 24.3 | 82 | 219 | 99 | 84 | 99 |
+| Chromium | jersey | 3 | 31.4 | 12.9 | 7.3 | 11.2 | 56 | 109 | 72 | 70 | 72 |
+| Chromium | vis35 | 8.4 | 95.3 | 31 | 15 | 22.7 | 99 | 254 | 96 | 86 | 96 |
+| Chromium | wolf | 9.9 | 262.1 | 39.1 | 19.6 | 26.3 | 89 | 599 | 103 | 95 | 103 |
+| Chromium | x8 3 x 3 | 49.3 | 2229.7 | 1057.8 | 214.2 | 902.5 | 150 | 4963 | 1980 | 507 | 1980 |
+| Chromium | x8 | 7.8 | 220.8 | 106.6 | 22.9 | 90.5 | 94 | 492 | 242 | 102 | 242 |
+| Firefox | barrel | 2 | 45 | 14 | 7.5 | 13 | 58 | 134 | 73 | 69 | 73 |
+| Firefox | benchy 2 x 3 | 16 | 2065 | 150 | 73 | 114 | 150 | 3974 | 279 | 203 | 279 |
+| Firefox | benchy | 5 | 330 | 24 | 11 | 20 | 113 | 660 | 88 | 76 | 88 |
+| Firefox | goddess | 5 | 91 | 34 | 14.5 | 26 | 82 | 219 | 99 | 84 | 99 |
+| Firefox | jersey | 2 | 34 | 13 | 8 | 12 | 56 | 109 | 72 | 70 | 72 |
+| Firefox | vis35 | 10 | 121 | 34 | 16 | 25 | 99 | 254 | 96 | 86 | 96 |
+| Firefox | wolf | 11 | 295 | 42 | 21 | 29 | 89 | 599 | 103 | 95 | 103 |
+| Firefox | x8 3 x 3 | 57 | 2527 | 1146 | 232 | 976 | 150 | 4963 | 1980 | 507 | 1980 |
+| Firefox | x8 | 9 | 247 | 115 | 25 | 97 | 94 | 492 | 242 | 102 | 242 |
+| Node | barrel | 7 | 45.4 | 16 | 9.6 | 14.1 | | | | | |
+| Node | benchy 2 x 3 | 69.4 | 1962.2 | 153.9 | 76.4 | 115.6 | | | | | |
+| Node | benchy | 42.7 | 312.4 | 25.7 | 12.9 | 21.4 | | | | | |
+| Node | goddess | 18.1 | 93.3 | 35.9 | 16.9 | 27.6 | | | | | |
+| Node | jersey | 5.7 | 34.8 | 15.6 | 9.9 | 13.7 | | | | | |
+| Node | vis35 | 22.7 | 108.4 | 35.2 | 18 | 25.9 | | | | | |
+| Node | wolf | 21.6 | 282.9 | 43.8 | 22.7 | 30 | | | | | |
+| Node | x8 3 x 3 | 113.3 | 2456.3 | 1157.7 | 228.3 | 997.1 | | | | | |
+| Node | x8 | 48.3 | 245.4 | 116.9 | 26 | 101.2 | | | | | |

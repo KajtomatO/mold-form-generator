@@ -23,7 +23,7 @@ export function buildFunnel(arena: Arena, params: Params): Manifold {
     [p.rNeckInner, p.zConeInner],
     [p.rNeckInner, p.zNeckInner],
   ];
-  return checked(arena.track(arena.crossSection([outline]).revolve(OPENING_SEGMENTS)), 'The funnel');
+  return checked(arena.revolve(arena.crossSection([outline]), OPENING_SEGMENTS), 'The funnel');
 }
 
 /** Wide rim on the bed, by a half turn about x, so every wall leans in towards the tip. */

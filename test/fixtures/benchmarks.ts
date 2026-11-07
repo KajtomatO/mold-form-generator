@@ -28,3 +28,21 @@ export function withPreamble(text: string, preamble: string): string {
 export function recordSection(heading: string, body: string): void {
   writeFileSync(path, withSection(readFileSync(path, 'utf8'), heading, body));
 }
+
+/**
+ * A section whose table several runs fill, such as one browser each. Each run owns the rows `owns`
+ * picks out: its new rows replace those, and every other row stays.
+ */
+export function withRows(text: string, heading: string, intro: string, header: string, rows: string[], owns: (row: string) => boolean): string {
+  const start = text.indexOf(`## ${heading}\n`);
+  let kept: string[] = [];
+  if (start >= 0) {
+    const after = text.slice(start + heading.length + 4);
+    const end = after.search(/^## /m);
+    const body = end < 0 ? after : after.slice(0, end);
+    // A header line starts with the same first cell, whatever columns it had before the table changed.
+    const firstCell = header.split('|')[1];
+    kept = body.split('\n').filter((line) => /^\| (?!-)/.test(line) && line.split('|')[1] !== firstCell && !owns(line));
+  }
+  return withSection(text, heading, [intro, '', header, ...[...kept, ...rows].sort()].join('\n'));
+}

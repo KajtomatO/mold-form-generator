@@ -15,6 +15,7 @@ export default defineConfig({
         index: resolve(root, 'index.html'),
         diag: resolve(root, 'diag.html'),
         bench: resolve(root, 'bench.html'),
+        pipeline: resolve(root, 'pipeline.html'),
       },
     },
   },

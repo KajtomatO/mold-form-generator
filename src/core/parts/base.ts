@@ -141,7 +141,7 @@ export function buildGlueBase(arena: Arena, body: Manifold, outline: CrossSectio
     const message = 'This base gets no pocket, as the model has no footprint and no section at the pocket\'s depth, so nothing will locate it when glued.';
     return { base: body, pocketVolume: 0, diagnostics: [{ code: 'pocket-empty', severity: 'warning', message }] };
   }
-  const prism = track(track(outline.extrude(depth + POCKET_HEADROOM)).translate([0, 0, -depth]));
+  const prism = track(arena.extrude(outline, depth + POCKET_HEADROOM).translate([0, 0, -depth]));
   const pockets = offsets.map(([x, y]) => track(prism.translate([x, y, 0])));
   const base = checked(track(body.subtract(track(arena.api.Manifold.union(pockets)))), 'The base');
   return { base, pocketVolume: outline.area() * depth, diagnostics: [] };
@@ -201,7 +201,7 @@ export function buildMergedBase(arena: Arena, body: Manifold, model: Manifold | 
   const shrunk = track(sectionOf(arena, tied).offset(-STUB_INSET, 'Miter'));
   const stubs: Manifold[] = [];
   if (!shrunk.isEmpty()) {
-    const stub = track(track(shrunk.extrude(options.planeTol + STUB_RISE - STUB_BOTTOM)).translate([0, 0, STUB_BOTTOM]));
+    const stub = track(arena.extrude(shrunk, options.planeTol + STUB_RISE - STUB_BOTTOM).translate([0, 0, STUB_BOTTOM]));
     stubs.push(stub);
   }
   const copies = options.offsets.flatMap(([x, y]) => [whole, ...stubs].map((part) => track(part.translate([x, y, 0]))));
