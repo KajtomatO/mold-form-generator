@@ -21,6 +21,6 @@ From `bench.html` on 2026-11-07, on the user's machine: Firefox 158 on Windows, 
 
 Manifold's WASM booted in 9 ms. Firefox does not report device memory, so the app can't read how much RAM the client has. It has to adapt from measured stage timings instead.
 
-## Open question
+## Saving files over plain http
 
-Whether Firefox prompts or blocks when saving STL and ZIP files over plain http is not yet known. See `docs/REQUIREMENTS.md`, section 9.
+The user confirmed on 2026-11-07 that Firefox 158 saves STL and ZIP files from `diag.html` without a problem. Chrome has not been tried. Chromium's source suggests it may ask to keep or discard these files on an http address, so if you use Chrome, check `diag.html` first.
