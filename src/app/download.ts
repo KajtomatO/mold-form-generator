@@ -6,8 +6,10 @@ export const REVOKE_MS = 10_000;
  * a secure context, which plain http on a LAN address is not.
  */
 export function saveBytes(filename: string, bytes: Uint8Array, mime = 'application/octet-stream'): void {
-  const copy = new Uint8Array(bytes);
-  const url = URL.createObjectURL(new Blob([copy], { type: mime }));
+  // The Blob takes a copy of its own, so only a view into a buffer it cannot take needs one first:
+  // a second copy of a 150 MB project costs main about 85 ms.
+  const part = bytes.buffer instanceof ArrayBuffer ? (bytes as Uint8Array<ArrayBuffer>) : new Uint8Array(bytes);
+  const url = URL.createObjectURL(new Blob([part], { type: mime }));
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;

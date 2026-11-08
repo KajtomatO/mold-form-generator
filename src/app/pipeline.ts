@@ -1,8 +1,10 @@
 import { firstPourPeak, replicateOpenings, type OpeningPin } from '../core/analysis/placement';
 import { withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
+import { pickable } from '../core/base/candidates';
+import { findStoredPlane, PLANE_MATCH_MM, planeGap, planeOf, type StoredPlane } from '../core/base/storedPlane';
 import type { SolidReport } from '../core/mesh/shells';
-import type { WeldedMesh } from '../core/mesh/weld';
+import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import type { Params } from '../core/params/schema';
@@ -21,6 +23,7 @@ import { hashFloats, hashMesh, hashString } from './hash';
 import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
 import type { Project } from './project';
 import { stageKeys, type StageId, type StageInputs } from './stages';
+import { formatNormal } from '../ui/format';
 
 export type { Project } from './project';
 
@@ -100,6 +103,19 @@ export interface PipelineOptions {
    * placement are on screen, so they never hold up T1 or T2, and the export never waits for them.
    */
   reports?: boolean;
+}
+
+/**
+ * A project file's plane, checked against the first S2 of its model: `tried` once the choice did not
+ * find it and another candidate or a picked face has been chosen in its place.
+ */
+interface PlaneCheck {
+  file: string;
+  stored: StoredPlane;
+  /** The saved plane was looked for once already, so the next S2 is the one it found, or the best guess. */
+  tried: boolean;
+  /** The choice on screen is no longer the file's, so finding the plane is worth a note. */
+  moved: boolean;
 }
 
 /** A 3D marker of the Show toggle: a pin at a point, and the line of a cut to it where there is one. */
@@ -197,7 +213,14 @@ export class Pipeline {
   readonly log: LogEntry[] = [];
   readonly events: PipelineEvent[] = [];
 
-  private file: { id: string; name: string; bytes: Uint8Array } | null = null;
+  /** The loaded STL. `sha256` is its hash once a save, an open or an export has worked it out off main. */
+  private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null } | null = null;
+  private planeCheck: PlaneCheck | null = null;
+  /**
+   * Called when a project's saved plane was found under another choice than the file's, so the store
+   * can mean the same face in the history it holds and in what it last saved.
+   */
+  onPlaneResolved: ((from: PlaneChoice, to: PlaneChoice) => void) | null = null;
   private loads = 0;
   private plane: PlaneChoice = DEFAULT_PLANE;
   private importInput: ImportInput = PLAIN_IMPORT;
@@ -275,9 +298,50 @@ export class Pipeline {
   // ----- what the user does -----
 
   load(bytes: Uint8Array, name: string): void {
+    this.startFile(bytes, name);
+    this.changed();
+  }
+
+  /**
+   * A project file's model with its parameters, plane, pins and removed vents, in one change, so no job
+   * is asked for with the settings the page had before. `stored` is the plane the file was saved on,
+   * which the model's first S2 checks the choice against, and `sha256` the hash its STL was checked by.
+   */
+  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null): void {
+    this.startFile(bytes, name);
+    this.file!.sha256 = sha256;
+    this.params = project.params;
+    this.plane = project.plane;
+    this.pins = project.pins;
+    this.removed = project.removed;
+    this.planeCheck = stored ? { file: this.file!.id, stored, tried: false, moved: false } : null;
+    this.changed();
+  }
+
+  /**
+   * Settings for the model on screen, from an export ZIP or a lone project.json, as one change. With
+   * the plane the file was saved on, the choice is checked against it as for a loaded project.
+   */
+  applyProject(project: Project, stored: StoredPlane | null): void {
+    this.setProject(project);
+    if (!stored || !this.file) return;
+    this.planeCheck = { file: this.file.id, stored, tried: false, moved: false };
+    // The plane on screen may be the one the file chose already, and then no S2 is on its way to check it.
+    if (this.checkPlane()) this.changed();
+    else this.collectDiagnostics();
+    this.notify();
+  }
+
+  /** What the check of a project's plane said belongs to the plane it said it of. */
+  private dropPlaneNotes(): void {
+    this.notes = this.notes.filter((note) => note.code !== 'plane-found' && note.code !== 'plane-mismatch');
+  }
+
+  private startFile(bytes: Uint8Array, name: string): void {
     // An export still waiting for the preview was asked for the model this one replaces, so it stops.
     this.exportWait?.();
-    this.file = { id: `f${++this.loads}`, name, bytes };
+    this.file = { id: `f${++this.loads}`, name, bytes, sha256: null };
+    this.planeCheck = null;
     this.plane = DEFAULT_PLANE;
     this.importInput = PLAIN_IMPORT;
     this.pins = [];
@@ -294,7 +358,6 @@ export class Pipeline {
     // Timings belong to the model they were taken on.
     for (const list of Object.values(this.timing)) list.length = 0;
     this.lastRebuild = null;
-    this.changed();
   }
 
   setParams(change: (params: Params) => void): void {
@@ -307,6 +370,9 @@ export class Pipeline {
   /** Another plane places the openings afresh, so pins and removed vents go. The same plane again is no change. */
   setPlane(plane: PlaneChoice): void {
     if (samePlane(plane, this.plane)) return;
+    // The user's own choice: what a project file saved is no longer the plane to find.
+    this.planeCheck = null;
+    this.dropPlaneNotes();
     this.plane = plane;
     this.pins = [];
     this.removed = [];
@@ -318,6 +384,8 @@ export class Pipeline {
    * change. Unlike setPlane, another plane here keeps the pins the snapshot holds for it.
    */
   setProject(project: Project): void {
+    this.planeCheck = null;
+    if (!samePlane(project.plane, this.plane)) this.dropPlaneNotes();
     this.params = project.params;
     this.plane = project.plane;
     this.pins = project.pins;
@@ -380,6 +448,51 @@ export class Pipeline {
   /** The loaded file's size in bytes. */
   get fileBytes(): number {
     return this.file?.bytes.length ?? 0;
+  }
+
+  /** The loaded STL's bytes, exactly as they came, which a project file carries. Never changed in place. */
+  get stlBytes(): Uint8Array | null {
+    return this.file?.bytes ?? null;
+  }
+
+  /** SHA-256 of the loaded STL, once something has worked it out, or null. */
+  get modelSha256(): string | null {
+    return this.file?.sha256 ?? null;
+  }
+
+  /** Keeps a hash worked out off main, if the model it was worked out for is still the one loaded. */
+  noteModelSha256(bytes: Uint8Array, sha256: string): void {
+    if (this.file?.bytes === bytes) this.file.sha256 = sha256;
+  }
+
+  /**
+   * The plane the model stands on, in the STL's own coordinates, for a project file: the one the choice
+   * on screen found, or, while a project's saved plane is still being looked for, that one. Null until
+   * S2 for the choice on screen is in, or if it failed.
+   */
+  storedPlane(): StoredPlane | null {
+    if (this.planeCheck && this.planeCheck.file === this.file?.id) return this.planeCheck.stored;
+    if (!this.oriented || this.oriented.key !== this.keys().S2) return null;
+    return { ...planeOf(this.oriented.value.chosen), upper: this.plane.upper };
+  }
+
+  /** Whether the loaded STL has been read: false while it is being read, and when it cannot be. */
+  modelParsed(): boolean {
+    return this.file !== null && this.parsed?.key === this.keys().S1;
+  }
+
+  /** Resolves once S2 for the choice on screen is in, or once it cannot be: no file, or an error. */
+  orientedReady(): Promise<void> {
+    return new Promise((resolve) => {
+      let off = (): void => {};
+      const check = (): boolean => {
+        if (this.file && this.error === null && this.oriented?.key !== this.keys().S2) return false;
+        off();
+        resolve();
+        return true;
+      };
+      if (!check()) off = this.subscribe(() => void check());
+    });
   }
 
   project(): Project {
@@ -662,6 +775,8 @@ export class Pipeline {
     ];
     return {
       model: this.file!.name,
+      modelSha256: this.file!.sha256,
+      basePlane: this.storedPlane(),
       triangles: { format: parsed.format, inFile: parsed.rawTriangles, kept: parsed.triangles },
       project: this.project(),
       plane: { normal: [normal[0], normal[1], normal[2]], offset, area, planeTol: oriented.planeTol },
@@ -684,10 +799,13 @@ export class Pipeline {
             needsTrim: oriented!.oriented.needsTrim,
             planeTol: oriented!.planeTol,
             openings: placement!.placement.openings.map(({ id, kind, x, y, pinned }) => ({ id, kind, x, y, pinned })),
+            // Only for the ZIP's project.json, and only while main does not know its hash.
+            stl: request.want === 'zip' && this.file!.sha256 === null ? this.file!.bytes.slice() : null,
           }
         : null;
     const params = this.params;
     const meta = mold ? this.exportMeta() : null;
+    const file = this.file;
     const run = (cellScale: number, armed?: Fault): Promise<ExportOutputs> =>
       new Promise((resolve, reject) => {
         const worker = this.options.spawnSolid();
@@ -709,6 +827,7 @@ export class Pipeline {
             onProgress(data);
           } else if (data.t === 'exported') {
             done();
+            if (file && data.outputs.modelSha256) this.noteModelSha256(file.bytes, data.outputs.modelSha256);
             resolve(data.outputs);
           } else if (data.t === 'error') {
             done();
@@ -722,7 +841,7 @@ export class Pipeline {
         };
         const inputs = inputsFor();
         const message: ExportJobMessage = { t: 'export', id: 1, ...request, params, inputs, meta, cellScale, ...(armed ? { fault: armed } : {}) };
-        worker.postMessage(message, inputs ? [inputs.welded.positions.buffer, inputs.welded.indices.buffer, inputs.candidate.members.buffer] : []);
+        worker.postMessage(message, inputs ? [inputs.welded.positions.buffer, inputs.welded.indices.buffer, inputs.candidate.members.buffer, ...(inputs.stl ? [inputs.stl.buffer] : [])] : []);
       });
     const crashed = (error: unknown): error is Error => error instanceof Error && CRASH_NAMES.has(error.name);
     return run(1, fault).catch((error: unknown) => {
@@ -1030,7 +1149,15 @@ export class Pipeline {
       const t1 = event.kind === 'stage' && outputs.S6 !== undefined;
       if (t1) keep(this.timing.t1, event.ms);
       if (outputs.S1 && this.accept('parsed', target, this.parsed)) this.parsed = { key: target.keys.S1, rev: target.rev, value: outputs.S1 };
-      if (outputs.S2 && this.accept('oriented', target, this.oriented)) this.oriented = { key: target.keys.S2, rev: target.rev, value: outputs.S2 };
+      if (outputs.S2 && this.accept('oriented', target, this.oriented)) {
+        this.oriented = { key: target.keys.S2, rev: target.rev, value: outputs.S2 };
+        // A project's plane found under another choice is a change of the pipeline's own, as a retry is.
+        if (this.checkPlane()) {
+          this.rev++;
+          this.failed.clear();
+          this.error = null;
+        }
+      }
       if (outputs.S6 && this.accept('field', target, this.field)) this.field = { key: target.keys.S6, mold: target.keys.S10, rev: target.rev, value: outputs.S6 };
       if (outputs.S7) {
         // The space must be the field placement ran on, which is the one shown when their keys agree.
@@ -1097,6 +1224,7 @@ export class Pipeline {
   private handleFailure(gate: 'field' | 'solid', event: Exclude<GateEvent<Target>, { kind: 'stage' | 'result' }>): void {
     if (event.kind === 'terminated') return;
     if (event.target.rev !== this.rev) return;
+    if (gate === 'field' && event.kind === 'failed' && this.replaceUnusablePick()) return;
     if (event.kind === 'crashed' && this.crashScale < CRASH_SCALE) {
       this.crashScale = CRASH_SCALE;
       this.rescaled();
@@ -1105,6 +1233,66 @@ export class Pipeline {
     }
     this.failed.add(event.target.id);
     this.error = event.kind === 'crashed' ? `The geometry could not be built, even at a coarser cell: ${event.error.message}` : event.error.message;
+  }
+
+  /**
+   * A project file's choice of plane depends on how this version ranks candidates and welds the mesh,
+   * so the plane it was saved on is checked against the plane the choice finds, within PLANE_MATCH_MM
+   * across the model. If they differ, the ranked candidate or level that is that plane is chosen
+   * instead, or else the largest triangle on it is picked; failing both, the nearest candidate within
+   * the plane tolerance slider's reach, with a warning. Returns whether it changed the choice, which
+   * keeps the pins and removed vents the project holds for that face.
+   */
+  private checkPlane(): boolean {
+    const check = this.planeCheck, mesh = this.modelMesh();
+    if (!check || check.file !== this.file?.id || !this.oriented || this.oriented.key !== this.keys().S2 || !mesh) return false;
+    const oriented = this.oriented.value;
+    const bounds = meshBounds(mesh.positions);
+    const gap = planeGap(planeOf(oriented.chosen), check.stored, bounds);
+    const saved = `The base face saved with this project, facing ${formatNormal(check.stored.normal)}${check.stored.upper === false ? '' : `, on its level ${check.stored.upper.toFixed(2)} mm up`},`;
+    if (gap <= PLANE_MATCH_MM) {
+      this.planeCheck = null;
+      if (check.moved) this.notes.push({ code: 'plane-found', severity: 'info', message: `${saved} is ${choiceName(this.plane)} in this version of the app, which numbers the faces differently, so the model stands on it as saved.` });
+      return false;
+    }
+    if (!check.tried) {
+      check.tried = true;
+      const found = findStoredPlane(check.stored, oriented.candidates, mesh, oriented.planeTol, bounds);
+      if (found && !samePlane(found.choice, this.plane)) {
+        const from = this.plane;
+        this.plane = found.choice;
+        check.moved = true;
+        this.onPlaneResolved?.(from, found.choice);
+        return true;
+      }
+    }
+    // The best guess stands: the nearest plane found, or the saved choice as this version reads it.
+    this.planeCheck = null;
+    const off = Number.isFinite(gap) ? `up to ${gap.toFixed(2)} mm off it across the model` : `which faces ${formatNormal(oriented.chosen.normal)}`;
+    this.notes.push({ code: 'plane-mismatch', severity: 'warning', message: `${saved} is not one this version of the app finds, so the model stands on ${choiceName(this.plane)}, ${off}. Check the base face before you export.` });
+    return false;
+  }
+
+  /**
+   * S2 refuses a picked triangle this mesh does not have, which a project file from a version that welds
+   * the model otherwise can name. The model then stands on the best-ranked face, as a user's choice that
+   * failed must not be taken for an engine crash, and a saved plane is looked for from there as for any
+   * project. Without one, a warning says the face was not found. Returns whether it did this.
+   */
+  private replaceUnusablePick(): boolean {
+    const mesh = this.modelMesh();
+    if (!('pick' in this.plane) || !mesh || pickable(mesh, this.plane.pick)) return false;
+    const from = this.plane;
+    this.plane = DEFAULT_PLANE;
+    const check = this.planeCheck?.file === this.file?.id ? this.planeCheck : null;
+    if (check) check.moved = true;
+    else this.notes.push({ code: 'plane-mismatch', severity: 'warning', message: `The face picked as the base, triangle ${from.pick + 1}, is not a face of this model as this version of the app reads it, so the model stands on ${choiceName(this.plane)}. Check the base face before you export.` });
+    this.onPlaneResolved?.(from, this.plane);
+    // A change of the pipeline's own, as a project's plane found under another choice is.
+    this.rev++;
+    this.failed.clear();
+    this.error = null;
+    return true;
   }
 
   private collectDiagnostics(): void {
@@ -1226,4 +1414,10 @@ export class Pipeline {
     const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform } };
     worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer]);
   }
+}
+
+/** A plane choice as a maker reads it in a message. */
+function choiceName(plane: PlaneChoice): string {
+  const face = 'rank' in plane ? `candidate ${plane.rank + 1}` : 'a face picked on the model';
+  return plane.upper === false ? face : `${face}, on its level ${plane.upper.toFixed(2)} mm up`;
 }

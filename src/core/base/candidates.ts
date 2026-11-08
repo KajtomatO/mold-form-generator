@@ -590,6 +590,20 @@ function isMember(candidate: BaseCandidate, triangle: number): boolean {
 }
 
 /**
+ * Whether a picked triangle can give a plane: it must be one of the mesh's, and not collinear. A pick
+ * from a project file names a triangle by its index, which another version's weld can leave past the
+ * end or on a sliver, so S2 checks this before it picks.
+ */
+export function pickable(mesh: WeldedMesh, triangle: number): boolean {
+  const { positions: p, indices } = mesh;
+  if (!Number.isInteger(triangle) || triangle < 0 || triangle >= indices.length / 3) return false;
+  const a = indices[triangle * 3] * 3, b = indices[triangle * 3 + 1] * 3, c = indices[triangle * 3 + 2] * 3;
+  const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+  const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+  return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) > 0;
+}
+
+/**
  * The plane through a clicked triangle. It may be a ledge, and orient reports what lies below it.
  * A click inside a ranked candidate means that whole plane, because a tilted sliver inside its
  * tolerance band has a plane of its own that would otherwise jump somewhere unrelated.

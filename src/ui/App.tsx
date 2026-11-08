@@ -2,7 +2,7 @@ import { useEffect } from 'preact/hooks';
 import type { Store } from '../app/store';
 import type { PreviewScene } from '../view/scene';
 import { StoreContext } from './context';
-import { openStl } from './files';
+import { openFile } from './files';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar/Sidebar';
 import { StatusStrip } from './StatusStrip';
@@ -29,9 +29,21 @@ export function App({ store, scene, canvas }: { store: Store; scene: PreviewScen
         store.hoverTriangle.value = null;
         return;
       }
-      // Ctrl+Z undoes, Ctrl+Shift+Z and Ctrl+Y redo; Cmd on a Mac.
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || takesText(event.target)) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const key = event.key.toLowerCase();
+      // Ctrl+S and Ctrl+O, as in every program, save and open the project, wherever the focus is: the
+      // browser's own would save this page's HTML, or open a file outside the app.
+      if ((key === 's' || key === 'o') && !event.shiftKey) {
+        event.preventDefault();
+        if (key === 's') {
+          if (store.canSave()) void store.saveProject();
+        } else {
+          document.querySelector<HTMLInputElement>('[data-section="model"] input[type="file"]')?.click();
+        }
+        return;
+      }
+      // Ctrl+Z undoes, Ctrl+Shift+Z and Ctrl+Y redo; Cmd on a Mac.
+      if (takesText(event.target)) return;
       if (key === 'z' && !event.shiftKey) store.undo();
       else if ((key === 'z' && event.shiftKey) || key === 'y') store.redo();
       else return;
@@ -44,11 +56,12 @@ export function App({ store, scene, canvas }: { store: Store; scene: PreviewScen
       if (event.defaultPrevented) return;
       event.preventDefault();
       const file = event.dataTransfer?.files[0];
-      if (file) void openStl(store, file);
+      if (file) void openFile(store, file);
     };
-    // Nothing is saved until project files arrive, so leaving the page with a model loaded asks first.
+    // Only work that would be lost asks first: a change since the last save, load or Export ZIP. A model
+    // just opened, or one saved since its last change, is on disk as it is, so leaving it asks nothing.
     const leave = (event: BeforeUnloadEvent): void => {
-      if (store.pipeline.modelName) event.preventDefault();
+      if (store.unsaved()) event.preventDefault();
     };
     window.addEventListener('keydown', keys);
     window.addEventListener('dragover', dragOver);

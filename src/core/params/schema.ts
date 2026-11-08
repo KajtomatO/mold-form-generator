@@ -5,7 +5,13 @@
  * An `auto` parameter stores null until the user types a value, and that null is its edited flag:
  * it keeps following its rule until edited, and reset is just setting it back to null.
  */
-export const SCHEMA_VERSION = 1;
+
+/**
+ * The version of project.json, which holds these parameters with the plane, pins and removed vents.
+ * Version 1 came with M6b's export ZIP; 2 added the STL's hash and the base plane itself (M9). An older
+ * file is migrated one version at a time, by src/app/projectFile.ts.
+ */
+export const SCHEMA_VERSION = 2;
 
 export interface NumberDef {
   kind: 'number';

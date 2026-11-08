@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { unzipSync } from 'fflate';
@@ -64,9 +65,13 @@ describe('names and versions', () => {
     }
   });
 
-  it('project.json carries the schema version, the parameters, the plane, the pins and the removed vents', () => {
+  it('project.json carries the schema version, the STL\'s hash, the plane itself, the parameters, the choice of plane, the pins and the removed vents', () => {
     const project = { params: defaultParams(), plane: { rank: 1, upper: 0.41 }, pins: [{ id: 'b0:pour:0', kind: 'pour' as const, x: 1, y: 2 }], removed: ['b0:vent:1'] };
-    expect(projectFile(project, 'x.stl')).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: APP_VERSION, model: 'x.stl', ...project });
+    const basePlane = { normal: [0, 0, -1] as [number, number, number], offset: -0.41, upper: 0.41 };
+    const file = projectFile(project, 'x.stl', { modelSha256: 'ab'.repeat(32), basePlane });
+    expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: APP_VERSION, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
+    expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
+    expect(SCHEMA_VERSION).toBe(2);
   });
 
   it('each request counts its own steps, and only the ZIP packs README, report and project', () => {
@@ -434,7 +439,13 @@ describe('the export of jersey in Node', () => {
     expect(report.silicone.grams).toBeCloseTo(report.silicone.ml * 1.1, 9);
     // The reports are part of the zip step, which is the one the timings leave out, so they have a line of their own.
     expect(Object.keys(report.timings)).toEqual(['import', 'field', 'tool', 'cover', 'base', 'clearance', 'files', 'fit-test', 'reports', 'total']);
-    expect(JSON.parse(text(files['project.json']))).toEqual(JSON.parse(JSON.stringify(projectFile(p.project(), EXAMPLE_FILES.jersey))));
+    // The STL's own hash, worked out by the export as main did not know it, and the plane jersey stands on.
+    const sha = createHash('sha256').update(exampleBytes('jersey')).digest('hex');
+    const { support, offset } = p.oriented!.value.chosen;
+    const basePlane = { normal: [0, 0, -1] as [number, number, number], offset: support - offset, upper: false as const };
+    expect(JSON.parse(text(files['project.json']))).toEqual(JSON.parse(JSON.stringify(projectFile(p.project(), EXAMPLE_FILES.jersey, { modelSha256: sha, basePlane }))));
+    expect(outputs.modelSha256).toBe(sha);
+    expect(p.modelSha256).toBe(sha);
     const readme = text(files['README.txt']);
     expect(readme).toContain('The sprue rule');
     expect(readme).toContain('fit_test/');

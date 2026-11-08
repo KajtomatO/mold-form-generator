@@ -5,7 +5,7 @@ import type { DropResult } from '../core/analysis/validate';
 import type { PreviewScene } from '../view/scene';
 import { useStore } from './context';
 import { DiagnosticsCard } from './DiagnosticsCard';
-import { FileButton, openStl } from './files';
+import { FileButton, OPEN_LABEL, OPEN_TITLE, openFile } from './files';
 import { fixed, units } from './format';
 import { Cross, Inbox } from './icons';
 import { PartsList } from './PartsList';
@@ -160,7 +160,7 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
         event.preventDefault();
         setDragging(false);
         const file = event.dataTransfer?.files[0];
-        if (file) void openStl(store, file);
+        if (file) void openFile(store, file);
       }}
       // A press on a ring or on the section's handle is a drag of it. Taken here, on the way down to the
       // canvas, the press never reaches the orbit controls listening there, so the camera stays put.
@@ -243,8 +243,8 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
         <div class="drop-hint">
           <div>
             <Inbox />
-            <p>Drop an STL here</p>
-            <FileButton store={store} label="Open STL…" />
+            <p>Drop an STL or a project here</p>
+            <FileButton store={store} label={OPEN_LABEL} title={OPEN_TITLE} />
           </div>
         </div>
       ) : null}

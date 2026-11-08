@@ -731,17 +731,92 @@ input[type='range']:disabled {
 /* ----- model section ----- */
 
 .file-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
-.file-row .name {
+.file-name {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 10px;
   font-size: 12px;
   color: var(--ink-2);
   overflow-wrap: anywhere;
+}
+
+.file-name .project {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.file-busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-notice {
+  margin-bottom: 10px;
+}
+
+.file-notice-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.file-notice ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--ink-2);
+}
+
+.file-notice li + li {
+  margin-top: 3px;
+}
+
+.file-notice li.warning {
+  color: var(--warn);
+}
+
+.file-notice-details {
+  margin-top: 6px;
+  color: var(--ink-2);
+}
+
+.file-notice-details summary {
+  cursor: pointer;
+  width: max-content;
+}
+
+.file-notice-details p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.file-name .changed {
+  color: var(--warn);
+  font-weight: 400;
+}
+
+.file-replace {
+  margin-bottom: 10px;
+}
+
+.file-replace p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-replace-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .candidates {

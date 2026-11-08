@@ -1,3 +1,4 @@
+import { samePlane, type PlaneChoice } from '../workers/fieldStages';
 import type { Project } from './project';
 
 /** Slider and wheel changes to one control this close together are one step, as the plan's State section has it. */
@@ -15,6 +16,8 @@ interface Step {
   group: string | null;
   /** When the step last grew, in ms. */
   at: number;
+  /** The order steps were recorded in, which a project's plane resolution uses to leave older steps alone. */
+  seq: number;
 }
 
 /**
@@ -32,6 +35,7 @@ export class History {
    * starts a step of its own, so two drags of one slider are two steps however close together.
    */
   private held: { group: string; started: boolean } | null = null;
+  private seq = 0;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -58,7 +62,7 @@ export class History {
       return;
     }
     this.sealed = false;
-    this.past.push({ project: before, label, group, at: now });
+    this.past.push({ project: before, label, group, at: now, seq: this.seq++ });
     if (this.past.length > HISTORY_LIMIT) this.past.shift();
   }
 
@@ -71,7 +75,7 @@ export class History {
   undo(current: Project): Project | null {
     const step = this.past.pop();
     if (!step) return null;
-    this.future.push({ project: current, label: step.label, group: null, at: 0 });
+    this.future.push({ project: current, label: step.label, group: null, at: 0, seq: step.seq });
     this.sealed = true;
     return step.project;
   }
@@ -79,9 +83,26 @@ export class History {
   redo(current: Project): Project | null {
     const step = this.future.pop();
     if (!step) return null;
-    this.past.push({ project: current, label: step.label, group: null, at: 0 });
+    this.past.push({ project: current, label: step.label, group: null, at: 0, seq: step.seq });
     this.sealed = true;
     return step.project;
+  }
+
+  /** The number the next step recorded gets: steps from it on are newer than now. */
+  get nextSeq(): number {
+    return this.seq;
+  }
+
+  /**
+   * A project's saved plane found under another choice than its file's: a step recorded since the file
+   * was opened (`since`, from nextSeq) that stands on the file's choice means that face, so it takes the
+   * new choice too, and undo never brings back the old one. Older steps are the user's own, in this
+   * version's numbering, and stay.
+   */
+  replacePlane(from: PlaneChoice, to: PlaneChoice, since: number): void {
+    for (const step of [...this.past, ...this.future]) {
+      if (step.seq >= since && samePlane(step.project.plane, from)) step.project = { ...step.project, plane: to };
+    }
   }
 
   clear(): void {

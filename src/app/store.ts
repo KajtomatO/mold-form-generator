@@ -9,7 +9,12 @@ import { dragCheck, moldBox, openingLabel, type DragCheck } from './derived';
 import { downloadName, saveBytes } from './download';
 import { History, sameProject } from './history';
 import type { Pipeline, Project } from './pipeline';
+import { projectFile, type ProjectFile } from './project';
+import { fileKind, holdsModel, PROJECT_EXTENSION } from './projectArchive';
+import { OPEN_INSTEAD, ProjectError, type ProjectNote } from './projectFile';
+import type { ProjectFiles } from './projectFiles';
 import { setParamValue, type ParamPath } from './stages';
+import type { Opened } from '../workers/projectJob';
 
 export type Theme = 'dark' | 'light';
 
@@ -122,6 +127,27 @@ export interface OpeningDrag {
   pointer: { x: number; y: number };
 }
 
+/** What the last open or save of a project file had to say, under the file row. */
+export interface FileNotice {
+  severity: 'error' | 'warning' | 'info';
+  message: string;
+  /** What reading the file changed or could not check, one line each. */
+  notes: ProjectNote[];
+  /** The field or the reader's own words behind an error, shown folded away. */
+  details?: string | null;
+  /** A save's notice, which the Model section rewords once the project has changed since. */
+  saved?: string;
+}
+
+/** A file that would replace the model on screen while it has changes not saved, waiting for the maker's answer. */
+export interface Replacing {
+  name: string;
+  model: string;
+}
+
+/** The project a project file holds. */
+const projectOf = (file: ProjectFile): Project => ({ params: file.params, plane: file.plane, pins: file.pins, removed: file.removed });
+
 /** The history group of one parameter's control, so its slider and wheel steps join one step. */
 function paramGroup(path: ParamPath): string {
   return `param:${path}`;
@@ -176,13 +202,39 @@ export class Store {
   readonly history: History;
   /** Bumped whenever the history changes, so the undo and redo buttons read it afresh. */
   readonly historyTick = signal(0);
+  /** The .moldproj the model came from, by its file name, or null for an STL opened on its own. */
+  readonly projectName = signal<string | null>(null);
+  readonly fileNotice = signal<FileNotice | null>(null);
+  /** A project file being opened, said under the file row. */
+  readonly fileBusy = signal<string | null>(null);
+  readonly saving = signal(false);
+  /** A file held back from replacing the model while it has changes not saved, until the maker answers. */
+  readonly replacing = signal<Replacing | null>(null);
+  private replaceWith: (() => void) | null = null;
+  /** The project as the last save, load or Export ZIP holds it, to tell whether leaving the page loses anything. */
+  private saved: Project | null = null;
+  /** Bumped by every open and load: a file read or unpacked after a newer one was asked for is dropped. */
+  private opens = 0;
+  /**
+   * The history's first step recorded on a project file's own plane choice: the file's resolution of
+   * that choice rewrites steps from here on, and leaves older ones, which are the user's own, alone.
+   */
+  private fileSteps = Infinity;
 
   constructor(
     readonly pipeline: Pipeline,
     now?: () => number,
+    /** Saving and opening project files, in a worker per job. Null where none can be spawned. */
+    readonly files: ProjectFiles | null = null,
   ) {
     this.history = new History(now);
     this.project = signal(pipeline.project());
+    pipeline.onPlaneResolved = (from, to) => {
+      this.history.replacePlane(from, to, this.fileSteps);
+      // What counts as saved is always the file's project or one saved since it was opened, as only a
+      // project opened in full has its plane checked, and that sets it.
+      if (this.saved && samePlane(this.saved.plane, from)) this.saved = { ...this.saved, plane: to };
+    };
     pipeline.subscribe(() => {
       const next = pipeline.project(), now = this.project.value;
       if (next.params !== now.params || next.plane !== now.plane || next.pins !== now.pins || next.removed !== now.removed) this.project.value = next;
@@ -191,6 +243,19 @@ export class Store {
   }
 
   load(bytes: Uint8Array, name: string): void {
+    this.beforeLoad();
+    this.pipeline.load(bytes, name);
+    this.saved = this.pipeline.project();
+  }
+
+  /** What every new model resets: how the user was looking at the last one, and its history. */
+  private beforeLoad(): void {
+    this.opens++;
+    this.dropReplacing();
+    this.fileSteps = Infinity;
+    this.projectName.value = null;
+    this.fileNotice.value = null;
+    this.fileBusy.value = null;
     // An export that runs goes on, for the model it was asked for; how an earlier one ended is history.
     if (this.exportState.value.phase !== 'running') this.exportState.value = { phase: 'idle' };
     this.pickMode.value = false;
@@ -203,7 +268,180 @@ export class Store {
     // The steps of another model would build nothing that makes sense on this one.
     this.history.clear();
     this.historyTick.value++;
-    this.pipeline.load(bytes, name);
+  }
+
+  /**
+   * A chosen or dropped file. An STL loads as it is; a .moldproj loads its model with everything it
+   * holds; an export ZIP or a lone project.json brings its settings to the model on screen. A project
+   * file that cannot be used says why under the file row, and the model on screen stays as it was.
+   */
+  async openFile(file: File): Promise<void> {
+    const ticket = ++this.opens;
+    // A newer file supersedes one still waiting for an answer.
+    this.dropReplacing();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (ticket !== this.opens) return;
+    const kind = fileKind(file.name, bytes);
+    if (kind === 'stl') this.replaceOrAsk(file.name, () => this.load(bytes, file.name));
+    else if (kind === 'other') this.fileNotice.value = { severity: 'error', message: `${file.name} is not an STL or a project file, so it was not opened. ${OPEN_INSTEAD}`, notes: [] };
+    else await this.openProject(bytes, file.name, kind, ticket);
+  }
+
+  /**
+   * A file that replaces the model on screen, an STL or a .moldproj, goes ahead at once unless the model
+   * has changes no file holds, which a new model would take with it, history and all; then the Model
+   * section asks first. Settings alone never ask, as they are one step undo takes back.
+   */
+  private replaceOrAsk(name: string, run: () => void): void {
+    if (!this.unsaved()) {
+      run();
+      return;
+    }
+    this.replaceWith = run;
+    this.replacing.value = { name, model: this.projectName.value ?? this.pipeline.modelName! };
+  }
+
+  /** The maker's answer: save the work first and then open, open without saving, or keep the model and drop the file. */
+  async answerReplace(answer: 'save' | 'discard' | 'cancel'): Promise<void> {
+    const run = this.replaceWith;
+    if (!run) return;
+    if (answer === 'save') {
+      await this.saveProject();
+      // A save that failed keeps the question, with its reason under the file row; a newer file has its own.
+      if (this.replaceWith !== run || this.unsaved()) return;
+    }
+    this.dropReplacing();
+    if (answer !== 'cancel') run();
+  }
+
+  private dropReplacing(): void {
+    this.replaceWith = null;
+    this.replacing.value = null;
+  }
+
+  private async openProject(bytes: Uint8Array, name: string, kind: 'zip' | 'json', ticket: number): Promise<void> {
+    if (!this.files) {
+      this.fileNotice.value = { severity: 'error', message: `${name} cannot be opened: this page has no way to read project files.`, notes: [] };
+      return;
+    }
+    this.fileNotice.value = null;
+    this.fileBusy.value = `Opening ${name}…`;
+    // Settings alone are matched to the model on screen by its hash, which the job works out if main has
+    // none. A ZIP that brings its own model needs none, so only one without is sent the model's bytes.
+    const unknown = this.pipeline.modelName !== null && this.pipeline.modelSha256 === null;
+    const loaded = unknown && (kind === 'json' || !holdsModel(bytes)) ? this.pipeline.stlBytes : null;
+    try {
+      const opened = await this.files.open(bytes, name, kind, loaded);
+      if (ticket !== this.opens) return;
+      if (loaded && opened.loadedSha256) this.pipeline.noteModelSha256(loaded, opened.loadedSha256);
+      if (opened.stl) this.replaceOrAsk(name, () => this.loadOpened(opened, name));
+      else this.applyOpened(opened, name);
+    } catch (error) {
+      if (ticket !== this.opens) return;
+      this.fileNotice.value =
+        error instanceof ProjectError
+          ? { severity: 'error', message: error.message, notes: [], details: error.details }
+          : { severity: 'error', message: `${name} could not be opened, as reading it failed. Try again.`, notes: [], details: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (ticket === this.opens) this.fileBusy.value = null;
+    }
+  }
+
+  /** A .moldproj: its model and its project in one load, which clears the history as a new file does. */
+  private loadOpened(opened: Opened, name: string): void {
+    const { file } = opened;
+    this.beforeLoad();
+    this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256);
+    this.saved = this.pipeline.project();
+    // The history is empty, so every step from here stands on the file's choice until the user picks.
+    this.fileSteps = this.history.nextSeq;
+    this.projectName.value = name;
+    if (opened.notes.length > 0) {
+      const warned = opened.notes.some((note) => note.severity === 'warning');
+      this.fileNotice.value = { severity: warned ? 'warning' : 'info', message: `Opened ${name}.`, notes: opened.notes };
+    }
+  }
+
+  /**
+   * Settings without a model, from an export ZIP or a project.json, for the model on screen, as one step
+   * of the history. All of it if it was saved for this model, by its hash, or by its name where the file
+   * has none; otherwise the parameters alone, as another model's base face and openings mean nothing here.
+   */
+  private applyOpened(opened: Opened, name: string): void {
+    const { file } = opened;
+    const current = this.pipeline.modelName;
+    const notes = [...opened.notes];
+    if (current === null) {
+      this.fileNotice.value = { severity: 'warning', message: `${name} holds the settings for ${file.model}, but not the model itself. Open ${file.model} first, then open ${name} again to use them.`, notes };
+      return;
+    }
+    const same = file.modelSha256 !== null ? file.modelSha256 === this.pipeline.modelSha256 : file.model === current;
+    const project = same ? projectOf(file) : { ...this.pipeline.project(), params: file.params };
+    // Steps already in the history are the user's own: a resolution of the file's plane, even one found
+    // during this very step, must not rewrite them, and the step's own "before" is one of them.
+    this.fileSteps = Infinity;
+    this.change(`opening the settings of ${name}`, null, () => this.pipeline.applyProject(project, same ? file.basePlane : null));
+    if (!same) {
+      const why = file.model === current ? `another model of the same name, ${file.model}, whose contents differ from the one on screen` : `${file.model}, not ${current}`;
+      this.fileNotice.value = { severity: 'warning', message: `${name} was saved for ${why}, so only its settings were applied: the model keeps its own base face, pinned openings and removed vents.`, notes };
+      return;
+    }
+    this.fileSteps = this.history.nextSeq;
+    // The file opens again to this project, so leaving now loses nothing.
+    this.saved = this.pipeline.project();
+    if (file.modelSha256 === null) notes.push({ severity: 'info', message: `${name} does not record its model's contents, so it was matched to ${current} by the file name alone.` });
+    this.fileNotice.value = { severity: notes.some((note) => note.severity === 'warning') ? 'warning' : 'info', message: `Applied the settings of ${name} to ${current}.`, notes };
+  }
+
+  /**
+   * Saves the model and its project as <name>.moldproj: the STL as it was loaded and project.json, with
+   * the plane itself beside the choice, so it waits for S2 of the choice on screen. Hashing and zipping
+   * run in a worker; main copies the STL into it and makes the Blob of the result.
+   */
+  async saveProject(): Promise<void> {
+    const bytes = this.pipeline.stlBytes, model = this.pipeline.modelName, name = this.projectFileName();
+    if (!bytes || model === null || name === null || !this.files || this.saving.value) return;
+    this.saving.value = true;
+    try {
+      await this.pipeline.orientedReady();
+      // Another model loaded meanwhile: this save was asked for the one that has gone.
+      if (this.pipeline.stlBytes !== bytes) return;
+      // A project whose STL cannot be read would be refused when opened, so it is never written.
+      if (!this.pipeline.modelParsed()) {
+        this.fileNotice.value = { severity: 'error', message: `${model} cannot be saved as a project, as it could not be read. Open an STL that loads, then save.`, notes: [] };
+        return;
+      }
+      const project = this.pipeline.project();
+      const file = projectFile(project, model, { modelSha256: this.pipeline.modelSha256, basePlane: this.pipeline.storedPlane() });
+      const { zip, sha256 } = await this.files.pack(file, bytes);
+      // A type of its own, so no browser renames the file after the ZIP inside.
+      saveBytes(name, zip, 'application/octet-stream');
+      this.pipeline.noteModelSha256(bytes, sha256);
+      if (this.pipeline.stlBytes !== bytes) return;
+      this.saved = project;
+      this.fileNotice.value = { severity: 'info', message: `Saved ${name}.`, notes: [], saved: name };
+    } catch (error) {
+      const details = error instanceof ProjectError ? [error.message, error.details].filter(Boolean).join(' ') : error instanceof Error ? error.message : String(error);
+      this.fileNotice.value = { severity: 'error', message: `${name} could not be saved. Try again; Export ZIP keeps every setting too, in its project.json.`, notes: [], details };
+    } finally {
+      this.saving.value = false;
+    }
+  }
+
+  /** Whether Save project can save: a model whose STL has been read, as one that cannot be read would never open again. */
+  canSave(): boolean {
+    return this.files !== null && this.pipeline.modelName !== null && this.pipeline.modelParsed();
+  }
+
+  /** What Save project names the file: an opened project keeps its own name, and an STL gives <model>.moldproj. */
+  projectFileName(): string | null {
+    const model = this.pipeline.modelName;
+    return model === null ? null : downloadName((this.projectName.value ?? model).replace(/\.moldproj$/i, ''), PROJECT_EXTENSION);
+  }
+
+  /** Whether leaving the page now would lose work: the project differs from what the last save, load or Export ZIP holds. */
+  unsaved(): boolean {
+    return this.pipeline.modelName !== null && this.saved !== null && !sameProject(this.saved, this.pipeline.project());
   }
 
   /**
@@ -342,8 +580,12 @@ export class Store {
     this.exportState.value = { phase: 'running', want, step: 'start', done: 0, total: 1 };
     try {
       const request = { want, fitTest: want === 'zip' && this.fitTestInZip.value };
+      const bytes = this.pipeline.stlBytes;
       const outputs = await this.pipeline.exportParts((progress) => (this.exportState.value = { phase: 'running', want, ...progress }), undefined, request);
       saveBytes(name, save.file ? outputs.files[save.file] : outputs.zip, save.mime);
+      // The ZIP's project.json opens again on this model, so what it holds counts as saved.
+      const json = want === 'zip' ? outputs.files['project.json'] : undefined;
+      if (json && this.pipeline.stlBytes === bytes) this.saved = projectOf(JSON.parse(new TextDecoder().decode(json)) as ProjectFile);
       const error = outputs.diagnostics.find((d) => d.severity === 'error')?.message ?? null;
       this.exportState.value = { phase: 'saved', want, file: name, key: outputs.key, error };
     } catch (error) {

@@ -1,6 +1,7 @@
 import { zipSync } from 'fflate';
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
-import { projectFile, type Project } from '../app/project';
+import { sha256 } from '../app/hash';
+import { projectFile, projectJson, type Project, type StoredPlane } from '../app/project';
 import { APP_NAME, APP_VERSION } from '../app/version';
 import { analyseIntervals, analysisCellProblem, type IntervalReport } from '../core/analysis/intervals';
 import { boreSilicone, placementSettings, replicateOpenings, uncoveredOnComposite } from '../core/analysis/placement';
@@ -65,12 +66,18 @@ export interface ExportInputs {
   needsTrim: boolean;
   planeTol: number;
   openings: ExportOpening[];
+  /** The STL's own bytes, sent only while main does not know their hash, which project.json records. */
+  stl: Uint8Array | null;
 }
 
 /** What main knows and the export does not, for the README, report.json and project.json. */
 export interface ExportMeta {
   /** The STL's file name. */
   model: string;
+  /** SHA-256 of the STL, when main knows it already. */
+  modelSha256: string | null;
+  /** The plane the model stands on, in the STL's coordinates, which project.json keeps beside the choice. */
+  basePlane: StoredPlane | null;
   /** As parsed: the file's own count, and what is left once collapsed triangles are dropped. */
   triangles: { format: 'binary' | 'ascii'; inFile: number; kept: number };
   project: Project;
@@ -136,6 +143,8 @@ export interface ExportOutputs {
   rim: Rim | null;
   diagnostics: Diagnostic[];
   report: ExportReport | null;
+  /** SHA-256 of the STL as project.json has it, which main keeps for the model; null without a model. */
+  modelSha256: string | null;
 }
 
 export type ProgressReport = (step: string, done: number, total: number) => void;
@@ -215,11 +224,11 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     const problem = params.funnel.generate ? crossParameterErrors(params).find((d) => d.code.startsWith('funnel-')) : { message: 'The funnel is turned off under Pour & funnel.' };
     if (problem) throw new InlineError('funnel-unavailable', problem.message);
     const files = { 'funnel.stl': timed('funnel', () => funnelFile(api, params, 0).stl) };
-    return { want, files, zip: new Uint8Array(), clearance: null, rim: null, diagnostics: [], report: null };
+    return { want, files, zip: new Uint8Array(), clearance: null, rim: null, diagnostics: [], report: null, modelSha256: null };
   }
   if (want === 'fit-test') {
     const files = timed('fit-test', () => fitTestFiles(api, params));
-    return { want, files, zip: timed('zip', () => zip(files)), clearance: null, rim: null, diagnostics: [], report: null };
+    return { want, files, zip: timed('zip', () => zip(files)), clearance: null, rim: null, diagnostics: [], report: null, modelSha256: null };
   }
 
   const { meta } = job;
@@ -317,7 +326,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       if (want === 'zip' && scaled.base.mode === 'glue') out['model_oriented.stl'] = modelOrientedStl({ mesh, needsTrim: inputs.needsTrim } as OrientedModel, model);
       return out;
     });
-    if (want !== 'zip') return { want, files, zip: new Uint8Array(), clearance, rim: built.rim, diagnostics, report: null };
+    if (want !== 'zip') return { want, files, zip: new Uint8Array(), clearance, rim: built.rim, diagnostics, report: null, modelSha256: meta.modelSha256 };
 
     if (job.fitTest) Object.assign(files, timed('fit-test', () => fitTestFiles(api, params)));
     return timed('zip', () => {
@@ -393,8 +402,9 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       const text = new TextEncoder();
       files['README.txt'] = text.encode(readme);
       files['report.json'] = text.encode(`${JSON.stringify(report, null, 2)}\n`);
-      files['project.json'] = text.encode(`${JSON.stringify(projectFile(meta.project, meta.model), null, 2)}\n`);
-      return { want, files, zip: zip(files), clearance, rim: built.rim, diagnostics, report };
+      const modelSha256 = meta.modelSha256 ?? (inputs.stl ? sha256(inputs.stl) : null);
+      files['project.json'] = text.encode(projectJson(projectFile(meta.project, meta.model, { modelSha256, basePlane: meta.basePlane })));
+      return { want, files, zip: zip(files), clearance, rim: built.rim, diagnostics, report, modelSha256 };
     });
   });
 }

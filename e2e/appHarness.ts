@@ -74,8 +74,17 @@ export async function idle(page: Page): Promise<void> {
 
 export async function dropAndWait(page: Page, name: string): Promise<void> {
   await dropExample(page, name);
-  // The file is read before it reaches the pipeline, so wait for the pipeline to hold it first.
-  await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe(name);
+  // The file is read before it reaches the pipeline, so wait for the pipeline to hold it first. A model
+  // with changes not saved asks before another replaces it; these tests keep no such changes, so the
+  // answer is to open without saving. project.spec.ts tests the question itself.
+  await expect
+    .poll(() =>
+      app(page, (a, n: string) => {
+        if (a.store.replacing.value) void a.store.answerReplace('discard');
+        return a.store.pipeline.modelName === n;
+      }, name),
+    )
+    .toBe(true);
   await idle(page);
 }
 

@@ -109,6 +109,9 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'footprint-empty': 'base.minIsland',
   'plane-rough': 'base.planeTol',
   'upper-level-gone': 'base.planeTol',
+  // A project file's saved plane, checked against the plane its choice finds in this version.
+  'plane-found': 'base.planeTol',
+  'plane-mismatch': 'base.planeTol',
   'tiles-merged': 'grid.spacing',
   'thin-tile-wall': 'grid.spacing',
   'pour-shortfall': 'pour.perModel',

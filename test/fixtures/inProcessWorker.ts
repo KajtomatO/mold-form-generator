@@ -3,6 +3,7 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 import { fieldHost, type Post } from '../../src/workers/fieldHost';
 import type { FromWorker, ToWorker, WorkerLike } from '../../src/workers/protocol';
 import { solidHost } from '../../src/workers/solidHost';
+import { runProjectJob, type ProjectJob } from '../../src/workers/projectJob';
 
 /**
  * A worker that runs the real host code in this process. Messages cross by structuredClone with the
@@ -93,5 +94,13 @@ export function inProcessSolid(): WorkerLike {
     const handle = solidHost(api, MeshoptSimplifier, heapBytes, post, now);
     post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: heapBytes() });
     return handle;
+  });
+}
+
+/** project.worker's own job code, in this process. */
+export function inProcessProject(): WorkerLike {
+  return new InProcessWorker(async (post) => (message) => {
+    const { reply, transfer } = runProjectJob(message as ProjectJob);
+    post(reply, transfer);
   });
 }

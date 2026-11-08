@@ -5,6 +5,7 @@ import type { SolidInputs, SolidOutputs, SolidWanted } from './solidStages';
 import type { ExportJob, ExportOutputs } from './exportJob';
 import type { ReportsInputs, ReportsOutputs } from './reportStages';
 import type { WallCheck, WallInputs } from './wallCheck';
+import type { ProjectJob, ProjectReply } from './projectJob';
 
 /**
  * Messages between main and the workers. Every job names the full key of each stage it touches, and
@@ -71,7 +72,7 @@ export interface ReportsJobMessage {
   fault?: Fault;
 }
 
-export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage | WallsJobMessage | ReportsJobMessage;
+export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage | WallsJobMessage | ReportsJobMessage | ProjectJob;
 
 export type Cached = Partial<Record<StageId, string>>;
 
@@ -148,7 +149,7 @@ export interface WallsResultMessage {
   result: WallCheck;
 }
 
-export type FromWorker = ReadyMessage | StageMessage | ResultMessage | MissMessage | ErrorMessage | ProgressMessage | ExportResultMessage | HeapMessage | WallsResultMessage;
+export type FromWorker = ReadyMessage | StageMessage | ResultMessage | MissMessage | ErrorMessage | ProgressMessage | ExportResultMessage | HeapMessage | WallsResultMessage | ProjectReply;
 
 /** The part of Worker the pipeline uses, so tests can stand an in-process worker in for it. */
 export interface WorkerLike {

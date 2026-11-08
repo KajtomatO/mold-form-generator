@@ -1,7 +1,7 @@
 import { findBodies } from '../core/analysis/bodies';
 import { placementSettings, placeOpenings, type OpeningPin, type Placement } from '../core/analysis/placement';
 import { openingSizes, placementSpace, primeSpace, type OpeningKind } from '../core/analysis/validate';
-import { candidateAtLevel, candidateFromPick, findBaseCandidates, levelNear, type BaseCandidate } from '../core/base/candidates';
+import { candidateAtLevel, candidateFromPick, findBaseCandidates, levelNear, pickable, type BaseCandidate } from '../core/base/candidates';
 import { orientToBase, type OrientedModel } from '../core/base/orient';
 import { conditionField } from '../core/field/build';
 import { compositeTiles } from '../core/field/composite';
@@ -82,6 +82,9 @@ export interface CandidateSummary {
   normal: [number, number, number];
   area: number;
   offset: number;
+  /** With the levels, what a project file's saved plane is matched against when its choice no longer finds it. */
+  support: number;
+  levels: BaseCandidate['levels'];
   source: BaseCandidate['source'];
   members: Uint32Array;
 }
@@ -257,6 +260,9 @@ export class FieldStages {
         const soup = outcome.soup ? { openLoops: outcome.openLoops } : undefined;
         const ranked = findBaseCandidates(mesh, base, soup);
         if (ranked.length === 0) throw new InlineError('no-base', 'This model has no flat face to stand on a base.');
+        // A project file's pick can name a triangle this version's weld does not have. That is the file's
+        // input, not a crash, and the pipeline then stands the model on a ranked face instead.
+        if ('pick' in plane && !pickable(mesh, plane.pick)) throw new InlineError('plane-pick', `The face picked as the base, triangle ${plane.pick + 1}, is not a face of this model. Choose the base face again.`);
         let chosen = 'rank' in plane ? ranked[Math.min(plane.rank, ranked.length - 1)] : candidateFromPick(mesh, plane.pick, base, ranked);
         const diagnostics: Diagnostic[] = [];
         if (plane.upper !== false) {
@@ -265,7 +271,7 @@ export class FieldStages {
           else diagnostics.push({ code: 'upper-level-gone', severity: 'warning', message: `The upper level ${plane.upper.toFixed(2)} mm in is not found at this plane tolerance, so the model stands on the plane itself.` });
         }
         const oriented = orientToBase(mesh, chosen, { planeTol, soup: outcome.soup, openLoops: outcome.openLoops });
-        const candidates = ranked.map((c): CandidateSummary => ({ normal: c.normal, area: c.area, offset: c.offset, source: c.source, members: c.members }));
+        const candidates = ranked.map((c): CandidateSummary => ({ normal: c.normal, area: c.area, offset: c.offset, support: c.support, levels: c.levels, source: c.source, members: c.members }));
         const modelVolume = volumeAbovePlane(exteriorMesh(oriented.mesh));
         return { candidates, chosen, oriented, bounds: meshBounds(oriented.mesh.positions), planeTol, modelVolume, diagnostics: [...diagnostics, ...oriented.diagnostics] };
       });

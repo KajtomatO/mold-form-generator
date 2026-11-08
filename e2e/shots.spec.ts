@@ -1,8 +1,9 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { EXAMPLE_FILES } from '../test/fixtures/loadExamples';
-import { app, canDraw, dropAndWait, hooks, openApp } from './appHarness';
+import { app, canDraw, dropAndWait, dropExample, hooks, openApp } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
 
 /**
@@ -38,15 +39,23 @@ interface Shot {
   dragInvalid?: boolean;
   /** One change made, and the undo button's title drawn under it: a native tooltip is not in a screenshot. */
   undoTitle?: boolean;
+  /**
+   * M9: Save project pressed and the file opened again, so the row names the project; a file that is no
+   * ZIP opened as a .moldproj, with its inline error; M8's version 1 project.json, with its notice; or
+   * another STL dropped on a model with changes not saved, with the question it asks.
+   */
+  project?: 'opened' | 'corrupt' | 'migrated' | 'replace';
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
 const SIDEBAR_SETS = (browser: Browser, width: number, theme: Theme): boolean => (browser === 'firefox' ? width === 1366 && theme === 'dark' : (width === 1366) === (theme === 'dark'));
 // The export: every size and theme in Chromium, and the user's browser at 1366 x 768 in the dark theme.
 const EXPORT_SETS = (browser: Browser, width: number, theme: Theme): boolean => browser === 'chromium' || (width === 1366 && theme === 'dark');
-// M7's reports take the same sets as the export, and so do M8's view tools.
+// M7's reports take the same sets as the export, and so do M8's view tools and M9's project files.
 const REPORT_SETS = EXPORT_SETS;
 const VIEW_SETS = EXPORT_SETS;
+const PROJECT_SETS = EXPORT_SETS;
+const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
   { name: 'benchy', file: EXAMPLE_FILES.benchy, grid: [1, 1] },
@@ -72,6 +81,12 @@ const CASES: Shot[] = [
   { name: 'x8-3x3-drag-invalid', file: EXAMPLE_FILES.x8, grid: [3, 3], topView: true, dragInvalid: true, only: VIEW_SETS },
   { name: 'benchy-top-view', file: EXAMPLE_FILES.benchy, grid: [1, 1], topView: true, only: VIEW_SETS },
   { name: 'jersey-undo-title', file: EXAMPLE_FILES.jersey, grid: [1, 1], undoTitle: true, only: VIEW_SETS },
+  // The Save and Open controls with a model loaded: the jersey shot of the Model section at the top.
+  { name: 'jersey-save-open', file: EXAMPLE_FILES.jersey, grid: [1, 1], only: PROJECT_SETS },
+  { name: 'jersey-project-opened', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'opened', only: PROJECT_SETS },
+  { name: 'jersey-project-corrupt', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'corrupt', only: PROJECT_SETS },
+  { name: 'jersey-project-migrated', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'migrated', only: PROJECT_SETS },
+  { name: 'jersey-replace-prompt', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'replace', only: PROJECT_SETS },
 ];
 
 const SIZES = [
@@ -107,6 +122,31 @@ test.describe('review screenshots', () => {
             await dropAndWait(page, shot.file);
             if (shot.grid[0] * shot.grid[1] > 1) await expect.poll(() => hooks(page, (h) => h.walls().result !== null), { timeout: 120_000 }).toBe(true);
             if (shot.name === 'vis35-two-levels') await expect(page.getByTestId('upper-level')).toBeVisible();
+            const input = page.locator('[data-section="model"] input[type="file"]');
+            if (shot.project === 'opened') {
+              await hooks(page, (h) => h.setParam('silicone.t', 3.5));
+              await hooks(page, (h) => h.idle());
+              const download = page.waitForEvent('download');
+              await page.getByTestId('save-project').click();
+              const saved = await download;
+              const bytes = await readFile(await saved.path());
+              // Named as a maker might rename a copy, so the row shows the project's name beside the STL's.
+              await input.setInputFiles({ name: 'jersey for the shelf.moldproj', mimeType: 'application/octet-stream', buffer: bytes });
+              await expect(page.getByTestId('project-name')).toHaveText('jersey for the shelf.moldproj');
+              await hooks(page, (h) => h.idle());
+            } else if (shot.project === 'corrupt') {
+              await input.setInputFiles({ name: 'jersey-barrier.moldproj', mimeType: 'application/octet-stream', buffer: Buffer.from('solid jersey\nendsolid jersey\n') });
+              await expect(page.getByTestId('file-notice')).toHaveAttribute('data-severity', 'error');
+            } else if (shot.project === 'migrated') {
+              await input.setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: V1_PROJECT });
+              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 2');
+              await hooks(page, (h) => h.idle());
+            } else if (shot.project === 'replace') {
+              await hooks(page, (h) => h.setParam('silicone.t', 3.5));
+              await hooks(page, (h) => h.idle());
+              await dropExample(page, EXAMPLE_FILES.barrel);
+              await expect(page.getByTestId('replace-prompt')).toBeVisible();
+            }
             if (!keepCard && (await card.count()) > 0) await card.getByRole('button', { name: 'Dismiss' }).click();
             // The fixed camera: front right, above, at a distance set by the box.
             await hooks(page, (h) => {

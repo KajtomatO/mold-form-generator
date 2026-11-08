@@ -153,7 +153,7 @@ export function exportReadme(input: ReadmeInput): string {
     out.push(...wrap('Small test pieces of the joint between base and cover, to find the clearances that suit your printer before you print the real mold. fit_test/README.txt says how to read them.', '  '));
   }
   out.push('', 'report.json and project.json');
-  out.push(...wrap('Every number of this export, and the settings it was made with, so the same mold can be made again.', '  '));
+  out.push(...wrap(`Every number of this export, and the settings it was made with. To make the same mold again, open ${input.model} in the app, then open this ZIP or its project.json there: the settings, the base face and the openings come back as they were. project.json records the STL's SHA-256, so the app can tell whether the model is the same.`, '  '));
 
   out.push(...heading('Printing'));
   item('The parts are saved the way up they print best, so do not flip them over or lay them on another side in your slicer. Turning one about the vertical axis to fit your bed is fine.');

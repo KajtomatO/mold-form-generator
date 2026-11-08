@@ -1,5 +1,7 @@
 import { render } from 'preact';
+import { saveBytes } from '../app/download';
 import { Pipeline, type PipelineOptions } from '../app/pipeline';
+import { ProjectFiles } from '../app/projectFiles';
 import { Store } from '../app/store';
 import { installTestHooks, recordWorkers } from '../app/testHooks';
 import { PreviewScene } from '../view/scene';
@@ -21,7 +23,8 @@ const options: PipelineOptions = {
   reports: query.get('reports') !== '0',
 };
 const pipeline = new Pipeline(options);
-const store = new Store(pipeline);
+const files = new ProjectFiles(() => new Worker(new URL('../workers/project.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike);
+const store = new Store(pipeline, undefined, files);
 document.documentElement.dataset.theme = store.theme.value;
 
 // The view is made before the UI, so it exists for the test hooks. Without WebGL 2 the rest still runs.
@@ -44,5 +47,6 @@ if (test) {
     return new Uint8Array(await response.arrayBuffer());
   };
   installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel, solidWorkers.records);
-  (window as unknown as { __app: unknown }).__app = { store, scene };
+  // saveBytes too, so a test can time the very download Save project makes on a file too large to load.
+  (window as unknown as { __app: unknown }).__app = { store, scene, saveBytes };
 }

@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "0.1.0",
+  "model": "jersey-barrier.stl",
+  "params": {
+    "base": {
+      "mode": "glue",
+      "thickness": 4,
+      "pocketDepth": 0.4,
+      "pocketEnlarge": 0.2,
+      "planeTol": null,
+      "minIsland": 5,
+      "cornerRadius": 3,
+      "bedReliefHeight": 0.4,
+      "bedReliefRun": 0.3
+    },
+    "silicone": {
+      "t": 3.5,
+      "wallDraftDeg": 1,
+      "closeWidth": 1.2,
+      "density": 1.1,
+      "printMargin": null
+    },
+    "cover": {
+      "wall": 3.5,
+      "topCap": 5,
+      "topChamfer": 0.4
+    },
+    "joint": {
+      "taperDeg": 15,
+      "taperClearance": 0.1,
+      "landInner": 2,
+      "landOuter": 2,
+      "ridgeWidth": 1.6,
+      "ridgeHeight": 1.2,
+      "ridgeDraftDeg": 10,
+      "grooveClearance": 0.25,
+      "grooveExtraDepth": 0.3,
+      "baseProud": 0.2,
+      "pryNotches": true,
+      "pryWidth": 12,
+      "pryHeight": 1.2
+    },
+    "pour": {
+      "perModel": 1,
+      "diameter": 10,
+      "minLand": 1.5
+    },
+    "vents": {
+      "enabled": true,
+      "diameter": 2.5,
+      "persistence": null
+    },
+    "seat": {
+      "enabled": true,
+      "depth": 3,
+      "halfAngleDeg": 30
+    },
+    "funnel": {
+      "generate": true,
+      "topDiameter": 40,
+      "height": 30,
+      "neckHeight": 10,
+      "wall": 1.2,
+      "tipWall": 0.86,
+      "seatClearance": 0.1
+    },
+    "grid": {
+      "nx": 1,
+      "ny": 1,
+      "spacing": null,
+      "edge": null
+    },
+    "print": {
+      "layerHeight": 0.2,
+      "nozzle": 0.4,
+      "bedX": 220,
+      "bedY": 220,
+      "bedZ": 250,
+      "infill": 0.35,
+      "density": 1.24,
+      "tapeStrip": 10
+    },
+    "quality": {
+      "cellFinal": 0.125,
+      "cellPreview": null,
+      "analysisCell": 0.25,
+      "tinTolFinal": 0.05,
+      "tinTolPreview": 0.1
+    },
+    "reports": {
+      "minVolumeMl": 0.05,
+      "undersidePersistence": 0.3
+    }
+  },
+  "plane": {
+    "rank": 0,
+    "upper": false
+  },
+  "pins": [
+    {
+      "id": "b0:pour:0",
+      "kind": "pour",
+      "x": 0.05815531445795405,
+      "y": 1.023116063279824
+    }
+  ],
+  "removed": [
+    "b0:vent:beside"
+  ]
+}
