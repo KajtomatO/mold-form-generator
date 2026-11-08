@@ -14,7 +14,7 @@ import { fileKind, holdsModel, PROJECT_EXTENSION } from './projectArchive';
 import { OPEN_INSTEAD, ProjectError, type ProjectNote } from './projectFile';
 import type { ProjectFiles } from './projectFiles';
 import { setParamValue, type ParamPath } from './stages';
-import type { Opened } from '../workers/projectJob';
+import { READ_IN_WORKER_BYTES, readStl, type Opened } from '../workers/projectJob';
 
 export type Theme = 'dark' | 'light';
 
@@ -282,9 +282,43 @@ export class Store {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (ticket !== this.opens) return;
     const kind = fileKind(file.name, bytes);
-    if (kind === 'stl') this.replaceOrAsk(file.name, () => this.load(bytes, file.name));
+    if (kind === 'stl') await this.openStl(bytes, file.name, ticket);
     else if (kind === 'other') this.fileNotice.value = { severity: 'error', message: `${file.name} is not an STL or a project file, so it was not opened. ${OPEN_INSTEAD}`, notes: [] };
     else await this.openProject(bytes, file.name, kind, ticket);
+  }
+
+  /**
+   * An STL is read first, so one that cannot be read says why under the file row and leaves the
+   * model on screen as it was; one that reads with a warning, such as a header count its size does not
+   * fit, loads and says so there, naming the file.
+   */
+  private async openStl(bytes: Uint8Array, name: string, ticket: number): Promise<void> {
+    if (!this.files) {
+      this.replaceOrAsk(name, () => this.load(bytes, name));
+      return;
+    }
+    this.fileNotice.value = null;
+    this.fileBusy.value = `Reading ${name}…`;
+    try {
+      // A small file is read here at once; a large one in a worker, as reading 150 MB takes a second or two.
+      const loaded = this.pipeline.modelName !== null;
+      const checked = bytes.length < READ_IN_WORKER_BYTES ? { bytes, ...readStl(bytes, name, loaded) } : await this.files.check(bytes, name, loaded);
+      if (ticket !== this.opens) return;
+      this.replaceOrAsk(name, () => {
+        this.load(checked.bytes, name);
+        // A large file's hash is known now, so the export is not sent a copy of it to hash.
+        if (checked.sha256) this.pipeline.noteModelSha256(checked.bytes, checked.sha256);
+        if (checked.warnings.length > 0) this.fileNotice.value = { severity: 'warning', message: `Opened ${name}, with a warning.`, notes: checked.warnings.map((message) => ({ severity: 'warning', message })) };
+      });
+    } catch (error) {
+      if (ticket !== this.opens) return;
+      this.fileNotice.value =
+        error instanceof ProjectError
+          ? { severity: 'error', message: error.message, notes: [], details: error.details }
+          : { severity: 'error', message: `${name} could not be opened, as reading it failed. Try again.`, notes: [], details: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (ticket === this.opens) this.fileBusy.value = null;
+    }
   }
 
   /**

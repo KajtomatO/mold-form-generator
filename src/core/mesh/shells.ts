@@ -72,7 +72,8 @@ function isManifoldError(error: unknown): error is { code: ErrorStatus } {
   return error instanceof Error && error.name === 'ManifoldError';
 }
 
-function reversed(indices: Uint32Array): Uint32Array {
+/** The same triangles wound the other way round. */
+export function reversed(indices: Uint32Array): Uint32Array {
   const out = indices.slice();
   for (let i = 0; i < out.length; i += 3) {
     out[i + 1] = indices[i + 2];
@@ -199,7 +200,8 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
     {
       code: 'soup-mode',
       severity: 'warning',
-      message: `The mesh is not a closed solid (${defects}), so merged mode is disabled, and the cover and glue mode work from the raster without a verified clearance.`,
+      // Said whatever the mode is set to, as one set before this model, or by a project file, stays set.
+      message: `The mesh is not a closed solid (${defects}), so merged mode cannot be used with it, and the cover and the glue-mode base are built from its surface as it is. Without a closed model the silicone thickness cannot be measured: it stays as planned, and no export can check it. To use merged mode and a measured thickness, repair the mesh, for example with your slicer's repair, and open it again.`,
     },
   ];
   if (audit.openArea >= MISSING_SURFACE_MM2) {
@@ -207,7 +209,7 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
     diagnostics.push({
       code: 'missing-surface',
       severity: 'info',
-      message: `The surface has ${audit.openLoops.length} holes totalling ${audit.openArea.toFixed(1)} mm2.`,
+      message: `${audit.openLoops.length === 1 ? `The surface has 1 hole of ${audit.openArea.toFixed(1)} mm2` : `The surface has ${audit.openLoops.length} holes totalling ${audit.openArea.toFixed(1)} mm2`}. Close ${audit.openLoops.length === 1 ? 'it' : 'them'} in the program that made the model, or with a mesh repair, and open the file again.`,
     });
   }
 

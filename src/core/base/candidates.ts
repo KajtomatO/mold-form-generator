@@ -8,6 +8,8 @@ export interface BaseOptions {
   planeTol: number;
   /** For the footprint only: smaller components are dropped from it, in mm2. Detection ignores this. */
   minIsland: number;
+  /** How many of the largest bins to examine. examinedBins of the triangle count, unless a test sets it. */
+  bins?: number;
 }
 
 /** What only soup mode knows. Passing it also says the mesh's winding cannot be trusted. */
@@ -51,6 +53,19 @@ const BIN = 1.5 * DEGREE;
 const CANDIDATE_LIMIT = 8;
 // Each examined bin costs a pass over the mesh, and a real face this far down the list is unusual.
 const EXAMINED_BIN_LIMIT = 128;
+/**
+ * M11: past this many triangles, fewer bins, so the passes stay about what 128 cost at this size. A rough
+ * 3 million triangle surface fills hundreds of bins with no face in any, and all 128 took 10 s; a flat
+ * face a heavy model stands on is among its largest bins. None of the examples comes near this.
+ */
+const EXAMINED_TRIANGLES = 300_000;
+const MIN_EXAMINED_BINS = 16;
+
+/** How many of the largest bins a mesh of this many triangles has examined. */
+export function examinedBins(triangles: number): number {
+  if (triangles <= EXAMINED_TRIANGLES) return EXAMINED_BIN_LIMIT;
+  return Math.max(MIN_EXAMINED_BINS, Math.floor((EXAMINED_BIN_LIMIT * EXAMINED_TRIANGLES) / triangles));
+}
 /** Reach of the tolerance slider (1 mm). Beyond this a flat face is a ledge, not a second level. */
 export const NEAR_SUPPORT_RANGE = 1;
 const COS_FLAT = Math.cos(BIN);
@@ -549,7 +564,7 @@ export function findBaseCandidates(mesh: WeldedMesh, options: BaseOptions, soup?
   const accepted: BaseCandidate[] = [];
   const known = (n: Vec3): boolean => accepted.some((c) => c.normal[0] * n[0] + c.normal[1] * n[1] + c.normal[2] * n[2] > COS_FLAT);
   const roughTried: Vec3[] = [];
-  for (const bin of histogram.bins.slice(0, EXAMINED_BIN_LIMIT)) {
+  for (const bin of histogram.bins.slice(0, options.bins ?? examinedBins(mesh.indices.length / 3))) {
     if (accepted.length === CANDIDATE_LIMIT) break;
     let direction = exactNormal(byBin, start[bin], start[bin + 1], shape);
     if (!direction) {

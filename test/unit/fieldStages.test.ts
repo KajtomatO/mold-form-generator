@@ -61,3 +61,39 @@ describe('the staged field', () => {
     expect(previewCell(params, box)).toBe(0.75);
   });
 });
+
+describe('what S2 brings the section\'s cut (M11)', () => {
+  /** S1 and S2 of an example at defaults, as field.worker builds them. */
+  const s2 = (id: ExampleId) => {
+    const params = defaultParams();
+    return new FieldStages().run(stageKeys(params, INPUTS), ['S1', 'S2'], params, { file: exampleBytes(id).slice().buffer, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] });
+  };
+
+  it('Benchy\'s 8 sealed letters, in the file\'s coordinates, and no void shell to leave out', () => {
+    const { S1, S2 } = s2('benchy');
+    expect(S2!.sealedAir.recesses).toBe(8);
+    expect(S2!.exterior).toBeNull();
+    // The surface is in the file's coordinates: under the transform, each of its points lies within the
+    // recesses' 0.30 mm over the plane, or at the fan's apex, 1 mm under the plane's tolerance band.
+    const [, , , , , , g, h, i] = S2!.oriented.transform.rotation;
+    const p = S2!.sealedAir.surface!.positions, tz = S2!.oriented.transform.translation[2];
+    let low = Infinity, high = -Infinity;
+    for (let k = 0; k < p.length; k += 3) {
+      const z = g * p[k] + h * p[k + 1] + i * p[k + 2] + tz;
+      low = Math.min(low, z);
+      high = Math.max(high, z);
+    }
+    expect(low).toBeCloseTo(-1 - S2!.planeTol, 4);
+    expect(high).toBeCloseTo(0.3, 3);
+    expect(S1!.welded.indices.length).toBeGreaterThan(0);
+  });
+
+  it('the barrel\'s triangles less its void shell, and no sealed recess', () => {
+    const { S1, S2 } = s2('barrel');
+    expect(S2!.sealedAir).toEqual({ surface: null, recesses: 0 });
+    const kept = S2!.exterior!;
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(S1!.welded.indices.length);
+    expect(kept.length % 3).toBe(0);
+  });
+});

@@ -378,7 +378,7 @@ describe('peaks and placement on the 7 examples', () => {
       expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThanOrEqual(slack);
     });
 
-    it('x8 2 x 1: copies sit on the export plan\'s pitch, though the preview\'s field runs wider', () => {
+    it('x8 2 x 1: copies sit on the export plan\'s pitch, as the preview\'s tiles do to within half a cell', () => {
       const params = paramsWith((p) => (p.grid.nx = 2));
       const { mesh, bounds } = orientedExample('x8');
       const preview = planOpenings(mesh, bounds, params, { cell: 0.5 });

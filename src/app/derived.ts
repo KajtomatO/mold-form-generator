@@ -113,6 +113,12 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'bolt-collision': 'bolts.minWall',
   // toolDiagnostics: the cavity's reach is set by the room the edge leaves.
   'tool-outside-rebate': 'grid.edge',
+  // An open mesh: merged mode needs a closed solid, so its note goes under the mode it turns off.
+  'soup-mode': 'base.mode',
+  'mode-b-disabled': 'base.mode',
+  // G1.8: a model past 2M triangles merges a simplified copy, and says by how much.
+  'mode-b-simplified': 'base.mode',
+  'mode-b-unsimplified': 'base.mode',
   // The base, the footprint and the grid.
   'base-layers': 'base.thickness',
   'pocket-layers': 'base.pocketDepth',
@@ -120,6 +126,11 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'footprint-empty': 'base.minIsland',
   'plane-rough': 'base.planeTol',
   'upper-level-gone': 'base.planeTol',
+  // What the chosen face implies, which shows in the Model section under the face list, where it is chosen.
+  'below-plane': 'base.planeTol',
+  'below-plane-soup': 'base.planeTol',
+  'missing-top-surface': 'base.planeTol',
+  'base-from-hole': 'base.planeTol',
   // A project file's saved plane, checked against the plane its choice finds in this version.
   'plane-found': 'base.planeTol',
   'plane-mismatch': 'base.planeTol',

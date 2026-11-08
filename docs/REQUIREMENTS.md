@@ -205,6 +205,7 @@ Base-mounted displacers for overhangs, bottom-fill channel, shell-and-rib cover,
 | `bench.html` numbers from the user's machine | User | answered 2026-11-07, see `docs/DEPLOY.md` |
 | Run browser tests in Firefox too, since the user's browser is Firefox and the plan assumed Chromium | Builder | done 2026-11-07, on Firefox 155 (the newest build Playwright 1.63 ships, while the user runs 158). The WebGL tests need `xvfb`: without it they skip and `scripts/ci.sh` says so |
 | Whether 3 mm holds up in use, whether a top pour behaves as modelled, tape sealing, cure inhibition | User, by test pour | open |
+| M11's "peak RSS sampled from /proc under 3 GB" on the 3 million triangle input is not met as written: each process's RSS summed over the browser peaked at 2,789 to 3,010 MiB in Chromium and 3,088 to 3,171 MiB in Firefox, where 3 GB is 2,861 MiB. That sum counts every page the browser's processes share once per process; counted once (PSS) the peaks are 2,158 to 2,375 and 2,759 to 2,843 MiB, Firefox's within 18 MiB of 3 GB. Firefox's parent process, which the page has no hold on, holds 964 to 1,021 MiB of its RSS. The test holds PSS under 3 GB and reports summed RSS as a deviation. Accept PSS as the measure, or ask for the memory to come down (`docs/PLAN.md`, Measured at M11a) | User | open, since 2026-11-08 |
 
 ## 10. Verification matrix
 

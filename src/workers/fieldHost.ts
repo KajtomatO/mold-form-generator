@@ -2,7 +2,7 @@ import type { OrientedModel } from '../core/base/orient';
 import { FieldStages, StageMiss, type CandidateSummary, type FieldOutput, type FieldOutputs, type ParsedModel, type PlacementOutput } from './fieldStages';
 import { applyDelay, buffersOf, injectedCrash, isInlineError, type FromWorker, type ToWorker } from './protocol';
 import type { BaseCandidate } from '../core/base/candidates';
-import type { Bounds } from '../core/mesh/weld';
+import type { Bounds, WeldedMesh } from '../core/mesh/weld';
 import type { Diagnostic } from '../core/report/diagnostics';
 import { ReportStages } from './reportStages';
 import { checkWalls } from './wallCheck';
@@ -17,6 +17,8 @@ export interface OrientedWire {
   bounds: Bounds;
   planeTol: number;
   modelVolume: number;
+  exterior: Uint32Array | null;
+  sealedAir: { surface: WeldedMesh | null; recesses: number | null };
   diagnostics: Diagnostic[];
 }
 
@@ -40,12 +42,16 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
     arrays.push(welded.positions, welded.indices);
   }
   if (outputs.S2) {
-    const { oriented, chosen, candidates, ...rest } = outputs.S2;
+    const { oriented, chosen, candidates, exterior, sealedAir, ...rest } = outputs.S2;
     const { mesh: _mesh, ...orientedRest } = oriented;
     const members = chosen.members.slice();
     const listed = candidates.map((c) => ({ ...c, members: c.members.slice() }));
-    out.S2 = { ...rest, candidates: listed, chosen: { ...chosen, members }, oriented: orientedRest };
+    const kept = exterior?.slice() ?? null;
+    const surface = sealedAir.surface ? { positions: sealedAir.surface.positions.slice(), indices: sealedAir.surface.indices.slice() } : null;
+    out.S2 = { ...rest, candidates: listed, chosen: { ...chosen, members }, oriented: orientedRest, exterior: kept, sealedAir: { surface, recesses: sealedAir.recesses } };
     arrays.push(members, ...listed.map((c) => c.members));
+    if (kept) arrays.push(kept);
+    if (surface) arrays.push(surface.positions, surface.indices);
   }
   if (outputs.S6) {
     const values = outputs.S6.field.values.slice();

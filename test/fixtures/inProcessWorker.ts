@@ -1,5 +1,6 @@
 import Module, { type ManifoldToplevel } from 'manifold-3d';
 import { MeshoptSimplifier } from 'meshoptimizer';
+import type { HeavyLimits } from '../../src/core/mesh/simplify';
 import { fieldHost, type Post } from '../../src/workers/fieldHost';
 import type { FromWorker, ToWorker, WorkerLike } from '../../src/workers/protocol';
 import { solidHost } from '../../src/workers/solidHost';
@@ -73,8 +74,8 @@ export function inProcessField(): WorkerLike {
   });
 }
 
-/** A fresh WASM instance per worker, as a respawn in the browser gets. */
-export function inProcessSolid(): WorkerLike {
+/** A fresh WASM instance per worker, as a respawn in the browser gets. `limits` brings G1.8's path within a test's reach. */
+export function inProcessSolid(limits?: HeavyLimits): WorkerLike {
   return new InProcessWorker(async (post) => {
     let memory: WebAssembly.Memory | null = null;
     const api: ManifoldToplevel = await Module({
@@ -91,7 +92,7 @@ export function inProcessSolid(): WorkerLike {
     api.setup();
     await MeshoptSimplifier.ready;
     const heapBytes = (): number | null => (memory ? memory.buffer.byteLength : null);
-    const handle = solidHost(api, MeshoptSimplifier, heapBytes, post, now);
+    const handle = solidHost(api, MeshoptSimplifier, heapBytes, post, now, limits);
     post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: heapBytes() });
     return handle;
   });

@@ -18,11 +18,20 @@ import { defaultParams } from '../../src/core/params/defaults';
 import { SCHEMA_VERSION } from '../../src/core/params/schema';
 import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import type { WorkerLike } from '../../src/workers/protocol';
-import { runProjectJob, type Opened } from '../../src/workers/projectJob';
+import { HASH_ON_READ_BYTES, runProjectJob, type Opened } from '../../src/workers/projectJob';
 import { inProcessField, inProcessProject, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
 import { declaredSize, raised, zipDates } from '../fixtures/projectFiles';
-import { box, join as joinMeshes } from '../fixtures/synthetic';
+import { asciiStl, box, join as joinMeshes, toSoup } from '../fixtures/synthetic';
+
+/** A binary STL of these triangles, with `count` in its header in place of the real one. */
+function binaryOf(soup: Float32Array, count: number): Uint8Array {
+  const bytes = new Uint8Array(84 + 50 * (soup.length / 9));
+  const view = new DataView(bytes.buffer);
+  view.setUint32(80, count, true);
+  for (let t = 0; t < soup.length / 9; t++) for (let k = 0; k < 9; k++) view.setFloat32(84 + 50 * t + 12 + 4 * k, soup[t * 9 + k], true);
+  return bytes;
+}
 
 const fixtures = join(import.meta.dirname, '..', 'fixtures', 'projects');
 const fixture = (name: string): string => readFileSync(join(fixtures, name), 'utf8');
@@ -380,7 +389,7 @@ describe('project.worker\'s jobs', () => {
     const garbage = strToU8('solid nothing here');
     const unreadable = zipSync({ [PROJECT_ENTRY]: strToU8(projectJson(file((f) => (f.modelSha256 = nodeSha(garbage))))), [MODEL_ENTRY]: garbage });
     const { reply } = run(unreadable, 'unreadable.moldproj');
-    expect(reply).toMatchObject({ t: 'project-error', message: `unreadable.moldproj is damaged: the model inside it cannot be read. ${OPEN_AGAIN}`, details: 'model.stl: This does not look like an STL file: it is too small.' });
+    expect(reply).toMatchObject({ t: 'project-error', message: `unreadable.moldproj is damaged: the model inside it cannot be read. ${OPEN_AGAIN}`, details: 'model.stl: The STL file contains no usable triangles.' });
     const bare = zipSync({ [PROJECT_ENTRY]: strToU8(projectJson(file())) });
     expect(open(bare, 'bare.moldproj')).toBe(`bare.moldproj is damaged: the model saved inside it is missing. ${OPEN_AGAIN}`);
     expect(open(zipSync({ [PROJECT_ENTRY]: strToU8('{"schemaVersion": 2,'), [MODEL_ENTRY]: stl }), 'bad.moldproj')).toBe(`bad.moldproj is damaged: its settings cannot be read. ${OPEN_AGAIN}`);
@@ -718,6 +727,51 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(p.geometryHash()).toEqual(before.hash);
   });
 
+  it('M11: an STL is read before it replaces the model, so one that cannot be read leaves it as it was, naming the file; a clamped count loads with a warning; and the hash is known from the read', async () => {
+    const store = new Store(fresh(), () => 0, files);
+    const p = store.pipeline;
+    // On an empty page there is no model on screen to stay, so the reason does not mention one.
+    await store.openFile(new File([new Uint8Array(0)], 'first.stl'));
+    expect(store.fileNotice.value).toMatchObject({ severity: 'error', message: 'first.stl cannot be opened: The file is empty. Export the STL again from the program that made it.' });
+    expect(p.modelName).toBeNull();
+    await store.openFile(new File([jersey.slice()], EXAMPLE_FILES.jersey));
+    await p.idle();
+    expect(p.modelName).toBe(EXAMPLE_FILES.jersey);
+    // A small file is hashed by the export or a save, as before M11.
+    expect(p.modelSha256).toBeNull();
+    const before = { project: structuredClone(p.project()), hash: p.geometryHash() };
+    const cube = new TextDecoder().decode(asciiStl(toSoup(box([0, 0, 0], [20, 20, 20])), 'cube'));
+    const cases: [string, Uint8Array, string][] = [
+      ['cut.stl', strToU8(cube.slice(0, cube.lastIndexOf('vertex') + 12)), 'The ASCII STL ends in the middle of a triangle, so it looks cut off.'],
+      ['empty.stl', new Uint8Array(0), 'The file is empty.'],
+      ['nothing.stl', strToU8('solid nothing\nendsolid nothing\n'), 'The STL file contains no usable triangles.'],
+    ];
+    for (const [name, bytes, why] of cases) {
+      await store.openFile(new File([bytes.slice()], name));
+      expect(store.fileNotice.value, name).toMatchObject({ severity: 'error', message: `${name} cannot be opened: ${why} The model on screen stays as it was. Export the STL again from the program that made it.` });
+      expect(store.fileBusy.value, name).toBeNull();
+      expect(p.modelName, name).toBe(EXAMPLE_FILES.jersey);
+      expect(p.project(), name).toEqual(before.project);
+    }
+    await p.idle();
+    expect(p.geometryHash()).toEqual(before.hash);
+    // A header of 20 over 12 records: the 12 load, and the warning names the file.
+    const clamped = binaryOf(toSoup(box([0, 0, 0], [20, 20, 20])), 20);
+    await store.openFile(new File([clamped.slice()], 'clamped.stl'));
+    expect(p.modelName).toBe('clamped.stl');
+    expect(store.fileNotice.value).toEqual({ severity: 'warning', message: 'Opened clamped.stl, with a warning.', notes: [{ severity: 'warning', message: 'The file header says 20 triangles but the file holds only 12, so it looks cut off: the 12 were read. Export the STL again from the program that made it.' }] });
+    await p.idle();
+    expect(p.parsed!.value.triangles).toBe(12);
+    // From 32 MB the check works out the hash, so the export is not sent a copy of the file to hash.
+    const big = new Uint8Array(84 + 50 * Math.ceil(HASH_ON_READ_BYTES / 50));
+    new DataView(big.buffer).setUint32(80, (big.length - 84) / 50, true);
+    // Every record a triangle of three distinct corners, so the file is a readable STL.
+    for (let t = 0, view = new DataView(big.buffer); t < (big.length - 84) / 50; t++) for (let k = 0; k < 9; k++) view.setFloat32(84 + 50 * t + 12 + 4 * k, k === 0 ? t % 1000 : k === 4 ? 1 : k === 8 ? 1 + (t % 7) : 0, true);
+    await store.openFile(new File([big.slice()], 'big.stl'));
+    expect(p.modelName).toBe('big.stl');
+    expect(p.modelSha256).toBe(nodeSha(big));
+  }, 120_000);
+
   it('settings from an export ZIP or a project.json apply to the same model in full and as one step, and count as saved; to another model, its parameters alone; with no model, a note', async () => {
     const store = new Store(fresh(), () => 0, files);
     const p = store.pipeline;
@@ -923,7 +977,7 @@ describe('save and open with the real pipeline on jersey', () => {
     // An ASCII STL cut off mid-triangle: the error shows, and Save project does nothing but say why.
     store.load(strToU8('solid broken\nfacet normal 0 0 1\n outer loop\n vertex 0 0 0\n'), 'broken.stl');
     await p.idle();
-    expect(p.status().error).toBe('The ASCII STL ends in the middle of a triangle.');
+    expect(p.status().error).toBe('The ASCII STL ends in the middle of a triangle, so it looks cut off.');
     expect(store.canSave()).toBe(false);
     await store.saveProject();
     expect(saves).toEqual([]);

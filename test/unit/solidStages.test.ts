@@ -213,3 +213,28 @@ describe('the display proxy (G1.8)', () => {
     light.clear();
   }, 60_000);
 });
+
+describe('G1.8\'s copy in the preview\'s base', () => {
+  // jersey's 1,340 triangles past a limit of 1,000, as 3 million are past 2 million.
+  const LIMITS = { limit: 1000, target: 500 };
+
+  it('says what the base used: the copy with its error, or, where the copy is no closed solid, the whole mesh', async () => {
+    await MeshoptSimplifier.ready;
+    const { keys, inputs } = jerseyJob();
+    const codes = (simplifier: typeof MeshoptSimplifier): string[] => {
+      const stages = new SolidStages(api, () => 0, simplifier, LIMITS);
+      const out = stages.run(keys, ['S1', 'S15'], defaultParams(), inputs).S15!;
+      stages.clear();
+      return out.diagnostics.map((d) => d.code);
+    };
+    expect(codes(MeshoptSimplifier)).toContain('mode-b-simplified');
+    // A copy missing a triangle is open, so Manifold refuses it, and the warning says the whole mesh is used.
+    const open: typeof MeshoptSimplifier = { ...MeshoptSimplifier, simplify: (...args: Parameters<typeof MeshoptSimplifier.simplify>) => {
+      const [indices, error] = MeshoptSimplifier.simplify(...args);
+      return [indices.slice(3), error];
+    } };
+    const used = codes(open);
+    expect(used).toContain('mode-b-unsimplified');
+    expect(used).not.toContain('mode-b-simplified');
+  }, 60_000);
+});

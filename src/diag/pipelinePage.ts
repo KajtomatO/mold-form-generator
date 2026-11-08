@@ -1,14 +1,18 @@
 import { Pipeline, type PipelineOptions } from '../app/pipeline';
-import { installTestHooks } from '../app/testHooks';
+import { installTestHooks, recordWorkers } from '../app/testHooks';
 import { PreviewScene } from '../view/scene';
 import type { WorkerLike } from '../workers/protocol';
 
 // A bare harness for the worker pipeline: load a file, run it, draw the cover and base. M6 builds the app on the same parts.
 const query = new URLSearchParams(location.search);
 const test = query.get('test') === '1';
+const spawnField = (): WorkerLike => new Worker(new URL('../workers/field.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike;
+const spawnSolid = (): WorkerLike => new Worker(new URL('../workers/solid.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike;
+// With the test hooks, every worker is recorded, so a soak can see that their number does not grow.
+const fieldWorkers = recordWorkers(spawnField), solidWorkers = recordWorkers(spawnSolid);
 const options: PipelineOptions = {
-  spawnField: () => new Worker(new URL('../workers/field.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
-  spawnSolid: () => new Worker(new URL('../workers/solid.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
+  spawnField: test ? fieldWorkers.spawn : spawnField,
+  spawnSolid: test ? solidWorkers.spawn : spawnSolid,
   frozen: test,
 };
 const pipeline = new Pipeline(options);
@@ -49,6 +53,6 @@ async function fetchModel(name: string): Promise<Uint8Array> {
 const noView = (): never => {
   throw new Error('The page was opened with draw=0, so it has no 3D view.');
 };
-if (test) installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel);
+if (test) installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel, solidWorkers.records, () => [...fieldWorkers.records, ...solidWorkers.records]);
 const model = query.get('model');
 if (model) void fetchModel(model).then((bytes) => pipeline.load(bytes, model), (e: unknown) => (error.textContent = String(e)));

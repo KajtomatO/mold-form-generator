@@ -141,6 +141,8 @@ export interface HeapMessage {
   capacity: number | null;
   used: number | null;
   held: number;
+  /** Manifold and CrossSection handles alive in the worker's arenas (M11). */
+  handles: number;
 }
 
 export interface WallsResultMessage {

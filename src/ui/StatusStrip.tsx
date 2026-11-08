@@ -20,6 +20,8 @@ export function StatusStrip() {
   // open mesh has no solid to measure, so after its export the clearance is unverified, not planned.
   const exported = pipeline.currentExport();
   const measured = exported?.clearance ?? null;
+  // Nor can any export measure it on an open mesh, so it reads unverified from the start.
+  const open = pipeline.modelClosed() === false;
   return (
     <footer class="status" data-testid="status">
       {pipeline.modelName ? (
@@ -35,8 +37,8 @@ export function StatusStrip() {
             <span class="item" data-testid="status-clearance" title="The thinnest silicone between the model and the cover, measured on the parts the last export saved. It holds until a change to the mold.">
               clearance measured {measured.measured.toFixed(2)} mm
             </span>
-          ) : exported ? (
-            <span class="item warn" data-testid="status-clearance" title="The model's mesh has holes, so the last export could not measure the silicone between the model and the cover.">
+          ) : exported || open ? (
+            <span class="item warn" data-testid="status-clearance" title="The model's mesh has holes, so no export can measure the silicone between the model and the cover: it is planned to be at least this.">
               clearance ≥ {t.toFixed(2)} mm, unverified
             </span>
           ) : rim ? (

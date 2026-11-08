@@ -45,6 +45,10 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     if (meshChanged || displayChanged) scene.setModel(mesh, display);
     const transform = p.oriented?.value.oriented.transform ?? null;
     if (changed('transform', transform)) scene.setModelTransform(transform ? toMat4(transform) : null);
+    // S2's help for the cut indexes the mesh S2 was worked out on, so it goes only while that S2 is current:
+    // an import that recomposed the mesh would leave an older one's indices pointing past it.
+    const oriented = p.oriented && p.oriented.key === p.keys().S2 ? p.oriented.value : null;
+    if (changed('extras', oriented)) scene.setModelExtras(oriented ? { exterior: oriented.exterior, sealedAir: oriented.sealedAir } : null);
 
     const field = p.field?.value ?? null;
     if (changed('field', field?.field ?? null)) scene.setField(field?.field ?? null);

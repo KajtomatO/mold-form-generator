@@ -233,7 +233,8 @@ export function buildMergedBase(arena: Arena, body: Manifold, model: Manifold | 
   const mesh = base.getMesh();
   const { steepArea } = auditOverhang({ positions: mesh.vertProperties, indices: mesh.triVerts }, { only: (_x, _y, z) => z > options.planeTol + STUB_RISE });
   const modelOverhangArea = steepArea / options.offsets.length;
-  if (modelOverhangArea > 0) {
+  // Under half a mm2 would read as 0 mm2 needing supports: slivers of the mesh, not an overhang to print.
+  if (modelOverhangArea >= 0.5) {
     diagnostics.push({ code: 'model-overhang', severity: 'info', message: `The model itself has ${modelOverhangArea.toFixed(0)} mm2 of overhang past 45 degrees per copy, which needs supports when it is printed on the base.` });
   }
   return { base, filledVoid, modelOverhangArea, diagnostics };

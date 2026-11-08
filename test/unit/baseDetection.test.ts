@@ -1,6 +1,8 @@
 import type { ManifoldToplevel } from 'manifold-3d';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { autoPlaneTol, candidateAtLevel, candidateFromPick, findBaseCandidates, LEVEL_FLOOR, upperLevel, type BaseCandidate, type BaseOptions, type Vec3 } from '../../src/core/base/candidates';
+import { autoPlaneTol, candidateAtLevel, candidateFromPick, examinedBins, findBaseCandidates, LEVEL_FLOOR, upperLevel, type BaseCandidate, type BaseOptions, type Vec3 } from '../../src/core/base/candidates';
+import { heightBlockMesh, HEAVY_BLOCK } from '../fixtures/heavy';
+import { weld } from '../../src/core/mesh/weld';
 import { buildFootprint, classifyLevels } from '../../src/core/base/footprint';
 import { assertRigid, determinant, orientSolid, orientToBase, planeTransform, transformPositions, trimToBase, type RigidTransform } from '../../src/core/base/orient';
 import { importSolid } from '../../src/core/mesh/shells';
@@ -828,5 +830,38 @@ describe('footprint', () => {
     const mesh = withoutTriangles(box([0, 0, 0], [20, 20, 10]), BOX_TOP);
     expect(importSolidRoute(mesh)).toBe('soup');
     expect(footprintOf(mesh).area).toBeCloseTo(400, 2);
+  });
+});
+
+describe('heavy meshes (M11)', () => {
+  it('examine fewer bins past 300k triangles, as each is a pass over the mesh, and every example all 128', () => {
+    expect(examinedBins(225_154)).toBe(128);
+    expect(examinedBins(300_000)).toBe(128);
+    expect(examinedBins(600_000)).toBe(64);
+    expect(examinedBins(3_011_040)).toBe(16);
+    expect(examinedBins(30_000_000)).toBe(16);
+  });
+
+  it('a rough top that fills hundreds of bins still gives its underside first, past the cap and below it', () => {
+    // 400 x 400 cells is 324,800 triangles, past the cap; its ripple's normals spread over hundreds of bins.
+    const mesh = heightBlockMesh({ ...HEAVY_BLOCK, n: 400 }, weld);
+    const options: BaseOptions = { planeTol: 0.05, minIsland: 5 };
+    const found = findBaseCandidates(mesh, options);
+    expect(found[0].normal).toEqual([0, 0, -1]);
+    expect(found[0].area).toBeCloseTo(10_000, 3);
+    // The four sides tie on area, so their order is no matter.
+    expect(found.map((c) => c.normal.join()).sort()).toEqual(['-1,0,0', '0,-1,0', '0,0,-1', '0,1,0', '1,0,0']);
+  });
+
+  it('at the floor of 16 bins, which 3 million triangles get, the same five candidates, and the underside first', () => {
+    // The plan's 3 million triangle block examines 16; the same block at 400 x 400 cells, held to 16 here,
+    // stands for it in the quick suite. CFG_SOAK checks the 3 million themselves (test/regression/heavy.test.ts).
+    const mesh = heightBlockMesh({ ...HEAVY_BLOCK, n: 400 }, weld);
+    const all = findBaseCandidates(mesh, { planeTol: 0.05, minIsland: 5 });
+    const floor = findBaseCandidates(mesh, { planeTol: 0.05, minIsland: 5, bins: 16 });
+    expect(floor[0].normal).toEqual([0, 0, -1]);
+    expect(floor.map((c) => [c.normal.join(), c.area])).toEqual(all.map((c) => [c.normal.join(), c.area]));
+    // Negative control: too few bins to reach the sides loses them, so the comparison above can fail.
+    expect(findBaseCandidates(mesh, { planeTol: 0.05, minIsland: 5, bins: 1 }).length).toBeLessThan(all.length);
   });
 });

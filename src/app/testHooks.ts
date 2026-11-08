@@ -50,7 +50,9 @@ export interface TestHooks {
   armFault(gate: 'field' | 'solid' | 'export' | 'reports', fault: Fault): void;
   recycleSolid(): void;
   solidCached(): Record<string, string>;
-  heap(): Promise<{ capacity: number | null; used: number | null; held: number }>;
+  heap(): Promise<{ capacity: number | null; used: number | null; held: number; handles: number }>;
+  /** Workers the page has spawned, and those not yet terminated, where the page records them (M11's soak). */
+  workers(): { spawned: number; live: number } | null;
   timing(): Pipeline['timing'];
   /** The factor on the preview cell in use: above 1 after a crash, or on a slow machine. */
   cellScale(): number;
@@ -110,7 +112,7 @@ export function recordWorkers(spawn: () => WorkerLike): { spawn: () => WorkerLik
   };
 }
 
-export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>, solidWorkers: WorkerRecord[] = []): TestHooks {
+export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>, solidWorkers: WorkerRecord[] = [], allWorkers: (() => WorkerRecord[]) | null = null): TestHooks {
   const hooks: TestHooks = {
     async load(name) {
       pipeline.load(await fetchModel(name), name);
@@ -185,6 +187,11 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     },
     exporting: () => ({ active: pipeline.exporting, worker: pipeline.exportWorkerAlive }),
     solidWorkers: () => solidWorkers.map((record) => ({ ...record })),
+    workers: () => {
+      if (!allWorkers) return null;
+      const all = allWorkers();
+      return { spawned: all.length, live: all.filter((record) => !record.terminated).length };
+    },
     reports: () => (pipeline.reports ? { current: pipeline.reports.key === pipeline.keys().S9, value: pipeline.reports.value } : null),
     reportTimes: () => pipeline.reportTimes,
   };

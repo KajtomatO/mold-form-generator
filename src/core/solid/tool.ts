@@ -22,7 +22,8 @@ export interface ToolOptions {
   triangleLimit?: number;
   /**
    * The surface stays under z = 0 past this, so nodes within a cell of its edge stay on the floor. A
-   * preview field can sit wider than the export (G6), and only a preview may pass this, so the
+   * preview's coarser cell can reach past the export's bounds, and its tiles sit up to half a cell off
+   * the export's (G6). Only a preview may pass this, so the
    * preview's cavity cannot cut through a rim placed from the export plan. On an export field this
    * must not bite, since it would take away clearance: see clippedNodes.
    */

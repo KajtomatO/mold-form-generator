@@ -745,6 +745,15 @@ input[type='range']:disabled {
   font-weight: 600;
 }
 
+/* An option that cannot be chosen now, such as merged mode for an open mesh: dashed and muted, as an off button is. */
+.segmented button:disabled {
+  color: var(--ink-2);
+  text-decoration: line-through;
+  outline: 1px dashed var(--line);
+  outline-offset: -2px;
+  cursor: not-allowed;
+}
+
 /* ----- model section ----- */
 
 .file-row {

@@ -89,18 +89,30 @@ describe('STL format detection', () => {
     const parsed = parseStl(bytes);
     expect(parsed.format).toBe('binary');
     expect(parsed.triangleCount).toBe(12);
-    expect(parsed.diagnostics.map((d) => d.code)).toEqual(['stl-count-mismatch']);
-    expect(parsed.diagnostics[0].severity).toBe('warning');
+    expect(parsed.diagnostics).toEqual([{ code: 'stl-count-mismatch', severity: 'warning', message: 'The file header says 5000 triangles but the file holds only 12, so it looks cut off: the 12 were read. Export the STL again from the program that made it.' }]);
   });
 
-  it('keeps only the declared triangles when the file has trailing bytes, and warns', () => {
+  it('keeps only the declared triangles when the file holds more, and warns', () => {
     const full = writeBinaryStl(toSoup(box([0, 0, 0], [1, 1, 1])));
     const bytes = new Uint8Array(full.length + 7);
     bytes.set(full);
     new DataView(bytes.buffer).setUint32(80, 3, true);
     const parsed = parseStl(bytes);
     expect(parsed.triangleCount).toBe(3);
-    expect(parsed.diagnostics.map((d) => d.code)).toEqual(['stl-count-mismatch']);
+    expect(parsed.diagnostics).toEqual([{ code: 'stl-count-mismatch', severity: 'warning', message: 'The file header says 3 triangles but the file has room for 12, so the first 3 were read and the rest left out, and the file may be damaged. Export the STL again from the program that made it.' }]);
+  });
+
+  it.each([[1], [2], [10], [49]])('reads a binary file with %i bytes of padding after the triangles its header counts, with nothing to say', (extra) => {
+    const full = writeBinaryStl(toSoup(box([0, 0, 0], [1, 1, 1])));
+    for (const header of [null, 'solid but really binary']) {
+      const bytes = new Uint8Array(full.length + extra);
+      bytes.set(full);
+      if (header) bytes.set(encode(header), 0);
+      const parsed = parseStl(bytes);
+      expect(parsed.format).toBe('binary');
+      expect(parsed.triangleCount).toBe(12);
+      expect(parsed.diagnostics).toEqual([]);
+    }
   });
 
   it('reads the records of a binary file whose header count was left at 0, and warns', () => {
@@ -109,7 +121,7 @@ describe('STL format detection', () => {
     const parsed = parseStl(bytes);
     expect(parsed.format).toBe('binary');
     expect(parsed.triangleCount).toBe(12);
-    expect(parsed.diagnostics.map((d) => d.code)).toEqual(['stl-count-mismatch']);
+    expect(parsed.diagnostics).toEqual([{ code: 'stl-count-mismatch', severity: 'warning', message: 'The file header gives no triangle count, so the 12 triangles its size holds were read.' }]);
   });
 
   it('falls back to clamped binary when a solid header has no ASCII behind it', () => {
@@ -140,6 +152,45 @@ describe('STL rejection', () => {
 
   it('rejects an ASCII file that stops in the middle of a triangle', () => {
     expectStlError(encode('solid x\nfacet\nvertex 1 2 3\nvertex 4 5 6\n'), 'truncated');
+    // M11: cut off in a vertex line, it is truncated too, not a number that is wrong.
+    expectStlError(encode('solid x\nfacet\nvertex 1 2 3\nvertex 4 5 6\nvertex 7 '), 'truncated');
+    expectStlError(encode('solid x\nfacet\nvertex 1 2 3\nvertex 4 5 6\nvertex'), 'truncated');
+    expect(() => parseStl(encode('solid x\nfacet\nvertex 1 2 3\n'))).toThrow('The ASCII STL ends in the middle of a triangle, so it looks cut off.');
+  });
+
+  // Twelve facets of a box, as an exporter writes them, cut at every kind of place a transfer can stop.
+  const BOX = new TextDecoder().decode(asciiStl(toSoup(box([0, 0, 0], [1.25, 1.25, 1.25])), 'box'));
+  const upTo = (at: number): Uint8Array => encode(BOX.slice(0, at));
+
+  it.each([
+    ['in the middle of a number with an exponent', `${BOX.slice(0, BOX.lastIndexOf('vertex'))}vertex 1 2 1.5e`],
+    ['in the middle of a number after its sign', `${BOX.slice(0, BOX.lastIndexOf('vertex'))}vertex 1 2 -`],
+    ['in the middle of an exponent', `${BOX.slice(0, BOX.lastIndexOf('vertex'))}vertex 1 2 1e+`],
+    ['at a lone point', `${BOX.slice(0, BOX.lastIndexOf('vertex'))}vertex 1 2 .`],
+  ])('calls a file cut %s cut off, not a value that is not a number', (_, text) => {
+    expectStlError(encode(text), 'truncated');
+  });
+
+  it.each([
+    ['inside the last value, which still reads as a number', () => upTo(BOX.lastIndexOf('1.25') + 3)],
+    ['after the last endloop', () => upTo(BOX.lastIndexOf('endloop') + 'endloop'.length)],
+    ['inside a facet normal line', () => upTo(BOX.lastIndexOf('facet normal') + 'facet norm'.length)],
+    ['after facet normal, before any vertex', () => upTo(BOX.lastIndexOf('outer loop'))],
+  ])('refuses a file that stops inside a facet: %s', (_, bytes) => {
+    expectStlError(bytes(), 'truncated');
+  });
+
+  it('loads a file that stops between facets with no endsolid, with a warning that it may be cut off', () => {
+    for (const at of [BOX.lastIndexOf('endsolid'), BOX.lastIndexOf('endsolid') + 'endsol'.length, BOX.lastIndexOf('endfacet') + 'endfacet'.length]) {
+      const parsed = parseStl(upTo(at));
+      expect(parsed.triangleCount).toBe(12);
+      expect(parsed.diagnostics).toEqual([{ code: 'stl-no-end', severity: 'warning', message: 'The ASCII STL has no endsolid line at its end, so it may be cut off: 12 triangles were read. If the model looks incomplete, export the STL again from the program that made it.' }]);
+    }
+    // Cut after an earlier facet: what it holds, said so.
+    expect(parseStl(upTo(BOX.indexOf('endfacet') + 'endfacet'.length)).diagnostics[0].message).toContain(': 1 triangle was read.');
+    // Negative control: the whole file, and a second solid after the first, say nothing.
+    expect(parseStl(encode(BOX)).diagnostics).toEqual([]);
+    expect(parseStl(encode(BOX + BOX)).diagnostics).toEqual([]);
   });
 
   it.each([[4], [2]])('rejects a facet with %i vertices instead of regrouping them into wrong triangles', (corners) => {
@@ -161,7 +212,13 @@ describe('STL rejection', () => {
     expectStlError(writeBinaryStl(new Float32Array(0)), 'empty');
     // A count of 0 and bytes after the header, but less than one whole record.
     expectStlError(new Uint8Array(84 + 49), 'empty');
-    expectStlError(encode('solid x\nendsolid x\n'), 'not-stl');
+    // M11: a text STL with no facet is an empty one, said so, where M1 called it too small to be an STL.
+    expectStlError(encode('solid x\nendsolid x\n'), 'empty');
+    expectStlError(encode(`solid ${'a long name '.repeat(20)}\nendsolid\n`), 'empty');
+    expect(() => parseStl(encode('solid x\nendsolid x\n'))).toThrow('The STL file contains no usable triangles.');
+    // An empty file says that, rather than that it is too small.
+    expectStlError(new Uint8Array(0), 'empty');
+    expect(() => parseStl(new Uint8Array(0))).toThrow('The file is empty.');
   });
 });
 

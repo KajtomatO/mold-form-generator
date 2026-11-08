@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Field } from '../core/field/grid';
-import { exteriorMesh } from '../core/field/sealed';
 import { HeightPreview, type HeightMode } from './heightPreview';
 import { applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
 import { boxMesh, DiagnosticMarkers, OpeningMarkers, placeBox, type BoxSpan, type MarkerSpec, type OpeningMarker } from './overlays';
@@ -28,6 +27,13 @@ export interface SceneOptions {
   interactive?: boolean;
   /** The height preview's fallback path, even where vertex textures work, so a test can draw with it. */
   cpuHeights?: boolean;
+}
+
+/** S2's help for the model's cut: the triangles less the void shells, or null with none, and the air the plate seals. */
+export interface ModelExtras {
+  exterior: Uint32Array | null;
+  /** `recesses` is null where S2 did not look, past the display proxy's limit. */
+  sealedAir: { surface: PartGeometry | null; recesses: number | null };
 }
 
 /** A set of model triangles drawn over everything in one colour, for base confirmation. */
@@ -96,10 +102,15 @@ export class PreviewScene {
   /** The real mesh's geometry for the section's count, when what is drawn is a lighter proxy. */
   private countedModel: { mesh: PartGeometry; geometry: THREE.BufferGeometry } | null = null;
   /**
-   * The real mesh without its void shells, which the silicone's count takes away: no silicone reaches a
-   * hollow sealed inside the model, such as the barrel's, so for the silicone the model is filled there.
+   * What field.worker worked out at S2 for the model's cut (M11): the real mesh's triangles less its void
+   * shells, which the silicone's count takes away, as no silicone reaches a hollow sealed inside the model,
+   * such as the barrel's; and the air the plate seals under the model, such as Benchy's recessed lettering,
+   * a closed surface in the file's coordinates, which it takes away too.
    */
-  private exteriorModel: { mesh: PartGeometry; geometry: THREE.BufferGeometry | null } | null = null;
+  private extras: ModelExtras | null = null;
+  /** Their geometries, built from those once each, the first time a cut needs them. */
+  private exteriorModel: { indices: Uint32Array; geometry: THREE.BufferGeometry } | null = null;
+  private sealedAir: { surface: PartGeometry; geometry: THREE.BufferGeometry } | null = null;
   /** The silicone's solid closed from below: the lattice's rectangle at z = 0, facing down. */
   private readonly siliconeFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1));
   /**
@@ -252,8 +263,9 @@ export class PreviewScene {
     this.picker.setMesh(mesh);
     this.setHighlights([]);
     this.countedModel?.geometry.dispose();
-    this.exteriorModel?.geometry?.dispose();
-    this.countedModel = this.exteriorModel = null;
+    this.exteriorModel?.geometry.dispose();
+    this.sealedAir?.geometry.dispose();
+    this.countedModel = this.exteriorModel = this.sealedAir = null;
     if (display) {
       this.model = new THREE.Mesh(partGeometry(display), this.clip(partMaterial('model', this.styles.model, this.wireframe)));
       this.model.visible = !this.modelAway;
@@ -263,7 +275,7 @@ export class PreviewScene {
     this.requestRender();
   }
 
-  /** The base plane's rigid transform, column-major, or null before there is one. */
+  /** `matrix` takes the file's coordinates to the mold's, column by column, or is null before there is one. */
   setModelTransform(matrix: number[] | null): void {
     this.modelGroup.visible = matrix !== null;
     if (matrix) {
@@ -278,6 +290,12 @@ export class PreviewScene {
   setTiles(offsets: [number, number][]): void {
     this.tiles = offsets.length > 0 ? offsets : [[0, 0]];
     this.placeCopies();
+    this.requestRender();
+  }
+
+  /** S2's extras for the model's cut, for the mesh set last, or null until they come. */
+  setModelExtras(extras: ModelExtras | null): void {
+    this.extras = extras;
     this.requestRender();
   }
 
@@ -644,7 +662,11 @@ export class PreviewScene {
       ];
     };
     const silicone = shows('silicone') && closed ? field(1) : [];
-    if (silicone.length > 0) silicone.push(...models(-1, true));
+    if (silicone.length > 0) {
+      silicone.push(...models(-1, true));
+      const air = this.sealedGeometry();
+      if (air) silicone.push(...[this.model!, ...(this.modelCopies.children as THREE.Mesh[])].map((object) => ({ geometry: air, object, sign: -1 as const })));
+    }
     const solid = (name: 'cover' | 'base'): CapSource[] => {
       if (!shows(name)) return [];
       const built = this.meshes.get(name);
@@ -673,17 +695,32 @@ export class PreviewScene {
     return this.countedModel.geometry;
   }
 
-  /** The real mesh less its void shells, worked out once per mesh, the first time a cut needs it. */
+  /** The real mesh less its void shells, built the first time a cut needs it. A mesh with no void serves as it is. */
   private exteriorGeometry(): THREE.BufferGeometry {
-    const mesh = this.modelMesh;
+    const mesh = this.modelMesh, indices = this.extras?.exterior;
     if (!mesh) throw new Error('No model to count.');
-    if (this.exteriorModel?.mesh !== mesh) {
-      this.exteriorModel?.geometry?.dispose();
-      const exterior = exteriorMesh(mesh);
-      // Null when the mesh has no void, and its counted geometry serves both.
-      this.exteriorModel = { mesh, geometry: exterior === mesh ? null : partGeometry(exterior) };
+    if (!indices) return this.countedGeometry();
+    if (this.exteriorModel?.indices !== indices) {
+      this.exteriorModel?.geometry.dispose();
+      this.exteriorModel = { indices, geometry: partGeometry({ positions: mesh.positions, indices }) };
     }
-    return this.exteriorModel.geometry ?? this.countedGeometry();
+    return this.exteriorModel.geometry;
+  }
+
+  /** The air the plate seals under the model, or null when there is none to take away. */
+  private sealedGeometry(): THREE.BufferGeometry | null {
+    const surface = this.extras?.sealedAir.surface;
+    if (!surface) return null;
+    if (this.sealedAir?.surface !== surface) {
+      this.sealedAir?.geometry.dispose();
+      this.sealedAir = { surface, geometry: partGeometry(surface) };
+    }
+    return this.sealedAir.geometry;
+  }
+
+  /** How many recesses the plate seals under the model, which the silicone's cut leaves out; null before S2 said, or where it did not look. */
+  sealedRecesses(): number | null {
+    return this.extras?.sealedAir.recesses ?? null;
   }
 
   /** Draws once on the next frame, however many changes come before it. The bare page draws at once. */

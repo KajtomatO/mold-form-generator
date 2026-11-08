@@ -8,9 +8,10 @@ import { compositeTiles } from '../core/field/composite';
 import { dilate } from '../core/field/dilate';
 import { emptyField, fieldSettings, planField, type Field, type FieldPlan, type FieldSettings, type Grid } from '../core/field/grid';
 import { NO_SOURCE, rasterize } from '../core/field/raster';
-import { exteriorMesh } from '../core/field/sealed';
+import { exteriorMesh, plateSealedAir } from '../core/field/sealed';
 import { volumeAbovePlane } from '../core/field/silicone';
 import { auditEdges, type MeshAudit, type OpenLoop } from '../core/mesh/audit';
+import { DISPLAY_TRIANGLE_LIMIT } from '../core/mesh/simplify';
 import { meshBounds, weld, type Bounds, type WeldedMesh } from '../core/mesh/weld';
 import { baseOptions, resolveAuto } from '../core/params/defaults';
 import type { Params } from '../core/params/schema';
@@ -99,6 +100,15 @@ export interface OrientedStage {
   planeTol: number;
   /** The model above the plane in mm3, voids left out: what one tile takes off the silicone under H. */
   modelVolume: number;
+  /**
+   * For the section's silicone, which main would otherwise work out on its first cut, taking 0.3 to 0.7 s
+   * each on 3 million triangles (M11): the mesh's triangles less its void shells, null when it has none,
+   * and the air the plate seals under the model as a closed surface in the file's coordinates. Past the
+   * display proxy's limit the air is not worked out (recesses null): it would take 0.65 s and about 150 MB
+   * more here on 3 million triangles, while the solid worker's import already holds the most memory.
+   */
+  exterior: Uint32Array | null;
+  sealedAir: { surface: WeldedMesh | null; recesses: number | null };
   diagnostics: Diagnostic[];
 }
 
@@ -273,8 +283,22 @@ export class FieldStages {
         }
         const oriented = orientToBase(mesh, chosen, { planeTol, soup: outcome.soup, openLoops: outcome.openLoops });
         const candidates = ranked.map((c): CandidateSummary => ({ normal: c.normal, area: c.area, offset: c.offset, support: c.support, levels: c.levels, source: c.source, members: c.members }));
-        const modelVolume = volumeAbovePlane(exteriorMesh(oriented.mesh));
-        return { candidates, chosen, oriented, bounds: meshBounds(oriented.mesh.positions), planeTol, modelVolume, diagnostics: [...diagnostics, ...oriented.diagnostics] };
+        const exterior = exteriorMesh(oriented.mesh);
+        const modelVolume = volumeAbovePlane(exterior);
+        // The mold's z of a point of the file is the transform's third row: up . p + level.
+        const [, , , , , , g, h, i] = oriented.transform.rotation;
+        const sealed = mesh.indices.length / 3 > DISPLAY_TRIANGLE_LIMIT ? null : plateSealedAir(mesh, [g, h, i], oriented.transform.translation[2], planeTol);
+        return {
+          candidates,
+          chosen,
+          oriented,
+          bounds: meshBounds(oriented.mesh.positions),
+          planeTol,
+          modelVolume,
+          exterior: exterior === oriented.mesh ? null : exterior.indices,
+          sealedAir: { surface: sealed?.surface ?? null, recesses: sealed ? sealed.recesses.length : null },
+          diagnostics: [...diagnostics, ...oriented.diagnostics],
+        };
       });
       this.s2 = { key: keys.S2, value };
       return value;

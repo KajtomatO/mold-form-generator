@@ -31,7 +31,20 @@ export interface OpenJob {
   loaded: ArrayBuffer | null;
 }
 
-export type ProjectJob = PackJob | OpenJob;
+/**
+ * M11: an STL read here before it replaces the model on screen, so one that cannot be read leaves that
+ * model as it was. The bytes come over and go back, so main makes no copy of a large file.
+ */
+export interface CheckJob {
+  t: 'check';
+  id: number;
+  bytes: ArrayBuffer;
+  name: string;
+  /** A model is on screen, which a file that cannot be read leaves as it was, as the reason then says. */
+  loaded: boolean;
+}
+
+export type ProjectJob = PackJob | OpenJob | CheckJob;
 
 export interface Opened {
   file: ProjectFile;
@@ -49,7 +62,24 @@ export interface Opened {
 export type ProjectReply =
   | { t: 'packed'; id: number; zip: Uint8Array; sha256: string }
   | { t: 'opened'; id: number; opened: Opened }
+  /**
+   * The STL reads: its bytes back, what the reading warned of, such as a count in the header its size does
+   * not fit, and for a large file its SHA-256, which main then knows and need not send an export (null below).
+   */
+  | { t: 'checked'; id: number; bytes: ArrayBuffer; sha256: string | null; triangles: number; warnings: string[] }
   | { t: 'project-error'; id: number; message: string; details: string | null };
+
+/**
+ * From this size an STL's hash is worked out where it is read first. The export hashes a file it is not
+ * told the hash of, from a copy of it, which for 150 MB is memory the page cannot spare (M11); below this,
+ * the 134 MB/s it costs would only delay every load, and the export or a save hashes it as before.
+ */
+export const HASH_ON_READ_BYTES = 32 * 1024 * 1024;
+
+/** What to do about an STL that cannot be read, after its own reason. */
+export const STL_AGAIN = 'Export the STL again from the program that made it.';
+/** Said before that while a model is on screen: on an empty page there is none to keep. */
+export const MODEL_STAYS = 'The model on screen stays as it was.';
 
 function openFile(job: OpenJob): Opened {
   const bytes = new Uint8Array(job.bytes);
@@ -86,6 +116,23 @@ function openFile(job: OpenJob): Opened {
   return { file: read.file, from: read.from, notes, stl, stlSha256, loadedSha256: job.loaded ? sha256(new Uint8Array(job.loaded)) : null };
 }
 
+/** Below this an STL is read on main, which takes a few ms where a worker of its own would take tens. */
+export const READ_IN_WORKER_BYTES = 4 * 1024 * 1024;
+
+/**
+ * M11: an STL read before it replaces the model on screen: its triangles, the reader's warnings, and for
+ * a large file its hash. One that cannot be read is a ProjectError in the reader's own words, naming the file.
+ */
+export function readStl(bytes: Uint8Array, name: string, loaded: boolean): { triangles: number; warnings: string[]; sha256: string | null } {
+  try {
+    const parsed = parseStl(bytes);
+    return { triangles: parsed.triangleCount, warnings: parsed.diagnostics.map((d) => d.message), sha256: bytes.length >= HASH_ON_READ_BYTES ? sha256(bytes) : null };
+  } catch (error) {
+    if (error instanceof StlError) throw new ProjectError(`${name} cannot be opened: ${error.message} ${loaded ? `${MODEL_STAYS} ` : ''}${STL_AGAIN}`);
+    throw error;
+  }
+}
+
 /** One job to its reply, with what the reply can hand over without a copy. A failure is always a reply, never a throw. */
 export function runProjectJob(job: ProjectJob): { reply: ProjectReply; transfer: ArrayBuffer[] } {
   try {
@@ -94,6 +141,10 @@ export function runProjectJob(job: ProjectJob): { reply: ProjectReply; transfer:
       const hash = job.file.modelSha256 ?? sha256(stl);
       const zip = packProject(projectJson({ ...job.file, modelSha256: hash }), stl);
       return { reply: { t: 'packed', id: job.id, zip, sha256: hash }, transfer: [zip.buffer as ArrayBuffer] };
+    }
+    if (job.t === 'check') {
+      const read = readStl(new Uint8Array(job.bytes), job.name, job.loaded);
+      return { reply: { t: 'checked', id: job.id, bytes: job.bytes, ...read }, transfer: [job.bytes] };
     }
     const opened = openFile(job);
     return { reply: { t: 'opened', id: job.id, opened }, transfer: opened.stl ? [opened.stl.buffer as ArrayBuffer] : [] };

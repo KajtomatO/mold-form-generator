@@ -123,7 +123,7 @@ export function orientToBase(mesh: WeldedMesh, candidate: BaseCandidate, options
     diagnostics.push({
       code: 'below-plane-soup',
       severity: 'error',
-      message: `${vertexCount} vertices lie up to ${depth.toFixed(2)} mm below this plane, and an open mesh cannot be trimmed, so please choose another plane.`,
+      message: `${vertexCount} vertices lie up to ${depth.toFixed(2)} mm below this plane, and an open mesh cannot be trimmed, so please choose another base face, or repair the mesh and open it again.`,
     });
   } else if (needsTrim) {
     diagnostics.push({
@@ -144,7 +144,7 @@ export function orientToBase(mesh: WeldedMesh, candidate: BaseCandidate, options
     diagnostics.push({
       code: 'base-from-hole',
       severity: 'info',
-      message: `This plane closes ${candidate.holes.length} holes totalling ${area.toFixed(1)} mm2, so the file has no face there and the rim stands in for it.`,
+      message: `This plane closes ${candidate.holes.length === 1 ? `1 hole of ${area.toFixed(1)} mm2` : `${candidate.holes.length} holes totalling ${area.toFixed(1)} mm2`}, so the file has no face there and the rim stands in for it.`,
     });
   }
   // The rims of a recess in a missing base face up, but the base plate closes those.
@@ -154,7 +154,7 @@ export function orientToBase(mesh: WeldedMesh, candidate: BaseCandidate, options
     diagnostics.push({
       code: 'missing-top-surface',
       severity: 'warning',
-      message: `On this plane ${upward.toFixed(1)} mm2 of holes face upward, and the cavity will be too low where a top surface is missing.`,
+      message: `On this plane ${upward.toFixed(1)} mm2 of holes face upward, and the cavity will be too low where a top surface is missing. Repair the mesh to close them, and open it again.`,
     });
   }
   return { mesh: { positions, indices: mesh.indices }, transform, below: { vertexCount, depth }, needsTrim, usable: !(needsTrim && soup), diagnostics };

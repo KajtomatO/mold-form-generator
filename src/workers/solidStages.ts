@@ -5,7 +5,7 @@ import { transformPositions, type RigidTransform } from '../core/base/orient';
 import type { Field } from '../core/field/grid';
 import type { MeshAudit } from '../core/mesh/audit';
 import { importSolid, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
-import { displayProxy, type MeshSimplifier } from '../core/mesh/simplify';
+import { displayProxy, HEAVY_LIMITS, importFromCopy, manifoldPathSolid, type HeavyLimits, type MeshSimplifier } from '../core/mesh/simplify';
 import type { WeldedMesh } from '../core/mesh/weld';
 import { crossParameterErrors } from '../core/params/rules';
 import type { Params } from '../core/params/schema';
@@ -28,8 +28,11 @@ export interface PartMesh {
 }
 
 export interface SolidInputs {
-  /** The welded mesh and its audit, sent only while the worker does not hold S1. */
-  model: { welded: WeldedMesh; audit: MeshAudit } | null;
+  /**
+   * The welded mesh and its audit, sent only while the worker does not hold S1. `known` is an import of the
+   * same mesh that checked it whole, sent past G1.8's limit, so this worker builds only the copy (M11).
+   */
+  model: { welded: WeldedMesh; audit: MeshAudit; known?: SolidReport | null } | null;
   /** The whole candidate, as G2.6's report on the footprint reads its levels. */
   plane: { candidate: BaseCandidate; transform: RigidTransform; needsTrim: boolean; planeTol: number; pocketDepth: number };
   /** Null in a job that only imports, which runs before any field exists. */
@@ -38,7 +41,7 @@ export interface SolidInputs {
   offsets: [number, number][];
   /** S6 for the tool, sent only while the worker does not hold S11. */
   field: Field | null;
-  /** The tool is cropped to this. Previews pass rim.D, as their field can sit a cell per tile wider than the export's. */
+  /** The tool is cropped to this. Previews pass rim.D, as their coarser cell can reach past the export's bounds. */
   clip: Rect | null;
   tol: number;
   copies: CutOpening[];
@@ -103,7 +106,11 @@ function meshOf(solid: Manifold): PartMesh {
  * arena and freed when it ends, and the meshes go to main.
  */
 export class SolidStages {
-  private model: Held<{ solid: ImportedSolid; outcome: ImportInput }> | null = null;
+  /**
+   * The import. For a mesh past G1.8's limit its solid is the simplified copy every later Manifold step
+   * uses, and the whole one is freed once checked, so the two never stand in the heap together for long.
+   */
+  private model: Held<{ solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean }> | null = null;
   private footprint: { key: string; footprint: Footprint; mesh: WeldedMesh } | null = null;
   private tool: Held<ToolEntry> | null = null;
   private coverBody: Held | null = null;
@@ -119,6 +126,7 @@ export class SolidStages {
     private readonly now: () => number = () => 0,
     /** For the display proxy. Without one, a heavy model is drawn as it is. */
     private readonly simplifier: MeshSimplifier | null = null,
+    private readonly limits: HeavyLimits = HEAVY_LIMITS,
   ) {}
 
   cached(): Partial<Record<StageId, string>> {
@@ -179,11 +187,15 @@ export class SolidStages {
       this.dragRest = null;
     }
 
-    const imported = (): { solid: ImportedSolid; outcome: ImportInput } => {
+    const imported = (): { solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean } => {
       if (this.model?.key === keys.S1) return this.model.value;
       if (!inputs.model) throw new StageMiss('S1');
-      const { welded, audit } = inputs.model;
+      const { welded, audit, known } = inputs.model;
       this.model = timed('S1', () => keep(null, keys.S1, (arena) => {
+        // Past G1.8's limit, a worker told that an import has checked the mesh whole builds the copy alone,
+        // as the whole solid holds 1.3 GB of its heap; the pipeline ends the worker that checked it.
+        const copy = known && this.simplifier ? importFromCopy(arena, welded, known, this.simplifier, this.limits.limit, this.limits.target) : null;
+        if (copy) return { solid: copy, outcome: copy.mesh === welded ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: false, mesh: copy.mesh, openLoops: [] }, simplified: copy.simplified, whole: false };
         // The import ladder makes many pieces on the way. Only the solid itself is worth keeping.
         const solid = withArena(api, (scratch) => {
           const found = importSolid(scratch, welded, audit);
@@ -194,15 +206,35 @@ export class SolidStages {
         // The usual case leaves the welded mesh as it was, and field.worker has already started on that.
         const plain = solid.solid !== null && solid.mesh === welded;
         const outcome: ImportInput = plain ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: solid.solid === null, mesh: solid.mesh, openLoops: solid.openLoops };
-        return { solid, outcome };
+        return { solid, outcome, simplified: [], whole: true };
       }));
       return this.model.value;
     };
     const model = (): ImportedSolid => imported().solid;
+    /**
+     * G1.8: what every Manifold step after the import uses. Past the limit, a whole import's solid gives way
+     * to its simplified copy, made the first time a step needs it, in the model's own arena.
+     */
+    const manifoldModel = (): ImportedSolid => {
+      const held = imported();
+      if (held.whole && this.simplifier) {
+        const arena = this.model!.arena;
+        const path = timed('simplify', () => manifoldPathSolid(arena, held.solid, this.simplifier, this.limits.limit, this.limits.target));
+        if (path.heavy) {
+          // The whole solid has done its one job, the check, and the copy stands in for it from here on.
+          arena.release(held.solid.solid!).delete();
+          held.solid = { ...held.solid, solid: path.solid };
+        }
+        // A copy that is no closed solid leaves the whole mesh in use, which its own warning says.
+        held.simplified = path.diagnostics;
+        held.whole = false;
+      }
+      return held.solid;
+    };
 
     const footprint = (): { footprint: Footprint; mesh: WeldedMesh } => {
       if (this.footprint?.key === keys.S2) return this.footprint;
-      const imported = model();
+      const imported = inputs.plane.needsTrim ? manifoldModel() : model();
       const value = timed('S2', () => withArena(api, (arena) => {
         const { candidate, transform, needsTrim } = inputs.plane;
         const mesh = { positions: transformPositions(imported.mesh.positions, transform), indices: imported.mesh.indices };
@@ -274,17 +306,17 @@ export class SolidStages {
     if (want.includes('S15')) {
       const body = baseBody();
       const { footprint: print, mesh } = footprint();
-      const imported = model();
+      const imported = manifoldModel();
       outputs.S15 = timed('S15', () => withArena(api, (arena) => {
         const { planeTol, pocketDepth, transform, needsTrim } = inputs.plane;
-        const diagnostics = [...print.diagnostics, ...layerDiagnostics(params.base.thickness, pocketDepth, params.print.layerHeight)];
-        const placed = orientedSolid(arena, imported, { transform, needsTrim });
+        const diagnostics = [...print.diagnostics, ...layerDiagnostics(params.base.thickness, pocketDepth, params.print.layerHeight), ...this.model!.value.simplified];
         if (params.base.mode === 'merged') {
-          const merged = buildMergedBase(arena, body, placed, print, { planeTol, offsets: inputs.offsets });
+          const merged = buildMergedBase(arena, body, orientedSolid(arena, imported, { transform, needsTrim }), print, { planeTol, offsets: inputs.offsets });
           diagnostics.push(...merged.diagnostics);
           // Without a solid there is no merged base, and the plate alone shows what there is.
           return { ...meshOf(merged.base ?? body), diagnostics, merged: merged.base !== null };
         }
+        const placed = orientedSolid(arena, imported, { transform, needsTrim });
         const section = placed ? arena.track(placed.slice(pocketDepth)) : triangleContour(arena, mesh, pocketDepth);
         const outline = pocketOutline(arena, print, section, params.base.pocketEnlarge);
         const glue = buildGlueBase(arena, body, outline, pocketDepth, inputs.offsets);

@@ -842,7 +842,7 @@ test.describe('the app on index.html', () => {
     expect(differ / teal).toBeLessThan(0.01);
   });
 
-  test('@smoke a drop anywhere on the page loads, and a file that is no STL says why next to Open STL', async ({ page }) => {
+  test('@smoke a drop anywhere on the page loads, and a file that is no STL says why next to Open STL and leaves the model', async ({ page }) => {
     // On the sidebar: the page takes the drop, so the browser neither opens nor saves the file.
     expect(await dropExample(page, EXAMPLE_FILES.jersey, { on: '[data-testid="sections"]' })).toBe(true);
     await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe(EXAMPLE_FILES.jersey);
@@ -850,15 +850,18 @@ test.describe('the app on index.html', () => {
     await expect(page.getByTestId('parts')).toBeVisible();
     await expect(page.getByTestId('model-error')).toHaveCount(0);
 
-    // Not an STL: the parser's reason, under the file row, with no parts to show and no badge waiting for nothing.
+    // Not an STL: the parser's reason, under the file row, naming the file. Since M11 the file is read before it
+    // replaces the model, so the model on screen stays, with its parts, and no badge waits for nothing.
     expect(await dropExample(page, 'notes.stl', { text: 'hello' })).toBe(true);
-    await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe('notes.stl');
+    await expect(page.getByTestId('file-notice')).toHaveAttribute('data-severity', 'error');
+    await expect(page.getByTestId('file-notice')).toContainText('notes.stl cannot be opened: This does not look like an STL file: it is too small. The model on screen stays as it was.');
+    expect(await app(page, (a) => a.store.pipeline.modelName)).toBe(EXAMPLE_FILES.jersey);
     await idle(page);
-    await expect(page.getByTestId('model-error')).toHaveText('This does not look like an STL file: it is too small.');
-    await expect(page.getByTestId('file-name')).toHaveText('notes.stl');
-    await expect(page.getByTestId('parts')).toHaveCount(0);
+    await expect(page.getByTestId('file-name')).toContainText(EXAMPLE_FILES.jersey);
+    await expect(page.getByTestId('model-error')).toHaveCount(0);
+    await expect(page.getByTestId('parts')).toBeVisible();
     await expect(page.getByTestId('stale')).toHaveCount(0);
-    await expect(page.locator('.diagnostic[data-code="pipeline-error"]')).toHaveCount(1);
+    await expect(page.locator('.diagnostic[data-code="pipeline-error"]')).toHaveCount(0);
   });
 });
 

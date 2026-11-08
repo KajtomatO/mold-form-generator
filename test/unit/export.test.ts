@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { unzipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { allDiagnostics, exportBlocked, moldBox, previewSilicone } from '../../src/app/derived';
+import { allDiagnostics, DIAGNOSTIC_PARAM, exportBlocked, moldBox, previewSilicone } from '../../src/app/derived';
 import { downloadName, REVOKE_MS, saveBytes } from '../../src/app/download';
 import { INIT_TIMEOUT_MS, realTimers } from '../../src/app/jobGate';
 import { Pipeline, type ExportProgress, type ExportResult, type PipelineOptions } from '../../src/app/pipeline';
@@ -19,7 +19,10 @@ import { parseStl } from '../../src/core/stl/parse';
 import { exportSteps, type ExportOutputs, type ExportReport, type ExportRequest } from '../../src/workers/exportJob';
 import type { WorkerLike } from '../../src/workers/protocol';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
-import { asciiStl, box, toSoup, withoutTriangles } from '../fixtures/synthetic';
+import { asciiStl, box, BOX_TOP, L_POCKET, patchedL, spikedBlock, toSoup, withoutTriangles } from '../fixtures/synthetic';
+import type { WeldedMesh } from '../../src/core/mesh/weld';
+import { buildBaseBody } from '../../src/core/parts/base';
+import { transformPositions } from '../../src/core/base/orient';
 import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
 import { holeCentres, readPart, unpose } from '../fixtures/solidChecks';
 import { orientedExample } from '../fixtures/fieldRuns';
@@ -690,6 +693,85 @@ describe('the export of jersey in Node', () => {
     // What the status strip reads: an export is current, with no clearance measured.
     expect(p.currentExport()).not.toBeNull();
     expect(p.currentExport()!.clearance).toBeNull();
+  }, 60_000);
+
+  describe('soup mode (M11): an open mesh exports a glue-mode base whose pocket is right, with merged mode off and its clearance unverified', () => {
+    const patched = async (): Promise<WeldedMesh> => patchedL(await loadManifold());
+    const BOX_POCKET = (e: number, d: number): number => ((30 + 2 * e) * (20 + 2 * e) - (4 - Math.PI) * e * e) * d;
+
+    it.each([
+      ['an L with a patch of its side missing', 'patched-l.stl', patched, L_POCKET, [-20, 5, 12]],
+      ['a box with its top missing', 'open-top.stl', async () => withoutTriangles(box([0, 0, 0], [30, 20, 12]), BOX_TOP), BOX_POCKET, [15, 10, 12]],
+    ] as const)('%s', async (_, name, make, expected, hole) => {
+      const mesh = await make();
+      const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+      pipelines.push(p);
+      p.load(asciiStl(toSoup(mesh), name), name);
+      await p.idle();
+      // The L's tall side is its largest face, so its underside is chosen as the base, as a maker would.
+      const under = p.oriented!.value.candidates.findIndex((c) => c.normal[2] < -0.99);
+      if (under !== 0) {
+        p.setPlane({ rank: under, upper: false });
+        await p.idle();
+      }
+      expect(p.oriented!.value.chosen.normal[2]).toBeLessThan(-0.99);
+      expect(p.modelClosed()).toBe(false);
+      const soup = p.diagnostics.find((d) => d.code === 'soup-mode')!;
+      expect(soup.message).toMatch(/merged mode cannot be used with it/);
+      // The hole's Show marks the middle of its rim, in the mold's coordinates; a hole facing up warns of the cavity too.
+      const at = Array.from(transformPositions(Float32Array.from(hole), p.oriented!.value.oriented.transform));
+      const marked = (code: string): number[][] => (allDiagnostics(p).find((d) => d.code === code)?.markers ?? []).map((m) => m.at);
+      expect(marked('missing-surface')).toHaveLength(1);
+      marked('missing-surface')[0].forEach((v, k) => expect(Math.abs(v - at[k]), `axis ${k}`).toBeLessThan(0.5));
+      expect(marked('missing-top-surface')).toEqual(name === 'open-top.stl' ? marked('missing-surface') : []);
+      expect(soup.message).toMatch(/silicone thickness cannot be measured: it stays as planned, and no export can check it\. To use merged mode and a measured thickness, repair the mesh, for example with your slicer's repair, and open it again\.$/);
+      // Merged mode is refused inline, and blocks the export, rather than building a base of nothing.
+      p.setParams((params) => (params.base.mode = 'merged'));
+      await p.idle();
+      expect(allDiagnostics(p).find((d) => d.code === 'mode-b-disabled')).toMatchObject({ severity: 'error' });
+      expect(exportBlocked(p)).toMatch(/Merged mode needs a closed solid/);
+      p.setParams((params) => (params.base.mode = 'glue'));
+      await p.idle();
+      expect(exportBlocked(p)).toBeNull();
+
+      const outputs = await p.exportParts();
+      expect(outputs.clearance).toBeNull();
+      expect(outputs.report!.clearance).toMatchObject({ measured: null, minGap: null, searchMm: null });
+      expect(outputs.diagnostics.map((d) => d.code)).toEqual(expect.arrayContaining(['soup-mode', 'clearance-unverified']));
+      expect(outputs.report!.model.volumeMm3).toBeNull();
+      expect(Object.keys(outputs.files)).toEqual(expect.arrayContaining(['cover.stl', 'base.stl', 'model_oriented.stl', 'README.txt']));
+      // The pocket, read off the exported base: the plate it was cut from, less the base itself.
+      const { pocketEnlarge: e } = p.params.base, d = p.params.print.layerHeight;
+      const api = await loadManifold();
+      const pocket = withArena(api, (arena) => {
+        const plate = buildBaseBody(arena, outputs.rim!).volume();
+        const { mesh: read, audit } = readPart(outputs.files['base.stl']);
+        expect(audit).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
+        return plate - arena.manifold(new api.Mesh({ numProp: 3, vertProperties: read.positions, triVerts: read.indices })).volume();
+      });
+      // The plan's 0.001%: the round offset's polygon and float32 in base.stl stay far inside it, while a
+      // corner left square, 0.007 mm3 on the box, or an enlargement 0.01 mm off, 0.2% on the L, do not.
+      expect(Math.abs(pocket - expected(e, d)), `pocket ${pocket} against ${expected(e, d)}`).toBeLessThanOrEqual(expected(e, d) * 1e-5);
+      expect(text(outputs.files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain('The clearance could not be measured, as the model\'s mesh is not closed.');
+    }, 120_000);
+  });
+
+  it('soup mode (M11): a base face with vertices past it on an open mesh says so under the plane tolerance, in the Model section, and blocks the export', async () => {
+    const open = withoutTriangles(spikedBlock(await loadManifold(), 0.5), [0]);
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    p.load(asciiStl(toSoup(open), 'spiked'), 'spiked-open.stl');
+    await p.idle();
+    const under = p.oriented!.value.candidates.findIndex((c) => c.normal[2] < -0.99);
+    if (under !== 0) {
+      p.setPlane({ rank: under, upper: false });
+      await p.idle();
+    }
+    expect(p.modelClosed()).toBe(false);
+    const error = allDiagnostics(p).find((d) => d.code === 'below-plane-soup')!;
+    expect(error).toMatchObject({ severity: 'error', message: expect.stringMatching(/below this plane, and an open mesh cannot be trimmed, so please choose another base face, or repair the mesh and open it again\.$/) });
+    expect(DIAGNOSTIC_PARAM['below-plane-soup']).toBe('base.planeTol');
+    expect(exportBlocked(p)).toBe(`Fix this first: ${error.message}`);
   }, 60_000);
 
   it('README and report.json carry what is true of the mold, not the preview\'s notes on itself or the card\'s marks', async () => {

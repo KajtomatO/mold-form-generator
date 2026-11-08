@@ -2,11 +2,13 @@ import { firstPourPeak, replicateOpenings, type OpeningPin } from '../core/analy
 import { withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
 import { pickable } from '../core/base/candidates';
+import { transformPositions } from '../core/base/orient';
 import { findStoredPlane, PLANE_MATCH_MM, planeGap, planeOf, type StoredPlane } from '../core/base/storedPlane';
 import type { SolidReport } from '../core/mesh/shells';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
+import { MANIFOLD_TRIANGLE_LIMIT } from '../core/mesh/simplify';
 import type { Params } from '../core/params/schema';
 import type { CutOpening } from '../core/parts/openings';
 import type { Diagnostic } from '../core/report/diagnostics';
@@ -103,6 +105,11 @@ export interface PipelineOptions {
    * placement are on screen, so they never hold up T1 or T2, and the export never waits for them.
    */
   reports?: boolean;
+  /**
+   * G1.8's limit, past which the solid workers take the simplified copy and the pipeline recycles them
+   * around a whole import. Only a test sets it, with workers given the same, to reach that path cheaply.
+   */
+  manifoldLimit?: number;
 }
 
 /**
@@ -187,6 +194,10 @@ export interface ExportResult extends ExportOutputs {
 }
 
 const ZIP_REQUEST: ExportRequest = { want: 'zip', fitTest: false };
+
+
+/** Past this heap, the preview's solid worker is recycled before an export, so two heavy heaps never stand at once (M11). */
+export const EXPORT_RECYCLE_BYTES = 1e9;
 
 /** The single part each button saves, by its name in the ZIP. */
 const PART_FILES: Partial<Record<ExportRequest['want'], string>> = { cover: 'cover.stl', base: 'base.stl', funnel: 'funnel.stl' };
@@ -500,6 +511,11 @@ export class Pipeline {
   }
 
   /** The mesh the base plane orients: the welded one, or the import's when it flipped or rebuilt it. */
+  /** G1.8: a mesh past this many triangles takes the Manifold path as its simplified copy. */
+  private heavyMesh(mesh: WeldedMesh): boolean {
+    return mesh.indices.length / 3 > (this.options.manifoldLimit ?? MANIFOLD_TRIANGLE_LIMIT);
+  }
+
   modelMesh(): WeldedMesh | null {
     return this.importInput.mesh ?? this.parsed?.value.welded ?? null;
   }
@@ -576,7 +592,7 @@ export class Pipeline {
     return this.solidGate.cached;
   }
 
-  readSolidHeap(): Promise<{ capacity: number | null; used: number | null; held: number }> {
+  readSolidHeap(): Promise<{ capacity: number | null; used: number | null; held: number; handles: number }> {
     return this.solidGate.readHeap();
   }
 
@@ -622,6 +638,8 @@ export class Pipeline {
   private exportFailure: { key: string; message: string } | null = null;
   private exportFault: Fault | undefined;
   private exportActive = false;
+  /** The preview solid worker's heap as its last result gave it. */
+  private solidHeapBytes: number | null = null;
   /** The export's own worker while it runs, with its bootstrap timer until it says ready. */
   private exportWorker: { worker: WorkerLike; boot: unknown } | null = null;
   /** Set while an export waits for the preview: a new file ends that wait, as the model it was asked for is gone. */
@@ -680,6 +698,13 @@ export class Pipeline {
       const held = this.lastExport?.key === this.exportKey() ? this.lastExport.outputs : null;
       // The funnel's own build finds nothing about the mold, so it carries none of the mold's findings.
       if (part && held?.files[part]) return { ...held, want: request.want, files: { [part]: held.files[part] }, zip: new Uint8Array(), report: null, diagnostics: mold ? held.diagnostics : [], key };
+      // M11: the export's own worker imports the model again, which for 3 million triangles grows its heap
+      // to about 1 GB even from the simplified copy alone. The preview's worker would keep as much for as
+      // long, so a heavy one goes first, freeing it, and comes back for the next change, which imports again.
+      if (mold && ((this.solidHeapBytes ?? 0) > EXPORT_RECYCLE_BYTES || (this.parsed !== null && this.heavyMesh(this.parsed.value.welded)))) {
+        this.solidGate.recycle();
+        this.solidHeapBytes = null;
+      }
       try {
         const outputs = await Promise.race([this.runExportWorker(request, onProgress, armed), ended]);
         if (mold) {
@@ -801,6 +826,8 @@ export class Pipeline {
             openings: placement!.placement.openings.map(({ id, kind, x, y, pinned }) => ({ id, kind, x, y, pinned })),
             // Only for the ZIP's project.json, and only while main does not know its hash.
             stl: request.want === 'zip' && this.file!.sha256 === null ? this.file!.bytes.slice() : null,
+            // M11: past G1.8's limit, the preview's import, which checked the whole mesh, so the export need not.
+            importReport: this.heavyMesh(parsed!.welded) && this.imported?.key === this.keys().S1 ? this.imported.value : null,
           }
         : null;
     const params = this.params;
@@ -1073,7 +1100,9 @@ export class Pipeline {
     const transfer: Transferable[] = [];
     const { parsed, oriented } = target.source;
     const needsModel = (want.includes('S1') || want.includes('S2') || want.includes('S15')) && cached.S1 !== keys.S1;
-    const model = needsModel && parsed ? { welded: { positions: parsed.welded.positions.slice(), indices: parsed.welded.indices.slice() }, audit: parsed.audit } : null;
+    // M11: past G1.8's limit, the import that checked the whole mesh, so a fresh worker builds only the copy.
+    const known = parsed && this.heavyMesh(parsed.welded) && this.imported?.key === keys.S1 ? this.imported.value : null;
+    const model = needsModel && parsed ? { welded: { positions: parsed.welded.positions.slice(), indices: parsed.welded.indices.slice() }, audit: parsed.audit, known } : null;
     if (model) transfer.push(model.welded.positions.buffer, model.welded.indices.buffer);
     const needsField = want.includes('S13') && cached.S12 !== keys.S12 && cached.S11 !== keys.S11;
     const field = needsField && target.field ? { ...target.field.field, values: target.field.field.values.slice() } : null;
@@ -1103,7 +1132,7 @@ export class Pipeline {
           rim,
           offsets,
           field,
-          // Previews crop the tool to the rim, as their field can run a cell per tile wider (G6).
+          // Previews crop the tool to the rim, as their coarser cell can reach past the export's bounds (G6).
           clip: rim ? rim.D : null,
           tol: params.quality.tinTolPreview,
           copies: target.copies,
@@ -1207,7 +1236,11 @@ export class Pipeline {
       if (outputs.S16 !== undefined && this.accept('funnel', target, this.funnel)) this.funnel = { key: target.keys.S16, rev: target.rev, value: outputs.S16 };
       this.collectDiagnostics();
       const heap = event.message.heapBytes;
-      if (heap !== null && heap > this.budgets.settings.recycleBytes) this.solidGate.recycle();
+      this.solidHeapBytes = heap;
+      // M11: the whole solid of a mesh past G1.8's limit leaves its heap at about 1.5 GB, and only the import
+      // needs it, so the worker goes at once; the next job's fresh worker builds the copy alone.
+      const checkedWhole = outputs.S1 !== undefined && target.source.parsed !== null && this.heavyMesh(target.source.parsed.welded);
+      if (checkedWhole || (heap !== null && heap > this.budgets.settings.recycleBytes)) this.solidGate.recycle();
     } else if (event.kind !== 'stage') {
       this.handleFailure('solid', event);
     }
@@ -1298,8 +1331,13 @@ export class Pipeline {
   private collectDiagnostics(): void {
     const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.params)];
     if (this.parsed) all.push(...this.parsed.value.diagnostics);
-    if (this.imported) all.push(...this.imported.value.diagnostics);
-    if (this.oriented) all.push(...this.oriented.value.diagnostics);
+    // A hole's Show marks the middle of its rim; the cavity's warning marks only the holes facing up.
+    if (this.imported) all.push(...this.imported.value.diagnostics.map((d) => (d.code === 'missing-surface' ? { ...d, markers: this.holeMarkers(false) } : d)));
+    if (this.oriented) all.push(...this.oriented.value.diagnostics.map((d) => (d.code === 'missing-top-surface' ? { ...d, markers: this.holeMarkers(true) } : d)));
+    if (this.displayProxy && this.parsed) {
+      const drawn = (this.displayProxy.indices.length / 3).toLocaleString('en-US'), whole = this.parsed.value.triangles.toLocaleString('en-US');
+      all.push({ code: 'display-proxy', severity: 'info', message: `The view draws this model simplified to ${drawn} of its ${whole} triangles, to keep it quick to turn; the mold is built from the whole mesh.` });
+    }
     if (this.footprint) all.push(...this.footprint.value.diagnostics, ...this.footprint.value.levels.diagnostics);
     all.push(...this.wallDiagnostics());
     if (this.field) all.push(...this.field.value.diagnostics, ...this.field.value.rim.diagnostics);
@@ -1320,6 +1358,21 @@ export class Pipeline {
       seen.add(key);
       return true;
     });
+  }
+
+  /** Each hole of an open mesh at the middle of its rim, in mold coordinates; with `up`, only those whose missing cap faces up. */
+  private holeMarkers(up: boolean): Marker[] {
+    const mesh = this.modelMesh(), transform = this.oriented?.value.oriented.transform;
+    if (!mesh || !transform) return [];
+    const [, , , , , , g, h, i] = transform.rotation;
+    return this.importInput.openLoops
+      .filter(({ capNormal: [x, y, z] }) => !up || g * x + h * y + i * z > 0)
+      .map(({ vertices }): Marker => {
+        const middle = new Float32Array(3);
+        for (const v of vertices) for (let k = 0; k < 3; k++) middle[k] += mesh.positions[v * 3 + k] / vertices.length;
+        const [x, y, z] = transformPositions(middle, transform);
+        return { at: [x, y, z] };
+      });
   }
 
   /** The wall check's findings for the state on screen, all read at the export cell. */

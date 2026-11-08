@@ -4,6 +4,9 @@ import type { BaseCandidate } from '../../src/core/base/candidates';
 import { classifyLevels } from '../../src/core/base/footprint';
 import { mapCavities } from '../../src/core/field/cavities';
 import { buildField } from '../../src/core/field/build';
+import { compositeTiles } from '../../src/core/field/composite';
+import { dilate } from '../../src/core/field/dilate';
+import { rasterize } from '../../src/core/field/raster';
 import { exportPlan, planField, fieldSettings } from '../../src/core/field/grid';
 import { meshBounds } from '../../src/core/mesh/weld';
 import { defaultParams } from '../../src/core/params/defaults';
@@ -20,7 +23,9 @@ import { auditOverhang } from '../../src/core/report/overhang';
 import { Arena, checked, withArena } from '../../src/core/solid/arena';
 import { outset } from '../../src/core/solid/rect';
 import { buildToolMesh, toolSolid } from '../../src/core/solid/tool';
+import { previewCell as previewCellOf } from '../../src/workers/fieldStages';
 import { recordSection } from '../fixtures/benchmarks';
+import { orientedExample } from '../fixtures/fieldRuns';
 import { countHandles } from '../fixtures/handles';
 import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
 import { buildMold, type Mold, type MoldOptions } from '../fixtures/mold';
@@ -282,7 +287,7 @@ function checkOverhang({ arena, m }: Ctx): void {
   within(own.steepArea, m.merged.modelOverhangArea * m.mold.offsets.length, 0.01);
   expect(own.ignoredArea, 'model').toBeLessThan(Math.max(0.05, own.steepArea * 0.01));
   const note = m.merged.diagnostics.find((d) => d.code === 'model-overhang');
-  if (m.merged.modelOverhangArea > 0) {
+  if (m.merged.modelOverhangArea >= 0.5) {
     expect(note?.severity).toBe('info');
     expect(note?.message).toContain(`${m.merged.modelOverhangArea.toFixed(0)} mm2`);
   } else {
@@ -1011,17 +1016,72 @@ describe('grids', () => {
 describe('placing parts: the pitch always comes from the export plan', () => {
   const previewCell = 0.5;
 
-  it('x8 2 x 1: a preview field sits wider than the export, and parts follow the export', () => {
+  it('x8 2 x 1: a preview field keeps the export pitch, its tile within half a cell, and parts follow the export', () => {
     onModel('x8', paramsWith((p) => (p.grid.nx = 2)), { modes: {} }, ({ m, params }) => {
       const preview = fieldSettings(params, m.bounds, previewCell);
-      expect(planField(m.bounds, preview).pitchXmm).toBe(125);
+      const plan = planField(m.bounds, preview);
+      expect(plan.pitchXmm).toBe(124.75);
       expect(exportPlan(m.bounds, preview).pitchXmm).toBe(124.75);
+      // 249.5 nodes rounds to 250: the second tile sits 0.25 mm, half a cell, past the export's. M8 snapped
+      // the pitch itself to 125.0, which is the same here and grows by a quarter mm with each tile after.
+      expect(plan.shiftsX).toEqual([0, 250]);
       const bounds = moldBounds(m.oriented.mesh, m.bounds, preview);
       expect(bounds.offsets).toEqual([[0, 0], [124.75, 0]]);
       // The very same bounds and box as the export, whichever cell is running.
       expect(bounds).toEqual(m.mold);
       expect(deriveRim(bounds, params)).toEqual(m.rim);
     });
+  });
+
+  it.each([['jersey', 20, 1], ['x8', 3, 3]] as [ExampleId, number, number][])('%s %i x %i at its preview cell: the last tile\'s cavity is within half a cell of where its model and openings stand', (id, nx, ny) => {
+    const params = paramsWith((p) => ((p.grid.nx = nx), (p.grid.ny = ny)));
+    const { mesh, bounds } = orientedExample(id);
+    const cell = previewCellOf(params, bounds);
+    const settings = fieldSettings(params, bounds, cell);
+    const plan = planField(bounds, settings);
+    const offsets = moldBounds(mesh, bounds, settings).offsets;
+    const field = compositeTiles(dilate(rasterize(mesh, plan.tile), plan.rEff), plan).field;
+    // The cavity over a tile's own model box and half the spacing round it, where no other tile's reaches.
+    const centroid = ([ox, oy]: [number, number]): [number, number] => {
+      const half = plan.spacing / 2;
+      let w = 0, sx = 0, sy = 0;
+      for (let j = 0; j < field.ny; j++) {
+        const y = field.y0 + j * field.cell;
+        if (y < bounds.min[1] + oy - half || y > bounds.max[1] + oy + half) continue;
+        for (let i = 0; i < field.nx; i++) {
+          const x = field.x0 + i * field.cell, h = field.values[j * field.nx + i];
+          if (h <= 0 || x < bounds.min[0] + ox - half || x > bounds.max[0] + ox + half) continue;
+          w += h;
+          sx += h * x;
+          sy += h * y;
+        }
+      }
+      return [sx / w, sy / w];
+    };
+    const first = centroid(offsets[0]), last = centroid(offsets[offsets.length - 1]);
+    const [ox, oy] = offsets[offsets.length - 1];
+    const drift = [last[0] - first[0] - ox, last[1] - first[1] - oy];
+    // M8 measured 5.10 mm here on jersey 20 x 1 (cell 0.952) and 0.50 x 0.25 on x8 3 x 3 (cell 0.5).
+    expect(Math.abs(drift[0])).toBeLessThanOrEqual(cell / 2 + 1e-6);
+    expect(Math.abs(drift[1])).toBeLessThanOrEqual(cell / 2 + 1e-6);
+    // Where the plan's rounding puts it, to the field's own precision.
+    expect(drift[0]).toBeCloseTo(plan.shiftsX[nx - 1] * cell - ox, 4);
+    expect(drift[1]).toBeCloseTo(plan.shiftsY[ny - 1] * cell - oy, 4);
+  });
+
+  it('x8 5 x 5 at defaults, the fuzz\'s shrunk case: past the node cap the export raises its cell and pitch, and the preview\'s tiles follow that pitch', () => {
+    const params = paramsWith((p) => ((p.grid.nx = 5), (p.grid.ny = 5)));
+    const { bounds } = orientedExample('x8');
+    const cell = previewCellOf(params, bounds);
+    const settings = fieldSettings(params, bounds, cell);
+    const exported = exportPlan(bounds, settings);
+    expect(exported.cell).toBe(0.134);
+    const plan = planField(bounds, settings);
+    // M11a first snapped the preview's pitch to the export cell it was given, 0.125, and its tiles drifted.
+    expect([plan.pitchXmm, plan.pitchYmm]).toEqual([exported.pitchXmm, exported.pitchYmm]);
+    for (const [shifts, pitch] of [[plan.shiftsX, exported.pitchXmm], [plan.shiftsY, exported.pitchYmm]] as const) {
+      shifts.forEach((shift, k) => expect(Math.abs(shift * plan.cell - k * pitch)).toBeLessThanOrEqual(plan.cell / 2 + 1e-9));
+    }
   });
 
   it('no preview cell moves the box', () => {
@@ -1035,15 +1095,29 @@ describe('placing parts: the pitch always comes from the export plan', () => {
     });
   });
 
-  it('a preview at the preview cell builds real parts in the same box, and 8 x 1 stays inside the rim by the clip', () => {
+  it('x8 8 x 1 at the preview cell: the last tile sits within half a cell, so the cavity stays inside the rim\'s bound', () => {
     const params = paramsWith((p) => (p.grid.nx = 8));
-    onModel('x8', params, { cell: previewCell, tinTol: params.quality.tinTolPreview, modes: { glue: true } }, ({ arena, m }) => {
-      const plan = m.plan;
+    onModel('x8', params, { cell: previewCell, tinTol: params.quality.tinTolPreview, modes: { glue: true } }, (ctx) => {
+      const { m } = ctx;
       const finalPitch = exportPlan(m.bounds, m.settings).pitchXmm;
-      expect(plan.pitchXmm).toBeGreaterThan(finalPitch);
-      // Over 8 tiles the preview's cavity runs 1.75 mm past the rim's own bound. Left alone that eats
-      // most of the 2 mm land, though it stops short of the groove, and that is what the clip is for.
-      expect(maskOverrun(m.built.field, m.rim.D)).toBeGreaterThan(1);
+      expect(m.plan.pitchXmm).toBe(finalPitch);
+      // M8's preview pitch of 125.0 put the eighth tile 1.75 mm past the export's, past the rim's own bound
+      // by as much, into most of the 2 mm land. Rounded per tile it is 0.25 mm off, and no node passes D.
+      expect(Math.abs(m.plan.shiftsX[7] * previewCell - 7 * finalPitch)).toBeLessThanOrEqual(previewCell / 2);
+      expect(maskOverrun(m.built.field, m.rim.D)).toBe(0);
+      checkLand(ctx);
+      expect(splitShells(ctx.arena, m.cover).bodies).toHaveLength(1);
+    });
+  });
+
+  it('jersey 20 x 1 at its own preview cell reaches past the rim\'s bound, and the clip keeps the land whole', () => {
+    const params = paramsWith((p) => (p.grid.nx = 20));
+    // The app's rule, max(0.5, L / 1024), with L the row's 20 models: 0.952 mm.
+    const cell = previewCellOf(params, orientedExample('jersey').bounds);
+    expect(cell).toBeCloseTo(0.952, 3);
+    onModel('jersey', params, { cell, tinTol: params.quality.tinTolPreview, modes: { glue: true } }, ({ arena, m }) => {
+      // A source half a cell past its vertex and a cell for the surface to come down: past D's slack of 0.5 mm.
+      expect(maskOverrun(m.built.field, m.rim.D)).toBeGreaterThan(0.2);
       expect(() => checkLand({ arena, m, params })).toThrow(/land width/);
       const clipped = buildToolMesh(m.built.field, { raise: params.quality.tinTolPreview, tol: params.quality.tinTolPreview, clip: m.rim.D });
       expect(clipped.clippedNodes).toBeGreaterThan(0);

@@ -30,12 +30,18 @@ interface SweepGlue {
  * here as well.
  */
 export class Arena {
+  /**
+   * Handles owned by any arena in this realm and not yet freed. Between jobs that is what the workers keep
+   * on purpose, so a soak that sees it grow has found a leak (M11).
+   */
+  static live = 0;
   private readonly owned = new Set<Handle>();
 
   constructor(readonly api: ManifoldToplevel) {}
 
   /** An arrow function, so callers can destructure it and write `track(a.subtract(b))`. */
   track = <T extends Handle>(handle: T): T => {
+    if (!this.owned.has(handle)) Arena.live++;
     this.owned.add(handle);
     return handle;
   };
@@ -112,12 +118,13 @@ export class Arena {
 
   /** Hands a handle to the caller, who must delete it or track it in another arena. */
   release<T extends Handle>(handle: T): T {
-    this.owned.delete(handle);
+    if (this.owned.delete(handle)) Arena.live--;
     return handle;
   }
 
   dispose(): void {
     for (const handle of this.owned) handle.delete();
+    Arena.live -= this.owned.size;
     this.owned.clear();
   }
 }

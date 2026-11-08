@@ -24,7 +24,7 @@ export function compositeTiles(tile: Field, plan: FieldPlan): Composite {
   for (let ty = 0; ty < ny; ty++) {
     for (let tx = 0; tx < nx; tx++) {
       const id = tx + ty * nx;
-      const shift = tx * plan.pitchX + ty * plan.pitchY * field.nx;
+      const shift = plan.shiftsX[tx] + plan.shiftsY[ty] * field.nx;
       for (let y = 0; y < tile.ny; y++) {
         const from = y * tile.nx;
         for (let x = 0; x < tile.nx; x++) {

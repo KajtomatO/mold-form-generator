@@ -75,13 +75,29 @@ function textStart(bytes: Uint8Array): number {
   return i;
 }
 
+/** Text has no control bytes but blank space, where a binary STL's count and floats hold zeros and more. */
+function looksLikeText(bytes: Uint8Array): boolean {
+  for (let i = 0, end = Math.min(bytes.length, 4096); i < end; i++) {
+    const byte = bytes[i];
+    if (byte < 32 && !isSpace(byte)) return false;
+  }
+  return true;
+}
+
 function startsWithSolid(bytes: Uint8Array): boolean {
   const start = textStart(bytes);
   return bytes.length >= start + SOLID.length && SOLID.every((c, i) => (bytes[start + i] | 32) === c);
 }
 
-/** Returns null when the file holds no vertex at all, so it was never really ASCII. */
-function readAscii(bytes: Uint8Array): Float32Array | null {
+/** What to do about a file that loads but is cut off or damaged, after its own reason. A file refused gets it from the caller. */
+const EXPORT_AGAIN = 'Export the STL again from the program that made it.';
+
+/**
+ * Returns null when the file holds no vertex at all, so it was never really ASCII. A file that stops
+ * inside a facet is cut off, and refused, as its last triangle may be wrong; one that stops between
+ * facets with no endsolid may be cut off too, and loads what it holds with a warning in `diagnostics`.
+ */
+function readAscii(bytes: Uint8Array, diagnostics: Diagnostic[]): Float32Array | null {
   let positions = new Float32Array(9 * 1024);
   let w = 0;
   const end = bytes.length;
@@ -116,6 +132,10 @@ function readAscii(bytes: Uint8Array): Float32Array | null {
   // Vertices since the last facet boundary. A boundary is where a wrong count first shows, and
   // grouping by threes would otherwise turn a quad into wrong triangles without a word.
   let cornerCount = 0;
+  // A facet begun and not yet ended, and whether the last solid was ended: how a file cut off shows.
+  let inFacet = false;
+  let ended = false;
+  const cutOff = (): StlError => new StlError('truncated', 'The ASCII STL ends in the middle of a triangle, so it looks cut off.');
   const checkFacet = (): void => {
     if (cornerCount !== 0 && cornerCount !== 3) throw new StlError('bad-facet', `The ASCII STL has a facet with ${cornerCount} vertices, and only triangles can be read.`);
     cornerCount = 0;
@@ -125,15 +145,20 @@ function readAscii(bytes: Uint8Array): Float32Array | null {
     while (i < end && isSpace(bytes[i])) i++;
     const start = i;
     while (i < end && !isSpace(bytes[i])) i++;
+    if (start === i) break;
     if (isWord(bytes, start, i, SOLID) || isWord(bytes, start, i, ENDSOLID)) {
+      ended = isWord(bytes, start, i, ENDSOLID);
       skipName();
       continue;
     }
     if (isWord(bytes, start, i, FACET) || isWord(bytes, start, i, ENDLOOP) || isWord(bytes, start, i, ENDFACET)) {
       checkFacet();
+      if (!isWord(bytes, start, i, ENDLOOP)) inFacet = isWord(bytes, start, i, FACET);
+      if (inFacet) ended = false;
       continue;
     }
     if (!isWord(bytes, start, i, VERTEX)) continue;
+    ended = false;
 
     cornerCount++;
     if (w + 3 > positions.length) {
@@ -146,15 +171,21 @@ function readAscii(bytes: Uint8Array): Float32Array | null {
       const from = i;
       while (i < end && !isSpace(bytes[i])) i++;
       // A number never needs 64 characters, and the spread would overflow on a huge junk token.
+      // A file cut off in a vertex line runs out of numbers, or ends inside one, such as "1.5e": that is
+      // the truncation, not a bad number.
+      if (from >= end) throw cutOff();
       const token = String.fromCharCode(...bytes.subarray(from, Math.min(i, from + 64)));
       const value = token === '' ? NaN : Number(token);
+      if (Number.isNaN(value) && i >= end) throw cutOff();
       if (Number.isNaN(value)) throw new StlError('non-finite', `The ASCII STL has a vertex value that is not a number: "${token.slice(0, 20)}".`);
       checkCoordinate(value);
       positions[w++] = value;
     }
   }
   if (w === 0) return null;
-  if (w % 9 !== 0) throw new StlError('truncated', 'The ASCII STL ends in the middle of a triangle.');
+  // Its last value may be cut short too, as "1.25" read as "1.2", so a facet left open refuses the file.
+  if (w % 9 !== 0 || inFacet) throw cutOff();
+  if (!ended) diagnostics.push({ code: 'stl-no-end', severity: 'warning', message: `The ASCII STL has no endsolid line at its end, so it may be cut off: ${w === 9 ? '1 triangle was' : `${w / 9} triangles were`} read. If the model looks incomplete, export the STL again from the program that made it.` });
   return positions.subarray(0, w);
 }
 
@@ -199,25 +230,32 @@ function finish(format: ParsedStl['format'], soup: Float32Array, diagnostics: Di
  * Only positions are kept: stored normals are often wrong and winding is checked later anyway.
  */
 export function parseStl(bytes: Uint8Array): ParsedStl {
+  if (bytes.length === 0) throw new StlError('empty', 'The file is empty.');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const declared = bytes.length >= 84 ? view.getUint32(80, true) : -1;
   if (declared >= 0 && bytes.length === 84 + 50 * declared) return finish('binary', readBinary(bytes, declared), []);
 
   if (startsWithSolid(bytes)) {
-    const ascii = readAscii(bytes);
-    if (ascii) return finish('ascii', ascii, []);
+    const diagnostics: Diagnostic[] = [];
+    const ascii = readAscii(bytes, diagnostics);
+    if (ascii) return finish('ascii', ascii, diagnostics);
+    // A text STL with no facet in it, as some programs write for an empty scene, is no binary file either.
+    if (looksLikeText(bytes)) throw new StlError('empty', 'The STL file contains no usable triangles.');
   }
 
   if (bytes.length < 84) throw new StlError('not-stl', 'This does not look like an STL file: it is too small.');
   const fits = Math.floor((bytes.length - 84) / 50);
-  // A header count of 0 with records after it is a writer that never filled the count in.
+  // A header count of 0 with records after it is a writer that never filled the count in. Otherwise the
+  // count is clamped to what the size holds: min(declared, fits).
   const count = declared === 0 ? fits : Math.min(declared, fits);
   if (count === 0) throw new StlError('empty', 'The STL file contains no usable triangles.');
-  return finish('binary', readBinary(bytes, count), [
-    {
-      code: 'stl-count-mismatch',
-      severity: 'warning',
-      message: `The file header says ${declared} triangles but its size fits ${fits}, so ${count} were read and the file may be damaged.`,
-    },
-  ]);
+  // Under a record's worth of bytes after the last one the header counts is padding some writers add.
+  if (declared === fits) return finish('binary', readBinary(bytes, count), []);
+  const message =
+    declared === 0
+      ? `The file header gives no triangle count, so the ${fits} triangles its size holds were read.`
+      : declared > fits
+        ? `The file header says ${declared} triangles but the file holds only ${fits}, so it looks cut off: the ${fits} were read. ${EXPORT_AGAIN}`
+        : `The file header says ${declared} triangles but the file has room for ${fits}, so the first ${declared} were read and the rest left out, and the file may be damaged. ${EXPORT_AGAIN}`;
+  return finish('binary', readBinary(bytes, count), [{ code: 'stl-count-mismatch', severity: 'warning', message }]);
 }

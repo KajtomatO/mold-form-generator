@@ -1,9 +1,13 @@
 import { mkdirSync, readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import type { ParamPath } from '../src/app/stages';
-import { EXAMPLE_FILES } from '../test/fixtures/loadExamples';
+import { heightBlockStl } from '../test/fixtures/heavy';
+import { EXAMPLE_FILES, loadManifold } from '../test/fixtures/loadExamples';
+import { asciiStl, box, patchedL, toSoup } from '../test/fixtures/synthetic';
+import { benchyLetterSpots } from './spots';
 import { app, canDraw, dropAndWait, dropExample, hooks, openApp } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
 
@@ -22,7 +26,7 @@ interface Shot {
   file: string | null;
   grid: readonly [number, number];
   /** The sidebar section scrolled to the top, Advanced opened first; 'bolts' is the Bolts group's heading. */
-  scroll?: 'cover' | 'pour' | 'grid' | 'demold' | 'advanced' | 'bolts';
+  scroll?: 'base' | 'cover' | 'pour' | 'grid' | 'demold' | 'advanced' | 'bolts';
   /** M10: settings made before the model is dropped, such as the bolts turned on. */
   settings?: [ParamPath, unknown][];
   /** M10: the section across y through the front right bolt's axis, the camera close on that corner and square to the cut. */
@@ -50,6 +54,12 @@ interface Shot {
    * another STL dropped on a model with changes not saved, with the question it asks.
    */
   project?: 'opened' | 'corrupt' | 'migrated' | 'replace';
+  /**
+   * M11a: an STL that cannot be read opened over the model, with its inline error; an open mesh in soup mode,
+   * standing on its underside, with the Base section's note; the 3 million triangle block in merged mode,
+   * with its warning; a cut through one of Benchy's letters, close up; and jersey 20 x 1's last tile cut.
+   */
+  m11?: 'bad-file' | 'soup' | 'heavy' | 'lettering' | 'last-tile';
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
@@ -62,6 +72,8 @@ const VIEW_SETS = EXPORT_SETS;
 const PROJECT_SETS = EXPORT_SETS;
 // M10's bolts: every size and theme in Chromium, and the user's browser at 1366 x 768, dark.
 const BOLT_SETS = EXPORT_SETS;
+// M11a's: the export's sets, every size and theme in Chromium, and the user's browser at 1366 x 768, dark.
+const M11_SETS = EXPORT_SETS;
 const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
@@ -100,7 +112,35 @@ const CASES: Shot[] = [
   { name: 'jersey-bolts-section', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true]], boltCut: true, scroll: 'bolts', only: BOLT_SETS },
   { name: 'jersey-bolts-exploded', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true]], explode: true, only: BOLT_SETS },
   { name: 'jersey-bolts-warning', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true], ['bolts.size', 'M4'], ['base.thickness', 3], ['bolts.length', 8]], scroll: 'bolts', only: BOLT_SETS },
+  { name: 'jersey-bad-file', file: EXAMPLE_FILES.jersey, grid: [1, 1], m11: 'bad-file', only: M11_SETS },
+  { name: 'soup-mode-note', file: null, grid: [1, 1], m11: 'soup', scroll: 'base', only: M11_SETS },
+  { name: 'heavy-merged-warning', file: null, grid: [1, 1], m11: 'heavy', scroll: 'base', only: M11_SETS },
+  { name: 'benchy-lettering-section', file: EXAMPLE_FILES.benchy, grid: [1, 1], m11: 'lettering', only: M11_SETS },
+  { name: 'jersey-20x1-last-tile', file: EXAMPLE_FILES.jersey, grid: [20, 1], m11: 'last-tile', only: M11_SETS },
 ];
+
+/** The soup-mode L standing on its underside, or the 3 million triangle block in merged mode, by the Open button's input. */
+async function openM11(page: Page, kind: 'soup' | 'heavy', project: string): Promise<void> {
+  const input = page.locator('[data-section="model"] input[type="file"]');
+  if (kind === 'soup') {
+    await input.setInputFiles({ name: 'patched-l.stl', mimeType: 'model/stl', buffer: Buffer.from(asciiStl(toSoup(patchedL(await loadManifold())), 'patched L')) });
+    await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe('patched-l.stl');
+    await hooks(page, (h) => h.idle());
+    await app(page, (a) => a.store.setPlane({ rank: a.store.pipeline.oriented!.value.candidates.findIndex((c) => c.normal[2] < -0.99), upper: false }));
+  } else {
+    const path = join(tmpdir(), `cfg-shot-heavy-${project}-${process.pid}.stl`);
+    await writeFile(path, heightBlockStl());
+    try {
+      await input.setInputFiles(path);
+      await expect(page.getByTestId('file-name')).toContainText('3,011,040 triangles', { timeout: 300_000 });
+      await hooks(page, (h) => h.idle());
+      await hooks(page, (h) => h.setParam('base.mode', 'merged'));
+    } finally {
+      await rm(path, { force: true });
+    }
+  }
+  await hooks(page, (h) => h.idle());
+}
 
 const SIZES = [
   { width: 1366, height: 768 },
@@ -132,8 +172,9 @@ test.describe('review screenshots', () => {
           // The renderer card is what this server shows; it stays in one shot of the set to be reviewed there.
           const card = page.getByTestId('software-renderer');
           const keepCard = shot.name === 'benchy' && size.width === 1366 && theme === 'dark';
-          if (shot.file) {
-            await dropAndWait(page, shot.file);
+          if (shot.m11 === 'soup' || shot.m11 === 'heavy') await openM11(page, shot.m11, info.project.name);
+          if (shot.file || shot.m11 === 'soup' || shot.m11 === 'heavy') {
+            if (shot.file) await dropAndWait(page, shot.file);
             if (shot.grid[0] * shot.grid[1] > 1) await expect.poll(() => hooks(page, (h) => h.walls().result !== null), { timeout: 120_000 }).toBe(true);
             if (shot.name === 'vis35-two-levels') await expect(page.getByTestId('upper-level')).toBeVisible();
             const input = page.locator('[data-section="model"] input[type="file"]');
@@ -155,6 +196,10 @@ test.describe('review screenshots', () => {
               await input.setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: V1_PROJECT });
               await expect(page.getByTestId('file-notice')).toContainText('brought up to format 3');
               await hooks(page, (h) => h.idle());
+            } else if (shot.m11 === 'bad-file') {
+              const cube = new TextDecoder().decode(asciiStl(toSoup(box([0, 0, 0], [20, 20, 20])), 'cube'));
+              await input.setInputFiles({ name: 'cube-cut-short.stl', mimeType: 'model/stl', buffer: Buffer.from(cube.slice(0, cube.lastIndexOf('vertex') + 12)) });
+              await expect(page.getByTestId('file-notice')).toHaveAttribute('data-severity', 'error');
             } else if (shot.project === 'replace') {
               await hooks(page, (h) => h.setParam('silicone.t', 3.5));
               await hooks(page, (h) => h.idle());
@@ -162,13 +207,18 @@ test.describe('review screenshots', () => {
               await expect(page.getByTestId('replace-prompt')).toBeVisible();
             }
             if (!keepCard && (await card.count()) > 0) await card.getByRole('button', { name: 'Dismiss' }).click();
-            // The fixed camera: front right, above, at a distance set by the box.
-            await hooks(page, (h) => {
+            // The fixed camera: front right, above, at a distance set by the box. M11a's warnings move the
+            // Diagnostics card to the top right, so there the view moves right and up by a share of the box,
+            // which puts the mold to the left of the card and below it.
+            await hooks(page, (h, clear: boolean) => {
               const { min, max } = h.partBounds('cover')!;
-              const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
               const d = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
-              h.setCamera({ position: [c[0] + 0.6 * d, c[1] - 1.4 * d, c[2] + 0.9 * d], target: [c[0], c[1], c[2]], fov: 35 });
-            });
+              // The screen's right, seen from (0.6, -1.4, 0.9), is (0.919, 0.394, 0); its up is near +z.
+              const shift = clear ? [0.27 * 0.919 * d, 0.27 * 0.394 * d, 0.12 * d] : [0, 0, 0];
+              const c = [0, 1, 2].map((k) => (min[k] + max[k]) / 2 + shift[k]);
+              const far = clear ? 1.12 * d : d;
+              h.setCamera({ position: [c[0] + 0.6 * far, c[1] - 1.4 * far, c[2] + 0.9 * far], target: [c[0], c[1], c[2]], fov: 35 });
+            }, shot.m11 === 'soup' || shot.m11 === 'heavy');
             expect(await app(page, (a) => a.store.pipeline.status().stale)).toBe(false);
           } else if ((await card.count()) > 0) {
             await card.getByRole('button', { name: 'Dismiss' }).click();
@@ -207,6 +257,28 @@ test.describe('review screenshots', () => {
             await app(page, (a, y: number) => a.store.setSection({ at: y }), spot.y);
             // Close enough that the membrane, one 0.2 mm layer, shows as a band of its own.
             await hooks(page, (h, s: { x: number; y: number; z: number }) => h.setCamera({ position: [s.x + 2, s.y - 27, s.z + 6], target: [s.x + 2, s.y, s.z], fov: 35 }), spot);
+          }
+          if (shot.m11 === 'lettering') {
+            // Across x through a letter's air, close up from the side the cut faces.
+            await page.getByTestId('section').check();
+            await page.locator('[data-cut="x"]').click();
+            const at = benchyLetterSpots().air;
+            await app(page, (a, x: number) => a.store.setSection({ at: x }), at[0]);
+            // Seen from +x the screen's right is +y: the view moves right and up, so the letter sits clear of the card.
+            await hooks(page, (h, v: number[]) => h.setCamera({ position: [v[0] + 12, v[1] - 0.2, v[2] + 4.3], target: [v[0], v[1] + 1.6, v[2] + 1.3], fov: 35 }), at);
+          }
+          if (shot.m11 === 'last-tile') {
+            // Across y through the last tile's model, so the cut shows it centred, or not, along the row in its
+            // cavity; the handle sits at the row's middle, out of the way.
+            await page.getByTestId('section').check();
+            await page.locator('[data-cut="y"]').click();
+            const at = await app(page, (a) => {
+              const p = a.store.pipeline, b = p.oriented!.value.bounds, [ox, oy] = p.field!.value.mold.offsets.at(-1)!;
+              return [(b.min[0] + b.max[0]) / 2 + ox, (b.min[1] + b.max[1]) / 2 + oy, (b.max[2] - b.min[2]) / 2] as [number, number, number];
+            });
+            await app(page, (a, y: number) => a.store.setSection({ at: y }), at[1]);
+            // Seen from -y the screen's right is +x: the view moves right and up, so the cut sits clear of the card.
+            await hooks(page, (h, v: number[]) => h.setCamera({ position: [v[0] + 8, v[1] - 110, v[2] + 35], target: [v[0] + 28, v[1], v[2] + 10], fov: 35 }), at);
           }
           if (shot.explode) await page.getByTestId('explode').check();
           if (shot.topView) {

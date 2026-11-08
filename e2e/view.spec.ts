@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { OpeningPin } from '../src/core/analysis/placement';
-import { asciiStl, box, toSoup, withoutTriangles } from '../test/fixtures/synthetic';
-import { EXAMPLE_FILES } from '../test/fixtures/loadExamples';
+import { asciiStl, box, engravedBlock, join as joinMeshes, toSoup, withoutTriangles } from '../test/fixtures/synthetic';
+import { EXAMPLE_FILES, loadManifold } from '../test/fixtures/loadExamples';
+import { benchyLetterSpots } from './spots';
 import { fixed } from '../src/ui/format';
 import { app, canDraw, canvasPatch, canvasPixels, checkLayout, dropAndWait, dropExample, hooks, idle, openApp, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
@@ -230,7 +231,7 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
     expect((await app(page, (a) => a.scene.explodeOffsets())).cover).toBe(Math.round((openRim.Zt + openRim.Tb) / 4));
   });
 
-  test('@smoke section caps: every tile, a hole for the hidden model, the barrel\'s sealed hollow, the side kept, a box standing in for the cover, and Mode B exploded', async ({ page }) => {
+  test('@smoke section caps: every tile, a hole for the hidden model, the barrel\'s sealed hollow, air the plate seals, the side kept, a box standing in for the cover, and Mode B exploded', async ({ page }) => {
     await hooks(page, (h) => h.setParam('grid.nx', 2));
     await dropAndWait(page, EXAMPLE_FILES.jersey);
     const card = page.getByTestId('software-renderer');
@@ -343,6 +344,45 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
       return { top: b.max[2], ceiling, y };
     });
     expect((await capAt(page, [hollow[0], ring.y, (ring.top + ring.ceiling) / 2])).part).toBe('silicone');
+
+    // Air the plate seals under the model is no silicone either. A ring engraved 0.5 mm into a block's
+    // underside round an island, as the inside of a letter under Benchy's hull, shows no silicone cap;
+    // with a channel out to the side, silicone reaches the ring, and it does. With CFG_FULL, beside
+    // Benchy's own lettering below: the quick suite holds plateSealedAir to its winding in Node.
+    if (!FULL) return;
+    const api = await loadManifold();
+    // Both blocks in one model, 10 mm apart, the open one at +x, so one load and one base face serve both.
+    const open = engravedBlock(api, true);
+    const pair = joinMeshes(engravedBlock(api, false), { positions: open.positions.map((v, k) => (k % 3 === 0 ? v + 40 : v)), indices: open.indices });
+    await dropExample(page, 'engraved.stl', { text: new TextDecoder().decode(asciiStl(toSoup(pair), 'engraved')) });
+    await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe('engraved.stl');
+    await idle(page);
+    // Their tops are the larger face, so the engraved undersides are chosen as the base, as a maker would.
+    await app(page, (a) => a.store.setPlane({ rank: a.store.pipeline.oriented!.value.candidates.findIndex((c) => c.normal[2] < -0.99), upper: false }));
+    await idle(page);
+    const min = await app(page, (a) => a.store.pipeline.oriented!.value.bounds.min);
+    // Close up, square on to the cut, as the recess is 0.5 mm tall.
+    const closeCap = async (at: Point): Promise<{ part: string | null; share: number }> => {
+      await hooks(page, (h, c: Point) => h.setCamera({ position: [c[0] + 12, c[1], c[2] + 1], target: c, fov: 35 }), at);
+      return capAt(page, at);
+    };
+    for (const channel of [false, true]) {
+      // In the ring's band beside the island, half way up its 0.5 mm.
+      const air: Point = [min[0] + 11.5 + (channel ? 40 : 0), min[1] + 10, 0.25];
+      await app(page, (a, x: number) => a.store.setSection({ axis: 'x', at: x }), air[0]);
+      const seen = await closeCap(air);
+      // One recess sealed, the one without the channel.
+      await expect.poll(() => app(page, (a) => a.scene.sealedRecesses())).toBe(1);
+      if (channel) {
+        expect(seen.part, 'the open ring').toBe('silicone');
+        expect(seen.share).toBeGreaterThan(0.6);
+      } else {
+        expect(seen.part === 'silicone' ? seen.share : 0, `the sealed ring read ${seen.part} at ${seen.share}`).toBeLessThan(0.1);
+      }
+      // The block over the ring is model either way, and the silicone beside the block silicone.
+      expect((await closeCap([air[0], air[1], 1.5])).part, `block over the ring, channel ${channel}`).toBe('model');
+      expect((await closeCap([air[0], min[1] - 1.5, 0.25])).part, `beside the block, channel ${channel}`).toBe('silicone');
+    }
   });
 
   test('@smoke opening drag in 3D on a 2 x 1 grid: valid and invalid by the hard rules, T2b lands, every copy moves, the drop snaps and pins, the pin keeps through t, and Esc puts it back', async ({ page }) => {
@@ -579,6 +619,41 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
     expect(await depth()).toEqual({ undo: 0, redo: 0 });
     await expect(page.getByTestId('undo')).toBeDisabled();
     await expect(page.getByTestId('redo')).toBeDisabled();
+  });
+});
+
+test.describe('section caps through Benchy\'s lettering', () => {
+  test.skip(!FULL, 'runs with CFG_FULL=1');
+  let watch: PageWatch;
+  test.beforeEach(async ({ page }, info) => {
+    test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+    test.skip(info.project.name === 'dev', DEV_SKIP);
+    watch = await openApp(page);
+  });
+  test.afterEach(({}, info) => {
+    if (info.status === 'skipped') return;
+    expect(watch.errors).toEqual([]);
+    expect(watch.foreign).toEqual([]);
+  });
+
+  test('the 0.30 mm recess of a letter under the hull is air, and the silicone at the plate beside the hull is silicone', async ({ page }) => {
+    await dropAndWait(page, EXAMPLE_FILES.benchy);
+    const card = page.getByTestId('software-renderer');
+    if ((await card.count()) > 0) await card.getByRole('button', { name: 'Dismiss' }).click();
+    const { air, open } = benchyLetterSpots();
+    await page.getByTestId('section').check();
+    await app(page, (a, x: number) => a.store.setSection({ axis: 'x', at: x }), air[0]);
+    const close = (at: Point): Promise<void> => hooks(page, (h, c: Point) => h.setCamera({ position: [c[0] + 10, c[1], c[2] + 1], target: c, fov: 35 }), at);
+    await close(air);
+    await expect.poll(() => app(page, (a) => a.scene.sealedRecesses())).toBe(8);
+    const letter = await capAt(page, air);
+    expect(letter.part === 'silicone' ? letter.share : 0, `the letter read ${letter.part} at ${letter.share}`).toBeLessThan(0.1);
+    // The hull over the letter is model, and outside the hull at the same height silicone reaches the plate.
+    expect((await capAt(page, [air[0], air[1], 0.9])).part).toBe('model');
+    await close(open);
+    const beside = await capAt(page, open);
+    expect(beside.part).toBe('silicone');
+    expect(beside.share).toBeGreaterThan(0.6);
   });
 });
 

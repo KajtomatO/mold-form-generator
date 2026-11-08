@@ -14,8 +14,8 @@ import { buildField } from '../core/field/build';
 import { fieldSettings, planField, type Field, type FieldPlan, type FieldSettings } from '../core/field/grid';
 import { moldSilicone } from '../core/field/silicone';
 import type { MeshAudit } from '../core/mesh/audit';
-import { importSolid, type ImportedSolid } from '../core/mesh/shells';
-import { simplifyForManifold, type MeshSimplifier } from '../core/mesh/simplify';
+import { importSolid, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
+import { HEAVY_LIMITS, importFromCopy, manifoldPathSolid, simplifyForManifold, type HeavyLimits, type ManifoldPath, type MeshSimplifier } from '../core/mesh/simplify';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
@@ -70,6 +70,11 @@ export interface ExportInputs {
   openings: ExportOpening[];
   /** The STL's own bytes, sent only while main does not know their hash, which project.json records. */
   stl: Uint8Array | null;
+  /**
+   * M11: the preview's import of a mesh past G1.8's limit, which checked it whole. The export then builds
+   * only the simplified copy every Manifold step uses, as the whole solid would hold 1.3 GB of its heap.
+   */
+  importReport?: SolidReport | null;
 }
 
 /** What main knows and the export does not, for the README, report.json and project.json. */
@@ -100,7 +105,7 @@ export interface ExportJob extends ExportRequest {
 export interface Clearance {
   /** minGap between the decimated model and the cover, less the decimation's error. */
   measured: number;
-  /** The decimation's error, in mm. 0 when the model itself was measured. */
+  /** The decimation's error, in mm. When the model's own solid was measured, 0, or past G1.8's limit its copy's error. */
   error: number;
   /** By how much the margin was raised for a second build, or 0. */
   raisedBy: number;
@@ -222,7 +227,7 @@ function unique(list: Diagnostic[]): Diagnostic[] {
  * the same steps as the ZIP, so a part saved alone is the one the ZIP holds; only what nothing needs is
  * left out. The base needs the cover still, as a raise of the margin moves the rim of both.
  */
-export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job: ExportJob, progress: ProgressReport, now: () => number, timings: Record<string, number> = {}): ExportOutputs {
+export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job: ExportJob, progress: ProgressReport, now: () => number, timings: Record<string, number> = {}, limits: HeavyLimits = HEAVY_LIMITS): ExportOutputs {
   const steps = exportSteps(job);
   // After a raise of the margin the build runs again. Its steps show as one, 'raise', where the clearance
   // stands, so the stage bar never runs backwards. A step is reported once, when it begins.
@@ -256,14 +261,53 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
   if (!inputs || !meta) throw new Error(`An export of the ${want} needs the model.`);
   const scaled: Params = cellScale === 1 ? params : { ...params, quality: { ...params.quality, cellFinal: params.quality.cellFinal * cellScale } };
   return withArena(api, (arena) => {
-    const imported = timed('import', () => importSolid(arena, inputs.welded, inputs.audit));
+    // A trimmed model_oriented.stl needs the whole solid, so only an untrimmed one may come from the copy alone.
+    const known = inputs.importReport && !inputs.needsTrim ? inputs.importReport : null;
+    const fromCopy = known ? timed('import', () => importFromCopy(arena, inputs.welded, known, simplifier, limits.limit, limits.target)) : null;
+    // The import ladder makes many pieces on the way, such as decompose's, which share the solid's memory:
+    // only the solid is kept, so freeing it below frees it all.
+    const imported =
+      fromCopy ??
+      timed('import', () => {
+        const found = withArena(api, (scratch) => {
+          const whole = importSolid(scratch, inputs.welded, inputs.audit);
+          if (whole.solid) scratch.release(whole.solid);
+          return whole;
+        });
+        if (found.solid) arena.track(found.solid);
+        return found;
+      });
     const mesh: WeldedMesh = { positions: transformPositions(imported.mesh.positions, inputs.transform), indices: imported.mesh.indices };
     const bounds = meshBounds(mesh.positions);
-    const model = orientedSolid(arena, imported, { transform: inputs.transform, needsTrim: inputs.needsTrim });
+    // Past G1.8's limit, what only the whole solid can tell is read before the copy is made, so the whole
+    // solid is freed before the build: the model's volume, and a trimmed model_oriented.stl, which otherwise
+    // comes from the mesh. A trim makes two more solids the whole mesh's size, in an arena that ends here.
+    let wholeVolume: number | null = null;
+    let trimmedStl: Uint8Array | null = null;
+    if (fromCopy) {
+      // The copy came only where no inside-out shell was flipped, so the whole solid is the bodies less their voids.
+      wholeVolume = known!.solidVolume - known!.voidVolume;
+    } else if (imported.solid && imported.mesh.indices.length / 3 > limits.limit) {
+      if (inputs.needsTrim) {
+        const read = withArena(api, (scratch) => {
+          const trimmed = orientedSolid(scratch, imported, { transform: inputs.transform, needsTrim: true })!;
+          return { volume: trimmed.volume(), stl: want === 'zip' && params.base.mode === 'glue' ? modelOrientedStl({ mesh, needsTrim: true } as OrientedModel, trimmed) : null };
+        });
+        wholeVolume = read.volume;
+        trimmedStl = read.stl;
+      } else {
+        wholeVolume = imported.solid.volume();
+      }
+    }
+    // G1.8: past the limit every Manifold step after the import uses a simplified copy.
+    const path: ManifoldPath = fromCopy ? { solid: fromCopy.solid, heavy: true, diagnostics: fromCopy.simplified, errorMm: fromCopy.errorMm } : timed('import', () => manifoldPathSolid(arena, imported, simplifier, limits.limit, limits.target));
+    // The copy stands in for the whole solid from here on. One that is no closed solid leaves the whole one in use.
+    if (path.heavy && !fromCopy) arena.release(imported.solid!).delete();
+    const model = orientedSolid(arena, { solid: path.solid }, { transform: inputs.transform, needsTrim: inputs.needsTrim });
     const cap = inputs.needsTrim && model ? arena.track(model.slice(0.02)) : undefined;
     const footprint = buildFootprint(arena, mesh, inputs.candidate, scaled.base.minIsland, cap);
     const { pocketDepth, printMargin, ventPersistence, boltLength } = resolveAuto(scaled, bounds);
-    const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...imported.report.diagnostics, ...footprint.diagnostics];
+    const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...imported.report.diagnostics, ...path.diagnostics, ...footprint.diagnostics];
     // The coarser cell widens the margin of G4, and with it the cavity and the box, past what the preview showed.
     if (cellScale !== 1) diagnostics.push({ code: 'export-coarser', severity: 'warning', message: `The geometry engine failed at full detail, so the export was built again at half the detail, on a ${scaled.quality.cellFinal} mm grid instead of ${params.quality.cellFinal} mm, with a wider safety margin and a larger box than the preview shows.` });
 
@@ -315,7 +359,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     let clearance: Clearance | null = null;
     const search = Math.max(8, scaled.silicone.t + SEARCH_PAST_T);
     // Decimating a heavy model is part of measuring it, so it shows as that step.
-    const probe = model ? timed('clearance', () => decimate(arena, simplifier, mesh, model, inputs.needsTrim)) : null;
+    const probe = model ? timed('clearance', () => decimate(arena, simplifier, mesh, { solid: model, error: path.errorMm }, inputs.needsTrim)) : null;
     if (probe) {
       const gapOf = (b: Built): number => timed('clearance', () => {
         const copies = b.offsets.map(([x, y]) => arena.track(probe.solid.translate([x, y, 0])));
@@ -344,7 +388,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       if (want !== 'base') out['cover.stl'] = poseToStl(api, built.cover, coverPose(built.rim));
       if (built.base && want !== 'cover') out['base.stl'] = poseToStl(api, built.base, basePose(built.rim));
       if (funnel) out['funnel.stl'] = poseToStl(api, funnel, funnelPose(scaled));
-      if (want === 'zip' && scaled.base.mode === 'glue') out['model_oriented.stl'] = modelOrientedStl({ mesh, needsTrim: inputs.needsTrim } as OrientedModel, model);
+      if (want === 'zip' && scaled.base.mode === 'glue') out['model_oriented.stl'] = trimmedStl ?? modelOrientedStl({ mesh, needsTrim: inputs.needsTrim } as OrientedModel, model);
       return out;
     });
     if (want !== 'zip') return { want, files, zip: new Uint8Array(), clearance, rim: built.rim, diagnostics, report: null, modelSha256: meta.modelSha256 };
@@ -389,10 +433,10 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         'cover.stl': built.cover.volume(),
         'base.stl': built.base!.volume(),
         'funnel.stl': funnel ? funnel.volume() : null,
-        'model_oriented.stl': model ? model.volume() : null,
+        'model_oriented.stl': wholeVolume ?? (model ? model.volume() : null),
       };
       const found = reports ? (({ diagnostics: _shown, ...rest }) => rest)(reports) : null;
-      const report = buildReport(params, inputs, meta, { imported, model, built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, bolts: bolts ? exportBolts(built, bolts.advice, scaled.quality.tinTolFinal) : null, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
+      const report = buildReport(params, inputs, meta, { imported, modelVolume: wholeVolume ?? (model ? model.volume() : null), built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, bolts: bolts ? exportBolts(built, bolts.advice, scaled.quality.tinTolFinal) : null, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
       const { requested, minimum } = built.rim.edge;
       const readme = exportReadme({
         app: APP_NAME,
@@ -436,7 +480,8 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
 
 interface Measured {
   imported: ImportedSolid;
-  model: Manifold | null;
+  /** The oriented model's volume, the whole one's past the simplification limit; null for an open mesh. */
+  modelVolume: number | null;
   built: Built;
   clearance: Clearance | null;
   search: number | null;
@@ -458,7 +503,7 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
     app: APP_NAME,
     appVersion: APP_VERSION,
     schemaVersion: SCHEMA_VERSION,
-    model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: m.imported.report.bodies, volumeMm3: m.model ? m.model.volume() : null },
+    model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: m.imported.report.bodies, volumeMm3: m.modelVolume },
     params,
     plane: { choice: meta.project.plane, normal: meta.plane.normal, offset: meta.plane.offset, areaMm2: meta.plane.area, planeTol: meta.plane.planeTol },
     tiles: space.offsets,
@@ -509,16 +554,20 @@ function exportBolts(built: Built, advice: BoltAdvice, raise: number): ExportBol
   };
 }
 
-/** G4: the model for minGap, decimated when it is heavy. The model itself when it is not, or when the decimated copy is no solid. */
-function decimate(arena: Arena, simplifier: MeshSimplifier, mesh: WeldedMesh, model: Manifold, needsTrim: boolean): { solid: Manifold; error: number } {
+/**
+ * G4: the model for minGap, decimated when it is heavy. The model itself when it is not, or when the
+ * decimated copy is no solid. `model.error` is how far the model's solid may lie from the mesh: 0, or
+ * past G1.8's limit the simplified copy's error, which a gap measured on it must give up.
+ */
+function decimate(arena: Arena, simplifier: MeshSimplifier, mesh: WeldedMesh, model: { solid: Manifold; error: number }, needsTrim: boolean): { solid: Manifold; error: number } {
   const simplified = simplifyForManifold(mesh, simplifier, MIN_GAP_TRIANGLES);
-  if (!simplified) return { solid: model, error: 0 };
+  if (!simplified) return model;
   try {
     const solid = arena.manifold(new arena.api.Mesh({ numProp: 3, vertProperties: simplified.mesh.positions, triVerts: simplified.mesh.indices }));
     return { solid: needsTrim ? trimToBase(arena, solid) : solid, error: simplified.errorMm };
   } catch (error) {
-    // A simplified copy can fold onto itself. Measuring the model itself is slower, never wrong.
-    if (error instanceof Error && error.name === 'ManifoldError') return { solid: model, error: 0 };
+    // A simplified copy can fold onto itself. Measuring the model's own solid is slower, and as close as its error.
+    if (error instanceof Error && error.name === 'ManifoldError') return model;
     throw error;
   }
 }

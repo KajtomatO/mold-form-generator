@@ -1,4 +1,5 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
+import { withArena } from '../../src/core/solid/arena';
 import type { WeldedMesh } from '../../src/core/mesh/weld';
 
 type V3 = [number, number, number];
@@ -552,6 +553,28 @@ export function nextFloat(value: number, ulps = 1): number {
   new Uint32Array(f.buffer)[0] += ulps;
   return f[0];
 }
+
+/**
+ * M11's soup-mode fixture: the L below, refined so its faces are a few mm across, with every face of the tall
+ * arm's outer side within 3 mm of a point half way up it taken out, as a scan's hole. Its underside is whole:
+ * 700 mm2 inside 160 mm of outline.
+ */
+export function patchedL(api: ManifoldToplevel): WeldedMesh {
+  const l = lShape(api);
+  const fine = withArena(api, (arena) => {
+    const mesh = arena.track(arena.manifold(new api.Mesh({ numProp: 3, vertProperties: l.positions, triVerts: l.indices })).refine(20)).getMesh();
+    return { positions: mesh.vertProperties, indices: mesh.triVerts };
+  });
+  const patch: number[] = [];
+  for (let t = 0; t < fine.indices.length / 3; t++) {
+    const c = [0, 1, 2].map((axis) => [0, 1, 2].reduce((sum, k) => sum + fine.positions[fine.indices[t * 3 + k] * 3 + axis], 0) / 3);
+    if (Math.abs(c[0] + 20) < 1e-4 && Math.hypot(c[1] - 5, c[2] - 12) < 3) patch.push(t);
+  }
+  return withoutTriangles(fine, patch);
+}
+
+/** The pocket the L's underside needs, offset by e with round corners, d deep: Steiner's area for its 5 convex corners, less e2 at its reflex one. */
+export const L_POCKET = (e: number, d: number): number => (700 + 160 * e + ((5 * Math.PI) / 4 - 1) * e * e) * d;
 
 /**
  * An L seen from above, with its bounding box centred on the origin: a tall arm down the -x side and

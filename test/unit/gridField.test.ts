@@ -47,7 +47,8 @@ describe('G6 plan', () => {
         expect(pitch).toBeGreaterThanOrEqual(size + spacing);
         expect(pitch - size - spacing).toBeLessThan(0.125);
       }
-      expect(plan.pitchX).toBe(plan.pitchXmm / 0.125);
+      expect(plan.shiftsX).toEqual([0, 1, 2].map((k) => (k * plan.pitchXmm) / 0.125));
+      expect(plan.shiftsY).toEqual([0, 1].map((k) => (k * plan.pitchYmm) / 0.125));
     }
   });
 
@@ -78,20 +79,32 @@ describe('G6 plan', () => {
     expect(planField(bounds, settings({ nx: 2, closeWidth: 2.2, cell: 0.5 })).autoSpacing).toBeCloseTo(plan.autoSpacing + 0.375, 9);
   });
 
-  it('a preview field reports the pitch it really uses, never below the export pitch', () => {
+  it('a preview field keeps the export pitch, and each of its tiles sits within half a cell of the export offset', () => {
     for (const spacing of [0, 5, 7.31, 12.3, null]) {
       const grid = { nx: 3, ny: 2, spacing };
       const finished = planField(bounds, settings(grid));
       const preview = planField(bounds, settings({ ...grid, cell: 0.5 }));
-      expect(finished.pitchX * 0.125).toBe(finished.pitchXmm);
-      expect(finished.pitchY * 0.125).toBe(finished.pitchYmm);
-      expect(preview.pitchX * 0.5).toBe(preview.pitchXmm);
-      expect(preview.pitchY * 0.5).toBe(preview.pitchYmm);
-      for (const [wide, narrow] of [[preview.pitchXmm, finished.pitchXmm], [preview.pitchYmm, finished.pitchYmm]]) {
-        expect(wide).toBeGreaterThanOrEqual(narrow);
-        expect(wide - narrow).toBeLessThan(0.5);
+      expect(finished.shiftsX.map((k) => k * 0.125)).toEqual([0, 1, 2].map((k) => k * finished.pitchXmm));
+      expect(finished.shiftsY.map((k) => k * 0.125)).toEqual([0, 1].map((k) => k * finished.pitchYmm));
+      expect([preview.pitchXmm, preview.pitchYmm]).toEqual([finished.pitchXmm, finished.pitchYmm]);
+      for (const [shifts, pitch] of [[preview.shiftsX, finished.pitchXmm], [preview.shiftsY, finished.pitchYmm]] as const) {
+        shifts.forEach((shift, k) => {
+          expect(Number.isInteger(shift)).toBe(true);
+          expect(Math.abs(shift * 0.5 - k * pitch)).toBeLessThanOrEqual(0.25);
+        });
       }
     }
+  });
+
+  it('the drift stays within half a cell however long the row: 20 tiles on a pitch a quarter cell past a whole number', () => {
+    // Pitch 27.375 at a 0.5 mm cell is 54.75 cells. Snapping the pitch to whole cells, as M8 did, put the
+    // last of 20 tiles 2.375 mm off; rounding each tile's own offset keeps every one within 0.25.
+    const preview = planField(bounds, settings({ nx: 20, spacing: 7.31, cell: 0.5 }));
+    expect(preview.pitchXmm).toBe(27.375);
+    const drift = preview.shiftsX.map((shift, k) => Math.abs(shift * 0.5 - k * preview.pitchXmm));
+    expect(Math.max(...drift)).toBeLessThanOrEqual(0.25);
+    expect(drift[19]).toBe(0.125);
+    expect(19 * Math.ceil(27.375 / 0.5) * 0.5 - 19 * 27.375).toBe(2.375);
   });
 
   it('a preview composite puts its tiles where its plan says, so parts placed from the plan line up', () => {
@@ -99,12 +112,14 @@ describe('G6 plan', () => {
     const s = settings({ nx: 3, ny: 2, spacing: 7.31, cell: 0.5, draftDeg: 0, closeWidth: 0 });
     const plan = planField(bounds, s);
     expect(planField(bounds, { ...s, cell: 0.125 }).pitchXmm).toBe(27.375);
-    expect(plan.pitchXmm).toBe(27.5);
+    expect(plan.pitchXmm).toBe(27.375);
+    expect(plan.shiftsX).toEqual([0, 55, 110]);
     const { field } = compositeTiles(dilate(rasterize(blockMesh, plan.tile), plan.rEff), plan);
     const copies: WeldedMesh[] = [];
     for (let ty = 0; ty < 2; ty++) {
       for (let tx = 0; tx < 3; tx++) {
-        copies.push(box([tx * plan.pitchXmm, ty * plan.pitchYmm, 0], [20 + tx * plan.pitchXmm, 10 + ty * plan.pitchYmm, 8]));
+        const x = plan.shiftsX[tx] * 0.5, y = plan.shiftsY[ty] * 0.5;
+        copies.push(box([x, y, 0], [20 + x, 10 + y, 8]));
       }
     }
     const independent = dilate(rasterize(join(...copies), plan.composite), plan.rEff);
@@ -155,6 +170,23 @@ describe('G6 plan', () => {
     // The pitch and margin follow the raised cell, so the guarantee is for the cell in use.
     expect(plan.rEff).toBeCloseTo(3 + 2.13 * plan.cell + 0.1, 9);
     expect(Number.isInteger(Math.round((plan.pitchXmm / plan.cell) * 1e6) / 1e6)).toBe(true);
+  });
+
+  it('a preview under the cap takes the margin of an export raised past it, and says the export raised its cell', () => {
+    const big = { min: [0, 0, 0] as [number, number, number], max: [100, 100, 50] as [number, number, number] };
+    const s = { ...fieldSettings(defaultParams(), big), nx: 8, ny: 8, spacing: 10 };
+    const exported = planField(big, s);
+    const preview = planField(big, { ...s, cell: 1 });
+    expect(preview.composite.nx * preview.composite.ny).toBeLessThan(NODE_CAP / 4);
+    // The cavity the preview shows is the export's, in the export's box: r_eff from the raised cell.
+    expect(preview.rEff).toBe(exported.rEff);
+    expect(preview.rEff).toBeGreaterThan(3 + 2.13 * 0.125 + 0.1 + 0.1);
+    expect(preview.diagnostics.map((d) => d.code)).toEqual(['export-cell-raised']);
+    expect(preview.diagnostics[0].message).toContain(`raised from 0.125 to ${exported.cell} mm`);
+    // Under the cap, no word, and the margin of the cell asked for.
+    const small = planField(big, { ...fieldSettings(defaultParams(), big), cell: 1 });
+    expect(small.diagnostics).toEqual([]);
+    expect(small.rEff).toBeCloseTo(3 + 2.13 * 0.125 + 0.1, 9);
   });
 });
 

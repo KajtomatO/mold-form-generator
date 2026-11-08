@@ -13,6 +13,8 @@ import { inNode, nodeHash } from './nodeRuns';
 import { canDraw, hooks, loadAndWait, openPipeline } from './pipelineHarness';
 
 const FULL = process.env.CFG_FULL === '1';
+/** M11: the soak runs only with CFG_SOAK=1 (scripts/ci.sh --soak), as the plan runs soak tests at M5 and M11 alone. */
+const SOAK = process.env.CFG_SOAK === '1';
 /**
  * The soak and the timings measure the workers, which the dev server serves as the build does, so they
  * run on the build in Chromium and in Firefox. Run on the dev server too they would take --full past its
@@ -324,8 +326,8 @@ const SWAP_LIMIT_MB = 500;
 /**
  * Measured in Node over 200 rebuilds of each model, the reading wanders by up to 192 KB as the
  * allocator's free holes come and go. The extrude leak this caught was 96 KB per rebuild of Benchy.
- * Over the 90 rebuilds after warm-up, this limit sees a leak of about 6 KB per rebuild or more, which
- * the negative control below shows. A smaller leak, such as one small section per run, is heap.test's
+ * Over M5's 90 rebuilds after warm-up, this limit saw a leak of about 6 KB per rebuild or more, which
+ * the negative control below shows; over M11's 290 it sees one of about 2 KB. A smaller leak, such as one small section per run, is heap.test's
  * to find, on the builders themselves.
  */
 const HEAP_FLAT_BYTES = 512 * 1024;
@@ -336,18 +338,24 @@ const HEAP_FLAT_BYTES = 512 * 1024;
  */
 const MAIN_FLAT_BYTES = 2 * 1024 * 1024;
 const WARM_UP = 10;
-const REBUILDS = 100;
+/** M11's soak: 300 rebuilds of each model. M5's was 100, which the leak control still runs. */
+const REBUILDS = 300;
+const CONTROL_REBUILDS = 100;
 /** A leak per rebuild for the control: a section of this many points, about 16 bytes each, and more inside Clipper. */
 const LEAK_POINTS = 1000;
 
+type HeapReading = { capacity: number | null; used: number | null; held: number; handles: number };
+type WorkerCount = { spawned: number; live: number } | null;
+
 interface Soak {
-  warm: { capacity: number | null; used: number | null; held: number };
-  end: { capacity: number | null; used: number | null; held: number };
+  warm: HeapReading;
+  end: HeapReading;
   main: [number, number] | null;
+  workers: [WorkerCount, WorkerCount];
 }
 
-/** REBUILDS rebuilds by t on the model loaded, with readings after the warm-up and at the end. */
-async function soak(page: Page, browser: string, leak: boolean): Promise<Soak> {
+/** `rebuilds` rebuilds by t on the model loaded, with readings after the warm-up and at the end. */
+async function soak(page: Page, browser: string, leak: boolean, rebuilds = REBUILDS): Promise<Soak> {
   // What is soaked is the rebuild, not the wait before it.
   await hooks(page, (h) => h.freezeBudgets({ debounceMs: 0 }));
   // Chromium alone lets a test read main's heap, through its debugging protocol.
@@ -367,48 +375,62 @@ async function soak(page: Page, browser: string, leak: boolean): Promise<Soak> {
   }, { t: k % 2 ? 3.1 : 3, leak: leak ? LEAK_POINTS : 0 });
   for (let k = 0; k < WARM_UP; k++) await rebuild(k);
   const warm = await hooks(page, (h) => h.heap());
+  const workers0 = await hooks(page, (h) => h.workers());
   const main0 = await mainHeap();
-  for (let k = WARM_UP; k < REBUILDS; k++) {
+  for (let k = WARM_UP; k < rebuilds; k++) {
     await rebuild(k);
     expect(swapUsedMb() - swap0, 'swap grew past what the server can spare').toBeLessThan(SWAP_LIMIT_MB);
   }
   const end = await hooks(page, (h) => h.heap());
+  const workers1 = await hooks(page, (h) => h.workers());
   const main1 = await mainHeap();
   await cdp?.detach();
-  return { warm, end, main: main0 === null || main1 === null ? null : [main0, main1] };
+  return { warm, end, main: main0 === null || main1 === null ? null : [main0, main1], workers: [workers0, workers1] };
 }
 
 test.describe('soak', () => {
-  test.skip(!FULL, 'runs with CFG_FULL=1');
-  for (const id of ['benchy', 'x8'] as ExampleId[]) {
-    test(`${id}: ${REBUILDS} rebuilds with a flat heap after warm-up`, async ({ page }, info) => {
+  test.skip(!SOAK, 'runs with CFG_SOAK=1');
+  // Benchy, the heaviest single model, and x8 on a 3 x 3 grid, the heaviest preview: 153 openings cut on every rebuild.
+  for (const [id, nx, ny] of [['benchy', 1, 1], ['x8', 3, 3]] as [ExampleId, number, number][]) {
+    test(`@soak ${id} ${nx} x ${ny}: ${REBUILDS} rebuilds with a flat heap after warm-up, no handle kept and no worker more`, async ({ page }, info) => {
       test.skip(info.project.name === 'dev', DEV_SKIP);
-      test.setTimeout(600_000);
+      test.setTimeout(2_400_000);
       const errors: string[] = [];
-      await openPipeline(page, errors);
+      // Firefox draws in software on this server's display, on its main thread, which the workers do not
+      // need; M5's soak ran it headless, and so without the view, too.
+      await openPipeline(page, errors, info.project.name === 'firefox' ? '&draw=0' : '');
+      await hooks(page, (h, grid: [number, number]) => {
+        h.setParam('grid.nx', grid[0]);
+        h.setParam('grid.ny', grid[1]);
+      }, [nx, ny]);
       await loadAndWait(page, EXAMPLE_FILES[id]);
-      const { warm, end, main } = await soak(page, info.project.name, false);
+      const started = Date.now();
+      const { warm, end, main, workers } = await soak(page, info.project.name, false);
       const status = await hooks(page, (h) => h.status());
-      console.log(`${id} soak: solid heap capacity ${warm.capacity} -> ${end.capacity}, used ${warm.used} -> ${end.used} (${end.used! - warm.used!}), held ${warm.held} -> ${end.held}; main ${main ? `${main[0]} -> ${main[1]} (${main[1] - main[0]})` : 'not readable'}`);
+      console.log(`${id} ${nx} x ${ny} soak in ${info.project.name}, ${REBUILDS} rebuilds in ${Math.round((Date.now() - started) / 1000)} s: solid heap capacity ${warm.capacity} -> ${end.capacity}, used ${warm.used} -> ${end.used} (${end.used! - warm.used!}), held ${warm.held} -> ${end.held}, handles ${warm.handles} -> ${end.handles}; workers ${JSON.stringify(workers)}; main ${main ? `${main[0]} -> ${main[1]} (${main[1] - main[0]})` : 'not readable'}`);
       expect(status).toMatchObject({ stale: false, error: null });
       expect(warm.capacity).not.toBeNull();
       // Each reading grows the capacity by one step, so the second may sit one step above the first.
       expect(end.used! - warm.used!).toBeLessThanOrEqual(HEAP_FLAT_BYTES);
       expect(end.held).toBe(warm.held);
+      // Every Manifold and CrossSection the rebuilds made was freed: what is left is what the cache holds.
+      expect(end.handles).toBe(warm.handles);
+      expect(workers[0]).not.toBeNull();
+      expect(workers[1]).toEqual(workers[0]);
       if (main) expect(main[1] - main[0]).toBeLessThanOrEqual(MAIN_FLAT_BYTES);
       expect(await logCount(page, 'solid', 'respawned')).toBe(0);
       expect(errors).toEqual([]);
     });
   }
 
-  test('negative control: a section kept for good on every rebuild shows over the same soak', async ({ page }, info) => {
+  test('@soak negative control: a section kept for good on every rebuild shows over the same soak', async ({ page }, info) => {
     test.skip(info.project.name === 'dev', DEV_SKIP);
     test.setTimeout(600_000);
     const errors: string[] = [];
     await openPipeline(page, errors);
     await loadAndWait(page, EXAMPLE_FILES.jersey);
-    const { warm, end } = await soak(page, info.project.name, true);
-    console.log(`leak control: solid heap used ${warm.used} -> ${end.used} (${end.used! - warm.used!}) over ${REBUILDS - WARM_UP} rebuilds, one ${LEAK_POINTS}-point section each`);
+    const { warm, end } = await soak(page, info.project.name, true, CONTROL_REBUILDS);
+    console.log(`leak control: solid heap used ${warm.used} -> ${end.used} (${end.used! - warm.used!}), handles ${warm.handles} -> ${end.handles}, over ${CONTROL_REBUILDS - WARM_UP} rebuilds, one ${LEAK_POINTS}-point section each`);
     expect(end.used! - warm.used!).toBeGreaterThan(HEAP_FLAT_BYTES);
     expect(errors).toEqual([]);
   });

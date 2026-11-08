@@ -1,12 +1,12 @@
 import type { ManifoldToplevel } from 'manifold-3d';
-import type { MeshSimplifier } from '../core/mesh/simplify';
+import { HEAVY_LIMITS, type HeavyLimits, type MeshSimplifier } from '../core/mesh/simplify';
 import { runExport } from './exportJob';
 import type { Post } from './fieldHost';
 import { StageMiss } from './fieldStages';
 import { usedHeap } from './heapProbe';
 import { applyDelay, buffersOf, injectedCrash, isInlineError, type ToWorker } from './protocol';
 import { SolidStages, type SolidOutputs } from './solidStages';
-import { withArena } from '../core/solid/arena';
+import { Arena, withArena } from '../core/solid/arena';
 
 /** The meshes are fresh copies out of WASM, so they go as they are. Only the import's mesh is held here. */
 function wire(outputs: SolidOutputs): { outputs: SolidOutputs; transfer: ArrayBuffer[] } {
@@ -24,11 +24,11 @@ function wire(outputs: SolidOutputs): { outputs: SolidOutputs; transfer: ArrayBu
 }
 
 /** solid.worker's message handler, apart from `self` and the WASM boot, so a Node test can drive the same code. */
-export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heapBytes: () => number | null, post: Post, now: () => number): (message: ToWorker) => void {
-  const stages = new SolidStages(api, now, simplifier);
+export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heapBytes: () => number | null, post: Post, now: () => number, limits: HeavyLimits = HEAVY_LIMITS): (message: ToWorker) => void {
+  const stages = new SolidStages(api, now, simplifier, limits);
   return (message) => {
     if (message.t === 'heap') {
-      post({ t: 'heap', id: message.id, capacity: heapBytes(), used: usedHeap(api, heapBytes), held: stages.heldEntries() });
+      post({ t: 'heap', id: message.id, capacity: heapBytes(), used: usedHeap(api, heapBytes), held: stages.heldEntries(), handles: Arena.live });
       return;
     }
     if (message.t !== 'solid' && message.t !== 'export') return;
@@ -42,7 +42,7 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
           post({ t: 'progress', id, step, done, total });
           applyDelay(message.fault, now, step);
         };
-        const outputs = runExport(api, simplifier, message, progress, now, timings);
+        const outputs = runExport(api, simplifier, message, progress, now, timings, limits);
         post({ t: 'exported', id, outputs, timings }, buffersOf(outputs.zip, ...Object.values(outputs.files)));
         return;
       }

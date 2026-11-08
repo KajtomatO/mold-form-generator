@@ -16,7 +16,11 @@ export function ParamRow({ path }: { path: ParamPath }) {
   const set = (next: unknown): void => store.setParam(path, next);
 
   if (def.kind === 'flag') return <FlagRow path={path} def={def} value={value as boolean} hint={hint} problems={problems} onChange={set} />;
-  if (def.kind === 'choice') return <ChoiceRow path={path} def={def} value={value as string} hint={hint} problems={problems} onChange={set} />;
+  if (def.kind === 'choice') {
+    // Merged mode needs a closed solid, which an open mesh in soup mode does not have.
+    const off = path === 'base.mode' && store.pipeline.modelClosed() === false ? { merged: 'Merged mode needs a closed solid, and this mesh has holes.' } : {};
+    return <ChoiceRow path={path} def={def} value={value as string} hint={hint} problems={problems} off={off} onChange={set} />;
+  }
   if (def.kind === 'auto' && def.options) return <ListRow path={path} def={def} value={value as number | null} auto={autoValue(path, store.pipeline)} hint={hint} problems={problems} onChange={set} />;
   return (
     <SliderRow
@@ -53,7 +57,8 @@ function FlagRow({ path, def, value, hint, problems, onChange }: { path: ParamPa
   );
 }
 
-function ChoiceRow({ path, def, value, hint, problems, onChange }: { path: ParamPath; def: ChoiceDef; value: string; hint?: string; problems: ReturnType<typeof useProblems>; onChange: (v: string) => void }) {
+/** `off` names the options that cannot be chosen now, with why, which the button's tooltip says. */
+function ChoiceRow({ path, def, value, hint, problems, off, onChange }: { path: ParamPath; def: ChoiceDef; value: string; hint?: string; problems: ReturnType<typeof useProblems>; off: Partial<Record<string, string>>; onChange: (v: string) => void }) {
   return (
     <div class="row" data-param={path} title={hint}>
       <span class="label" onDblClick={() => onChange(def.default)}>
@@ -61,7 +66,8 @@ function ChoiceRow({ path, def, value, hint, problems, onChange }: { path: Param
       </span>
       <div class="segmented wide" role="group" aria-label={def.label}>
         {def.options.map((option) => (
-          <button key={option} type="button" aria-pressed={option === value} onClick={() => onChange(option)}>
+          // One chosen before it went off, as from a project file, stays pressable, so it can be chosen away.
+          <button key={option} type="button" aria-pressed={option === value} disabled={off[option] !== undefined && option !== value} title={off[option]} onClick={() => onChange(option)}>
             {OPTION_LABELS[option] ?? option}
           </button>
         ))}

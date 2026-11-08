@@ -59,7 +59,7 @@ export function buildCoverFinal(arena: Arena, body: Manifold, rim: Pick<Rim, 'Zt
 
 /**
  * The plan's rule, tool domain inside the rebate at z = -2: anything outside would cut the wall. A
- * cropped tool is only right on a preview, where the field may run wider than the rim it is checked
+ * cropped tool is only right on a preview, whose coarser cell may reach past the rim it is checked
  * against, and at the export cell it would cost clearance, so the pipeline must treat that as a fault.
  */
 export function toolDiagnostics(rim: Rim, tool: Pick<ToolMesh, 'domain' | 'clippedNodes'>): Diagnostic[] {
@@ -68,7 +68,7 @@ export function toolDiagnostics(rim: Rim, tool: Pick<ToolMesh, 'domain' | 'clipp
     diagnostics.push({ code: 'tool-outside-rebate', severity: 'error', message: 'The cavity reaches past the base rebate, so the cover cannot be cut from these values.' });
   }
   if (tool.clippedNodes > 0) {
-    diagnostics.push({ code: 'preview-cropped', severity: 'info', message: 'The preview grid sits wider than the export at this cell, so the last row of cavities is cropped to the rim in this preview only.' });
+    diagnostics.push({ code: 'preview-cropped', severity: 'info', message: 'At the preview\'s coarser cell the cavity reaches past the rim in places, so it is cropped to the rim in this preview only.' });
   }
   return diagnostics;
 }

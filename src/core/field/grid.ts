@@ -91,13 +91,17 @@ export interface FieldPlan {
   tile: Grid;
   /** Domain of the whole mold, with the same origin as tile (0, 0). */
   composite: Grid;
-  /** Tile offsets in whole cells of this field. */
-  pitchX: number;
-  pitchY: number;
   /**
-   * The pitch this field really uses, in mm, so anything placed on its tiles lines up with them. It
-   * is a multiple of the export cell at the export cell, and that is the effective pitch the UI
-   * shows. A preview cell may not divide it, so a preview's pitch can be up to a cell wider per tile.
+   * Where each column and each row of tiles starts, in whole nodes of this field. At the export cell these
+   * are whole multiples of the pitch. A preview cell may not divide the pitch, so each preview tile sits
+   * at the export's offset rounded to its own nearest node: at most half a preview cell off the parts,
+   * which stand on the export's pitch, on every tile, however long the row.
+   */
+  shiftsX: number[];
+  shiftsY: number[];
+  /**
+   * The export's pitch in mm, a whole number of export cells, at any cell of this field. It is the
+   * effective pitch the UI shows, and the one every part and opening is placed on.
    */
   pitchXmm: number;
   pitchYmm: number;
@@ -112,7 +116,7 @@ export interface FieldPlan {
   diagnostics: Diagnostic[];
 }
 
-function layout(bounds: Bounds, settings: FieldSettings, cell: number, cellFinal: number): FieldPlan {
+function layout(bounds: Bounds, settings: FieldSettings, cell: number, cellFinal: number, exportPitch: [number, number] | null): FieldPlan {
   const { t, printMargin, tinTol, margin, draftDeg, closeWidth, nx, ny } = settings;
   const rEff = margin ? t + MARGIN_CELLS * cellFinal + printMargin : t;
   const raise = margin ? tinTol : 0;
@@ -133,29 +137,39 @@ function layout(bounds: Bounds, settings: FieldSettings, cell: number, cellFinal
   const j1 = Math.ceil(bounds.max[1] / cell) + pad;
   const tile: Grid = { nx: i1 - i0 + 1, ny: j1 - j0 + 1, cell, x0: i0 * cell, y0: j0 * cell };
 
-  // Rounding up means a typed spacing is never quietly reduced, at either cell. The small slack
-  // stops a pitch that is already a whole multiple from gaining a cell through float noise.
+  // Rounding up means a typed spacing is never quietly reduced. The small slack stops a pitch that is
+  // already a whole multiple from gaining a cell through float noise.
   const snap = (mm: number, to: number): number => Math.ceil(mm / to - 1e-9);
-  const pitchOf = (size: number): number => snap(snap(size + spacing, cellFinal) * cellFinal, cell);
-  const pitchX = pitchOf(bounds.max[0] - bounds.min[0]);
-  const pitchY = pitchOf(bounds.max[1] - bounds.min[1]);
-  const pitchXmm = pitchX * cell;
-  const pitchYmm = pitchY * cell;
-  const composite: Grid = { ...tile, nx: tile.nx + (nx - 1) * pitchX, ny: tile.ny + (ny - 1) * pitchY };
+  const pitchOf = (size: number): number => snap(size + spacing, cellFinal) * cellFinal;
+  const pitchXmm = exportPitch ? exportPitch[0] : pitchOf(bounds.max[0] - bounds.min[0]);
+  const pitchYmm = exportPitch ? exportPitch[1] : pitchOf(bounds.max[1] - bounds.min[1]);
+  // Rounded per tile, not as one pitch in this field's nodes, so the drift of a preview tile from the
+  // export's never adds up along a row. At the export cell the quotient is whole and nothing moves.
+  const shifts = (count: number, pitch: number): number[] => Array.from({ length: count }, (_, k) => Math.round((k * pitch) / cell));
+  const shiftsX = shifts(nx, pitchXmm);
+  const shiftsY = shifts(ny, pitchYmm);
+  const composite: Grid = { ...tile, nx: tile.nx + shiftsX[nx - 1], ny: tile.ny + shiftsY[ny - 1] };
 
-  return { cell, rEff, raise, hMax, tile, composite, pitchX, pitchY, pitchXmm, pitchYmm, autoSpacing, requiredWall, spacing, nx, ny, diagnostics: [] };
+  return { cell, rEff, raise, hMax, tile, composite, shiftsX, shiftsY, pitchXmm, pitchYmm, autoSpacing, requiredWall, spacing, nx, ny, diagnostics: [] };
 }
 
 /** G4 and G6: the radius, the domain and the pitch. Pure arithmetic, so the UI can show it at once. */
 export function planField(bounds: Bounds, settings: FieldSettings): FieldPlan {
-  let plan = layout(bounds, settings, settings.cell, settings.cellFinal);
-  let cell = settings.cell, cellFinal = settings.cellFinal;
-  // Padding and the margin both grow with the cell, so this checks again after each raise.
+  // A preview stands its tiles on the export's pitch, and widens its margin as the export does, both of
+  // which a raise of the export's own cell past the node cap moves too. Snapped to the cell it was given
+  // instead, a preview of a big grid drifted from the export by up to a raised cell per tile, and its
+  // cavity came out narrower than the export's in the export's box.
+  const exported = settings.cell === settings.cellFinal ? null : planField(bounds, { ...settings, cell: settings.cellFinal });
+  const pitch: [number, number] | null = exported ? [exported.pitchXmm, exported.pitchYmm] : null;
+  let cell = settings.cell, cellFinal = exported ? exported.cell : settings.cellFinal;
+  let plan = layout(bounds, settings, cell, cellFinal, pitch);
+  // Padding and the margin both grow with the cell, so this checks again after each raise. A preview's
+  // margin stays the export's, even where the cap raises the preview's own cell too, to a rounding past it.
   while (plan.composite.nx * plan.composite.ny > NODE_CAP) {
     const needed = cell * Math.sqrt((plan.composite.nx * plan.composite.ny) / NODE_CAP);
     cell = Math.ceil(needed * 1000) / 1000;
-    cellFinal = Math.max(cellFinal, cell);
-    plan = layout(bounds, settings, cell, cellFinal);
+    if (!exported) cellFinal = Math.max(cellFinal, cell);
+    plan = layout(bounds, settings, cell, cellFinal, pitch);
   }
   if (cell !== settings.cell) {
     plan.diagnostics.push({
@@ -164,12 +178,14 @@ export function planField(bounds: Bounds, settings: FieldSettings): FieldPlan {
       message: `This mold would need more than ${NODE_CAP / 1_000_000} million field nodes, so the cell was raised from ${settings.cell} to ${cell} mm.`,
     });
   }
+  // The export's own raise, which the preview's margin already follows, is said in the preview too.
+  if (exported) plan.diagnostics.push(...exported.diagnostics.map((d) => (d.code === 'cell-raised' ? { ...d, code: 'export-cell-raised', message: `At full detail this mold would need more than ${NODE_CAP / 1_000_000} million field nodes, so the export's cell is raised from ${settings.cellFinal} to ${exported.cell} mm, which widens the safety margin, as the preview shows.` } : d)));
   return plan;
 }
 
 /**
  * The plan of the export field, whatever cell a preview is running at. Anything placed on the tiles,
- * and the rim around them, takes its pitch from here: a preview field can sit a cell per tile wider.
+ * and the rim around them, takes its offsets from here: a preview tile can sit half a preview cell off.
  */
 export function exportPlan(bounds: Bounds, settings: FieldSettings): FieldPlan {
   return planField(bounds, { ...settings, cell: settings.cellFinal });

@@ -40,6 +40,18 @@ export class ProjectFiles {
     return { zip: reply.zip, sha256: reply.sha256 };
   }
 
+  /**
+   * An STL, read in a worker before it replaces the model on screen. Its bytes are handed over and come
+   * back with the answer; a reason it cannot be read is a ProjectError. `loaded` says a model is on screen.
+   */
+  async check(bytes: Uint8Array, name: string, loaded: boolean): Promise<{ bytes: Uint8Array; sha256: string | null; triangles: number; warnings: string[] }> {
+    const own = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? (bytes.buffer as ArrayBuffer) : bytes.slice().buffer;
+    const reply = await this.run({ t: 'check', id: ++this.jobs, bytes: own, name, loaded }, [own]);
+    if (reply.t === 'project-error') throw new ProjectError(reply.message, reply.details);
+    if (reply.t !== 'checked') throw new Error(`The project worker answered a check with ${reply.t}.`);
+    return { bytes: new Uint8Array(reply.bytes), sha256: reply.sha256, triangles: reply.triangles, warnings: reply.warnings };
+  }
+
   /** A chosen or dropped project file, which is handed over whole; `loaded` is copied, as the pipeline keeps it. */
   async open(bytes: Uint8Array, name: string, kind: 'zip' | 'json', loaded: Uint8Array | null): Promise<Opened> {
     const own = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? (bytes.buffer as ArrayBuffer) : bytes.slice().buffer;
