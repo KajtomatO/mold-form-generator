@@ -8,13 +8,34 @@ import { Sidebar } from './Sidebar/Sidebar';
 import { StatusStrip } from './StatusStrip';
 import { Viewport } from './Viewport';
 
+/**
+ * Where typing goes: there the browser's own undo of the text applies, not the app's. A number box that
+ * commits to the project marks itself `data-undo="app"` while it holds no typing of its own, as after
+ * Enter or a wheel step: what it shows is then the project's, and only the app's undo can take that back.
+ */
+const TEXT_TYPES = new Set(['text', 'search', 'number', 'email', 'url', 'tel', 'password']);
+function takesText(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.dataset.undo === 'app') return false;
+  if (target.isContentEditable || target instanceof HTMLTextAreaElement) return true;
+  return target instanceof HTMLInputElement && TEXT_TYPES.has(target.type);
+}
+
 export function App({ store, scene, canvas }: { store: Store; scene: PreviewScene | null; canvas: HTMLCanvasElement | null }) {
   useEffect(() => {
     const keys = (event: KeyboardEvent): void => {
       if (event.key === 'Escape' && store.pickMode.value) {
         store.pickMode.value = false;
         store.hoverTriangle.value = null;
+        return;
       }
+      // Ctrl+Z undoes, Ctrl+Shift+Z and Ctrl+Y redo; Cmd on a Mac.
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || takesText(event.target)) return;
+      const key = event.key.toLowerCase();
+      if (key === 'z' && !event.shiftKey) store.undo();
+      else if ((key === 'z' && event.shiftKey) || key === 'y') store.redo();
+      else return;
+      event.preventDefault();
     };
     // An STL dropped anywhere else, such as on the sidebar, would make the browser open or save it and
     // leave the app. So it loads as on the viewport, which handles its own drops first.

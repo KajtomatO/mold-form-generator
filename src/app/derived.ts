@@ -1,5 +1,5 @@
-import { boreSilicone } from '../core/analysis/placement';
-import { topRadius } from '../core/analysis/validate';
+import { boreSilicone, describeProblem, firstPourPeak, type PlacedOpening } from '../core/analysis/placement';
+import { checkOpening, dropOpening, topRadius, type HardProblem } from '../core/analysis/validate';
 import { siliconeVolume } from '../core/field/silicone';
 import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
@@ -16,6 +16,11 @@ import { paramValue, type ParamPath } from './stages';
 /** The outer box of the assembled mold: the cover's footprint, and from the base's underside to the flat top. */
 export function moldBox(rim: Rim): [number, number, number] {
   return [rim.O.x1 - rim.O.x0, rim.O.y1 - rim.O.y0, rim.Zt + rim.Tb];
+}
+
+/** The same box as corners in mold coordinates: the cover's outline, from the base's underside up to Zt. */
+export function moldExtent(rim: Rim): { min: [number, number, number]; max: [number, number, number] } {
+  return { min: [rim.O.x0, rim.O.y0, -rim.Tb], max: [rim.O.x1, rim.O.y1, rim.Zt] };
 }
 
 export function modelSize(bounds: Bounds): [number, number, number] {
@@ -234,4 +239,48 @@ export function clampFigure(pipeline: Pipeline): ClampFigure | null {
 export function markerRadius(pipeline: Pipeline, kind: 'pour' | 'vent'): number {
   const sizes = pipeline.placement?.value.space.sizes;
   return sizes ? topRadius(sizes, kind) : 0;
+}
+
+/** "Pour 1", "Vent 2": an opening's name as its row in Pour & funnel shows it, numbered by kind in placement order. */
+export function openingLabel(openings: readonly Pick<PlacedOpening, 'id' | 'kind'>[], id: string): string {
+  const kind = openings.find((o) => o.id === id)?.kind;
+  if (!kind) return 'Opening';
+  const n = openings.filter((o) => o.kind === kind).findIndex((o) => o.id === id) + 1;
+  return `${kind === 'pour' ? 'Pour' : 'Vent'} ${n}`;
+}
+
+/** Where a dragged opening would stand, by the plan's hard rules, with why not in a maker's words. */
+export interface DragCheck {
+  valid: boolean;
+  problems: HardProblem[];
+  /** The first problem as a sentence part, such as "it is too close to another opening", or null. */
+  reason: string | null;
+  /** Where a drop now ends up, on the first tile: the spot itself, the nearest valid place, or null if none is valid. */
+  lands: { x: number; y: number } | null;
+  /** The plan's soft rules where it lands: a long bore, a first pour off its peak, its funnel colliding. */
+  warnings: Diagnostic[];
+}
+
+/**
+ * Drag validation on main, as the plan's Analyses section has it: the hard rules for the opening at
+ * (x, y) on the first tile, over all its copies, against every other opening where it stands now, then
+ * the drop's own snap and soft rules, so the view can show where a drop lands and what it would say.
+ * Reads only the field's nodes under the discs and the distance map, so it runs on every pointer move.
+ */
+export function dragCheck(pipeline: Pipeline, id: string, x: number, y: number): DragCheck | null {
+  const shown = pipeline.placement?.value;
+  const opening = shown?.placement.openings.find((o) => o.id === id);
+  if (!shown || !opening) return null;
+  const others = shown.placement.openings.filter((o) => o.id !== id);
+  const spot = { kind: opening.kind, x, y };
+  const { valid, problems } = checkOpening(shown.space, spot, others);
+  // The same call as the pipeline's drop, so what the tip says is what the drop does.
+  const drop = dropOpening(shown.space, spot, others, firstPourPeak(shown.placement, id, pipeline.params.silicone.t / 2));
+  return {
+    valid,
+    problems,
+    reason: problems.length > 0 ? describeProblem(problems[0]) : null,
+    lands: drop.valid ? { x: drop.x, y: drop.y } : null,
+    warnings: drop.valid ? drop.warnings : [],
+  };
 }

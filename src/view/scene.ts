@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Field } from '../core/field/grid';
+import { exteriorMesh } from '../core/field/sealed';
 import { HeightPreview, type HeightMode } from './heightPreview';
-import { applyStyle, DEFAULT_LAYERS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
+import { applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
 import { boxMesh, DiagnosticMarkers, OpeningMarkers, placeBox, type BoxSpan, type MarkerSpec, type OpeningMarker } from './overlays';
 import { Picker } from './picking';
+import { SectionCaps, SectionHandle, type CapPart, type CapSource, type Counting } from './section';
 
 /** A part as the workers send it: positions, 3 per vertex, and triangles. */
 export interface PartGeometry {
@@ -37,6 +39,15 @@ export interface Highlight {
 export const DARK_BACKGROUND = 0x101418;
 export const LIGHT_BACKGROUND = 0xf2f4f7;
 
+/** The section's plane: its normal points to the side kept, through `point`. */
+export interface SectionPlane {
+  normal: [number, number, number];
+  point: [number, number, number];
+}
+
+/** How far each part moves in z in the exploded view, per mm of the slider: moved, never turned. */
+export const EXPLODE = { cover: 1, base: -1, funnel: 2 } as const;
+
 /**
  * The 3D view: one scene, z up as in the mold's coordinates, a camera that can be set exactly, and the
  * parts the pipeline sends. The app adds the model, the T1 height preview, box proxies, markers and
@@ -50,6 +61,8 @@ export class PreviewScene {
   readonly heights: HeightPreview;
   readonly markers = new OpeningMarkers();
   readonly diagnosticMarkers = new DiagnosticMarkers();
+  readonly section: SectionCaps;
+  readonly sectionHandle = new SectionHandle();
   private active: THREE.PerspectiveCamera | THREE.OrthographicCamera = this.camera;
   /**
    * What the view looks at. With orbit controls this is their own target, so a pan, which moves only
@@ -66,7 +79,40 @@ export class PreviewScene {
   private modelMesh: PartGeometry | null = null;
   private readonly highlights = new THREE.Group();
   private readonly proxies: Record<'cover' | 'base', THREE.Mesh>;
+  /**
+   * What the exploded view moves: the cover with its proxy and the opening rings on its top, the base
+   * with its proxy, and the funnels. Plain objects, not groups, so the draw order inside stays as it was.
+   */
+  private readonly coverRoot = new THREE.Object3D();
+  private readonly baseRoot = new THREE.Object3D();
   private readonly funnels = new THREE.Group();
+  /** The model again at every other tile of a grid, sharing its geometry and material. */
+  private readonly modelCopies = new THREE.Object3D();
+  private tiles: [number, number][] = [[0, 0]];
+  /** Whether the model's mesh is closed, which its cut and the silicone's need. Null until known. */
+  private modelClosed: boolean | null = null;
+  /** In Mode B the base on screen carries the model's copies, so exploded they go down with it. */
+  private modelInBase = false;
+  /** The real mesh's geometry for the section's count, when what is drawn is a lighter proxy. */
+  private countedModel: { mesh: PartGeometry; geometry: THREE.BufferGeometry } | null = null;
+  /**
+   * The real mesh without its void shells, which the silicone's count takes away: no silicone reaches a
+   * hollow sealed inside the model, such as the barrel's, so for the silicone the model is filled there.
+   */
+  private exteriorModel: { mesh: PartGeometry; geometry: THREE.BufferGeometry | null } | null = null;
+  /** The silicone's solid closed from below: the lattice's rectangle at z = 0, facing down. */
+  private readonly siliconeFloor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1));
+  /**
+   * Where the cover's box takes that solid away, its height field and its floor: under coverRoot, so the
+   * cavity goes up with the box in the exploded view while the silicone stays.
+   */
+  private readonly coverField = new THREE.Object3D();
+  private readonly coverFloor = new THREE.Object3D();
+  private readonly heightCounting: Record<1 | -1, Counting>;
+  private explodeBy = 0;
+  /** The mold's box, for the section's caps and handle and the top view. */
+  private moldBox: THREE.Box3 | null = null;
+  private markerTop = 0;
   private funnel: { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial } | null = null;
   private readonly picker = new Picker();
   private readonly controls: OrbitControls | null = null;
@@ -87,13 +133,22 @@ export class PreviewScene {
     this.scene.add(sun);
 
     this.heights = new HeightPreview(this.renderer, options.cpuHeights);
+    this.renderer.localClippingEnabled = true;
+    this.section = new SectionCaps(LAYER_COLOURS, this.renderer.getPixelRatio());
+    this.heightCounting = this.section.counting(() => this.heights.stencilMaterial());
     this.modelGroup.matrixAutoUpdate = false;
     this.modelGroup.visible = false;
     this.modelGroup.add(this.highlights);
+    this.modelCopies.visible = false;
     this.proxies = { cover: boxMesh(partMaterial('cover', this.styles.cover, false)), base: boxMesh(partMaterial('base', this.styles.base, false)) };
     this.proxies.cover.renderOrder = LAYER_ORDER.cover;
     for (const proxy of Object.values(this.proxies)) placeBox(proxy, null);
-    this.scene.add(this.modelGroup, this.heights.mesh, this.proxies.cover, this.proxies.base, this.funnels, this.markers.group, this.diagnosticMarkers.group);
+    this.coverRoot.add(this.proxies.cover, this.markers.group, this.coverField, this.coverFloor);
+    this.baseRoot.add(this.proxies.base);
+    // Faces down, so its outside is below: the field's solid is {0 <= z <= H}.
+    this.siliconeFloor.rotation.x = Math.PI;
+    this.siliconeFloor.visible = false;
+    this.scene.add(this.modelGroup, this.modelCopies, this.heights.mesh, this.coverRoot, this.baseRoot, this.funnels, this.diagnosticMarkers.group, this.section.group, this.sectionHandle.group, this.siliconeFloor);
 
     if (options.interactive) {
       this.controls = new OrbitControls(this.camera, canvas);
@@ -133,19 +188,24 @@ export class PreviewScene {
   setPart(name: PartName, part: PartGeometry | null): void {
     const old = this.meshes.get(name);
     if (old) {
-      this.scene.remove(old);
+      old.removeFromParent();
       old.geometry.dispose();
       (old.material as THREE.Material).dispose();
       this.meshes.delete(name);
     }
     if (part) {
-      const mesh = new THREE.Mesh(partGeometry(part), partMaterial(name, this.styles[name], this.wireframe));
+      const mesh = new THREE.Mesh(partGeometry(part), this.clip(partMaterial(name, this.styles[name], this.wireframe)));
       mesh.renderOrder = LAYER_ORDER[name];
       this.meshes.set(name, mesh);
-      this.scene.add(mesh);
+      this.rootOf(name).add(mesh);
       if (!this.framed) this.frame();
     }
     this.requestRender();
+  }
+
+  /** Where a part hangs, so the exploded view moves it. A funnel set here, as no page does, stays put. */
+  private rootOf(name: PartName): THREE.Object3D {
+    return name === 'cover' ? this.coverRoot : name === 'base' ? this.baseRoot : this.scene;
   }
 
   /** Shows a box in place of a part until its solid arrives: the cover's outer box, the base's plate. */
@@ -164,7 +224,7 @@ export class PreviewScene {
     if (part && !this.funnel) {
       const geometry = partGeometry(part);
       geometry.userData.source = part;
-      this.funnel = { geometry, material: partMaterial('funnel', this.styles.funnel, this.wireframe) };
+      this.funnel = { geometry, material: this.clip(partMaterial('funnel', this.styles.funnel, this.wireframe)) };
     }
     this.funnels.clear();
     if (this.funnel) {
@@ -191,10 +251,15 @@ export class PreviewScene {
     this.modelMesh = mesh;
     this.picker.setMesh(mesh);
     this.setHighlights([]);
+    this.countedModel?.geometry.dispose();
+    this.exteriorModel?.geometry?.dispose();
+    this.countedModel = this.exteriorModel = null;
     if (display) {
-      this.model = new THREE.Mesh(partGeometry(display), partMaterial('model', this.styles.model, this.wireframe));
+      this.model = new THREE.Mesh(partGeometry(display), this.clip(partMaterial('model', this.styles.model, this.wireframe)));
+      this.model.visible = !this.modelAway;
       this.modelGroup.add(this.model);
     }
+    this.placeCopies();
     this.requestRender();
   }
 
@@ -205,7 +270,55 @@ export class PreviewScene {
       this.modelGroup.matrix.fromArray(matrix);
       this.modelGroup.updateMatrixWorld(true);
     }
+    this.placeCopies();
     this.requestRender();
+  }
+
+  /** The grid's tile offsets in mm, the first tile's at (0, 0): the model is drawn at every one. */
+  setTiles(offsets: [number, number][]): void {
+    this.tiles = offsets.length > 0 ? offsets : [[0, 0]];
+    this.placeCopies();
+    this.requestRender();
+  }
+
+  /** Whether the model's mesh is closed, as the import found: only a closed mesh gets a filled cut. */
+  setModelClosed(closed: boolean | null): void {
+    this.modelClosed = closed;
+    this.requestRender();
+  }
+
+  /** Whether the base on screen holds the model's copies, as Mode B's merged base does. */
+  setModelInBase(on: boolean): void {
+    this.modelInBase = on;
+    this.showModel();
+  }
+
+  /**
+   * Exploded in Mode B, the model goes down with the base it is part of, and the base's own copy of it is
+   * what shows; the one drawn on its own would stand in the silicone a second time. The silicone keeps a
+   * hole where it was, as its count still takes the model away in place.
+   */
+  private get modelAway(): boolean {
+    return this.modelInBase && this.explodeBy !== 0;
+  }
+
+  private showModel(): void {
+    if (this.model) this.model.visible = !this.modelAway;
+    this.modelCopies.visible = this.modelGroup.visible && !this.modelAway;
+    this.requestRender();
+  }
+
+  /** The model at every tile but the first, which modelGroup holds with its highlights and picking. */
+  private placeCopies(): void {
+    this.modelCopies.clear();
+    this.modelCopies.visible = this.modelGroup.visible && !this.modelAway;
+    if (!this.model) return;
+    for (const [ox, oy] of this.tiles.slice(1)) {
+      const copy = new THREE.Mesh(this.model.geometry, this.model.material);
+      copy.matrixAutoUpdate = false;
+      copy.matrix.makeTranslation(ox, oy, 0).multiply(this.modelGroup.matrix);
+      this.modelCopies.add(copy);
+    }
   }
 
   setHighlights(sets: Highlight[]): void {
@@ -226,7 +339,8 @@ export class PreviewScene {
         geometry.setAttribute('position', position);
         geometry.setIndex(new THREE.BufferAttribute(index, 1));
         // Over everything: the face to stand on is usually underneath, behind the base and the silicone.
-        const material = new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.7, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+        // Cut by the section like the model, so it never floats where the cut has taken the model away.
+        const material = this.clip(new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.7, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
         const highlight = new THREE.Mesh(geometry, material);
         highlight.renderOrder = 10;
         this.highlights.add(highlight);
@@ -270,6 +384,7 @@ export class PreviewScene {
 
   setOpenings(markers: OpeningMarker[], top: number): void {
     this.markers.set(markers, top);
+    this.markerTop = top;
     this.requestRender();
   }
 
@@ -286,6 +401,46 @@ export class PreviewScene {
   setWireframe(on: boolean): void {
     this.wireframe = on;
     this.applyStyles();
+  }
+
+  /** The mold's outer box, from the base's underside to the flat top, which the section and top view fit. */
+  setMoldBox(min: [number, number, number] | null, max: [number, number, number] | null): void {
+    this.moldBox = min && max ? new THREE.Box3(new THREE.Vector3(...min), new THREE.Vector3(...max)) : null;
+    this.requestRender();
+  }
+
+  /** The cover and funnels up, the base down, by `distance` mm. Picking, the rings and the section follow. */
+  setExplode(distance: number): void {
+    this.explodeBy = distance;
+    this.coverRoot.position.z = EXPLODE.cover * distance;
+    this.baseRoot.position.z = EXPLODE.base * distance;
+    this.funnels.position.z = EXPLODE.funnel * distance;
+    this.showModel();
+  }
+
+  /** How far each part is moved in z now, for tests. */
+  explodeOffsets(): { cover: number; base: number; funnel: number } {
+    return { cover: this.coverRoot.position.z, base: this.baseRoot.position.z, funnel: this.funnels.position.z };
+  }
+
+  /** One clipping plane on every part, or null for none. Every material clips by the same Plane object. */
+  setSection(section: SectionPlane | null): void {
+    const was = this.section.on;
+    this.section.on = section !== null;
+    this.sectionHandle.group.visible = section !== null;
+    if (section) this.section.plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(...section.normal), new THREE.Vector3(...section.point));
+    if (was !== this.section.on) this.applyStyles();
+    this.requestRender();
+  }
+
+  /** The parts whose cut was filled in the last frame drawn, for tests. */
+  capParts(): CapPart[] {
+    return this.section.on ? this.section.capped() : [];
+  }
+
+  /** Where each opening ring is, in mold coordinates, in the order set: ghosts of a drag's landing last. */
+  markerPositions(): { x: number; y: number; valid: boolean; ghost: boolean }[] {
+    return this.markers.positions();
   }
 
   /** Perspective or orthographic, keeping what the view looks at and how large it appears. */
@@ -347,6 +502,76 @@ export class PreviewScene {
     this.render();
   }
 
+  /** Looks straight down at the top, the whole box in view, so the openings can be placed by eye. */
+  topView(): void {
+    const box = this.moldBox;
+    if (!box) return;
+    const centre = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const half = Math.max(size.y / 2, size.x / 2 / this.camera.aspect) * 1.12;
+    const distance = half / Math.tan((this.camera.fov * Math.PI) / 360);
+    const top = box.max.z + EXPLODE.cover * this.explodeBy;
+    // A hair to the front, so "up" on the screen stays +y and the orbit has a direction to start from.
+    this.setCamera({ position: [centre.x, centre.y - distance * 1e-3, top + distance], target: [centre.x, centre.y, top] });
+  }
+
+  /** The ray under a point on the page. */
+  private rayAt(clientX: number, clientY: number): THREE.Raycaster {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, 1 - ((clientY - rect.top) / rect.height) * 2);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.active);
+    return raycaster;
+  }
+
+  /** Where a point on the page meets the plane of the cover's flat top, in mold x and y, or null if it misses. */
+  topPointAt(clientX: number, clientY: number): { x: number; y: number } | null {
+    const z = this.markerTop + this.coverRoot.position.z;
+    const hit = this.rayAt(clientX, clientY).ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+    return hit ? { x: hit.x, y: hit.y } : null;
+  }
+
+  /** The opening ring under a point on the page, by its index in the list set, skipping rings the section cuts away. */
+  markerAt(clientX: number, clientY: number): number | null {
+    const at = this.topPointAt(clientX, clientY);
+    if (!at) return null;
+    const z = this.markerTop + this.coverRoot.position.z;
+    const kept = (m: { x: number; y: number }): boolean => !this.section.on || this.section.plane.distanceToPoint(new THREE.Vector3(m.x, m.y, z)) >= 0;
+    return kept(at) ? this.markers.hit(at.x, at.y, kept) : null;
+  }
+
+  /** Whether a point on the page is on the section's drag handle. */
+  handleAt(clientX: number, clientY: number): boolean {
+    return this.sectionHandle.hit(this.rayAt(clientX, clientY));
+  }
+
+  setHandleHot(on: boolean): void {
+    if (this.sectionHandle.isHot === on) return;
+    this.sectionHandle.setHot(on);
+    this.requestRender();
+  }
+
+  /**
+   * The point of the line through the handle along `axis` nearest to the ray under the pointer, as its
+   * coordinate along that axis: where a drag of the handle puts the plane. Null when looking along it.
+   */
+  axisValueAt(clientX: number, clientY: number, axis: 0 | 1 | 2): number | null {
+    const { ray } = this.rayAt(clientX, clientY);
+    const along = new THREE.Vector3().setComponent(axis, 1);
+    const origin = this.sectionHandle.group.position;
+    const w0 = ray.origin.clone().sub(origin);
+    const b = ray.direction.dot(along);
+    const denominator = 1 - b * b;
+    if (denominator < 1e-6) return null;
+    const t = (along.dot(w0) - b * ray.direction.dot(w0)) / denominator;
+    return origin.getComponent(axis) + t;
+  }
+
+  /** Orbit, pan and zoom on or off: off while a ring or the handle is dragged, so the camera does not move with it. */
+  setControlsEnabled(on: boolean): void {
+    if (this.controls) this.controls.enabled = on;
+  }
+
   /** Where a point in mold coordinates lands on the page, in CSS pixels, for tests that click or drag in 3D. */
   worldToScreen(point: [number, number, number]): { x: number; y: number; visible: boolean } {
     const projected = new THREE.Vector3(...point).project(this.active);
@@ -358,20 +583,107 @@ export class PreviewScene {
     };
   }
 
-  /** The model triangle under a point on the page, by its index in the real mesh, or null. */
+  /**
+   * The model triangle under a point on the page, by its index in the real mesh, or null. With the
+   * section on, the half it cut away is not there to pick, so the first hit on the side kept counts.
+   */
   pickAt(clientX: number, clientY: number): number | null {
     if (!this.modelMesh || !this.modelGroup.visible) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, 1 - ((clientY - rect.top) / rect.height) * 2);
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, this.active);
-    const local = raycaster.ray.clone().applyMatrix4(this.modelGroup.matrixWorld.clone().invert());
-    return this.picker.pick(local);
+    const toWorld = this.modelGroup.matrixWorld;
+    const local = this.rayAt(clientX, clientY).ray.clone().applyMatrix4(toWorld.clone().invert());
+    const plane = this.section.on ? this.section.plane : null;
+    const world = new THREE.Vector3();
+    return this.picker.pick(local, plane ? (point) => plane.distanceToPoint(world.copy(point).applyMatrix4(toWorld)) >= 0 : undefined);
   }
 
   render(): void {
     this.drawQueued = false;
+    if (this.section.on) {
+      this.countCaps();
+      // The counting meshes copy their sources' world matrices, so those must be current first.
+      this.scene.updateMatrixWorld();
+      const box = this.moldBox ?? new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(1, 1, 1));
+      const centre = box.getCenter(new THREE.Vector3());
+      const diagonal = box.getSize(new THREE.Vector3()).length();
+      // Big enough for every part, wherever the exploded view has moved it.
+      this.section.sync(centre, 3 * diagonal + 6 * Math.abs(this.explodeBy), this.active);
+      this.sectionHandle.place(this.section.plane, centre, Math.max(1, diagonal * 0.08));
+    }
     this.renderer.render(this.scene, this.active);
+  }
+
+  /**
+   * What each part's cut is counted from, as the scene stands. A hidden part gets no cap, and nor do the
+   * model and the silicone round it unless the model's mesh is closed: an open one has no inside to fill.
+   */
+  private countCaps(): void {
+    const shows = (name: LayerName): boolean => this.styles[name].visible && this.styles[name].opacity > 0;
+    const from = (object: THREE.Mesh | null | undefined, sign: 1 | -1 = 1): CapSource[] => (object && object.visible ? [{ geometry: object.geometry, object, sign }] : []);
+    const closed = this.modelClosed === true && this.model !== null && this.modelGroup.visible;
+    // The model's own cut is its whole mesh, so a hollow inside it shows as a hole; the silicone's takes
+    // away the model with its hollows filled, as no silicone gets into them.
+    const models = (sign: 1 | -1, filled: boolean): CapSource[] => {
+      if (!closed) return [];
+      const geometry = filled ? this.exteriorGeometry() : this.countedGeometry();
+      return [this.model!, ...(this.modelCopies.children as THREE.Mesh[])].map((object) => ({ geometry, object, sign }));
+    };
+    // The preview's height field closed from below by the lattice's rectangle at z = 0: the solid the
+    // silicone and the model fill together, where they stand or, for the cover's box, where the cover is.
+    const span = this.heights.span();
+    const field = (sign: 1 | -1, withCover = false): CapSource[] => {
+      if (!span || !this.heights.mesh.visible) return [];
+      const floor = this.siliconeFloor;
+      floor.position.set((span.x0 + span.x1) / 2, (span.y0 + span.y1) / 2, 0);
+      floor.scale.set(span.x1 - span.x0, span.y1 - span.y0, 1);
+      this.coverFloor.position.copy(floor.position);
+      this.coverFloor.quaternion.copy(floor.quaternion);
+      this.coverFloor.scale.copy(floor.scale);
+      return [
+        { geometry: this.heights.mesh.geometry, object: withCover ? this.coverField : this.heights.mesh, sign, materials: this.heightCounting[sign] },
+        { geometry: floor.geometry, object: withCover ? this.coverFloor : floor, sign },
+      ];
+    };
+    const silicone = shows('silicone') && closed ? field(1) : [];
+    if (silicone.length > 0) silicone.push(...models(-1, true));
+    const solid = (name: 'cover' | 'base'): CapSource[] => {
+      if (!shows(name)) return [];
+      const built = this.meshes.get(name);
+      if (built) return from(built);
+      // A box stands in for the part until its solid is built on the rim on screen, as while t is
+      // dragged. The cover's box has no cavity, so its cut is the box less the field's solid.
+      const proxy = from(this.proxies[name]);
+      return name === 'cover' && proxy.length > 0 ? [...proxy, ...field(-1, true)] : proxy;
+    };
+    this.section.setSources('silicone', silicone);
+    this.section.setSources('model', shows('model') && !this.modelAway ? models(1, false) : []);
+    this.section.setSources('base', solid('base'));
+    this.section.setSources('cover', solid('cover'));
+    this.section.setSources('funnel', shows('funnel') ? (this.funnels.children as THREE.Mesh[]).flatMap((copy) => from(copy)) : []);
+  }
+
+  /** The real mesh's geometry, which is closed where a lighter drawn proxy need not be. */
+  private countedGeometry(): THREE.BufferGeometry {
+    const mesh = this.modelMesh;
+    if (!mesh || !this.model) throw new Error('No model to count.');
+    if (this.model.geometry.getAttribute('position').array === mesh.positions) return this.model.geometry;
+    if (this.countedModel?.mesh !== mesh) {
+      this.countedModel?.geometry.dispose();
+      this.countedModel = { mesh, geometry: partGeometry(mesh) };
+    }
+    return this.countedModel.geometry;
+  }
+
+  /** The real mesh less its void shells, worked out once per mesh, the first time a cut needs it. */
+  private exteriorGeometry(): THREE.BufferGeometry {
+    const mesh = this.modelMesh;
+    if (!mesh) throw new Error('No model to count.');
+    if (this.exteriorModel?.mesh !== mesh) {
+      this.exteriorModel?.geometry?.dispose();
+      const exterior = exteriorMesh(mesh);
+      // Null when the mesh has no void, and its counted geometry serves both.
+      this.exteriorModel = { mesh, geometry: exterior === mesh ? null : partGeometry(exterior) };
+    }
+    return this.exteriorModel.geometry ?? this.countedGeometry();
   }
 
   /** Draws once on the next frame, however many changes come before it. The bare page draws at once. */
@@ -392,19 +704,35 @@ export class PreviewScene {
     this.setModel(null);
     this.setFunnel(null, []);
     this.heights.dispose();
-    this.markers.clear();
+    this.markers.dispose();
+    this.section.dispose();
+    this.sectionHandle.dispose();
+    for (const { back, front } of Object.values(this.heightCounting)) {
+      back.dispose();
+      front.dispose();
+    }
+    this.siliconeFloor.geometry.dispose();
     this.controls?.dispose();
     this.renderer.dispose();
   }
 
   private applyStyles(): void {
     const { styles, wireframe } = this;
-    this.meshes.forEach((mesh, name) => applyStyle(mesh.material as THREE.Material, styles[name], wireframe));
-    for (const name of ['cover', 'base'] as const) applyStyle(this.proxies[name].material as THREE.Material, styles[name], wireframe);
-    if (this.funnel) applyStyle(this.funnel.material, styles.funnel, wireframe);
-    if (this.model) applyStyle(this.model.material as THREE.Material, styles.model, wireframe);
+    this.meshes.forEach((mesh, name) => applyStyle(this.clip(mesh.material as THREE.Material), styles[name], wireframe));
+    for (const name of ['cover', 'base'] as const) applyStyle(this.clip(this.proxies[name].material as THREE.Material), styles[name], wireframe);
+    if (this.funnel) applyStyle(this.clip(this.funnel.material), styles.funnel, wireframe);
+    if (this.model) applyStyle(this.clip(this.model.material as THREE.Material), styles.model, wireframe);
     this.heights.style(styles.silicone, wireframe);
+    this.clip(this.heights.mesh.material);
+    for (const material of Object.values(this.markers.materials)) this.clip(material);
+    for (const child of this.highlights.children) this.clip((child as THREE.Mesh).material as THREE.Material);
     this.requestRender();
+  }
+
+  /** Every part clips by the section's one plane while it is on. */
+  private clip<M extends THREE.Material>(material: M): M {
+    material.clippingPlanes = this.section.on ? [this.section.plane] : null;
+    return material;
   }
 
   /** The orthographic frustum that shows at the target what the perspective camera shows there. */

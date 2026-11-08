@@ -386,10 +386,12 @@ test.describe('the app on index.html', () => {
     await pourRow.locator('input[data-axis="x"]').press('Escape');
     await expect(pourRow.locator('.note.error')).toHaveCount(0);
 
-    // Far off the cavity: it snaps back onto valid ground, says so, and stays pinned there.
+    // Far off the cavity: it snaps back onto valid ground, says so, and stays pinned there. The plan's
+    // soft rules run where it lands, and that is off the body's peak, which the row says too.
     await typeValue(pourRow.locator('input[data-axis="y"]'), '60');
     await idle(page);
-    await expect(pourRow.locator('.note')).toContainText('nearest place');
+    await expect(pourRow.locator('.note').filter({ hasText: 'nearest place' })).toBeVisible();
+    await expect(pourRow.locator('.note.warning[data-code="pour-off-peak"]')).toContainText('not at the body\'s highest point');
     const snapped = (await openings()).find((o) => o.id === pour.id)!;
     expect(snapped.pinned).toBe(true);
     expect(snapped.y).toBeLessThan(60);
@@ -399,6 +401,7 @@ test.describe('the app on index.html', () => {
       return { result, hash: p.geometryHash() };
     });
     expect(node.result.snapped).toBe(true);
+    expect(node.result.warnings.map((w) => w.code)).toEqual(['pour-off-peak']);
     expect([snapped.x, snapped.y]).toEqual([node.result.x, node.result.y]);
     expect(await hooks(page, (h) => h.geometryHash())).toEqual(node.hash);
 

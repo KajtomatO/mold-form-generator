@@ -19,6 +19,8 @@ export interface SliderRowProps {
   hint?: string;
   problems?: ShownDiagnostic[];
   onChange: (value: number | null) => void;
+  /** The slider pressed (true) and let go (false), so a drag of any length, pauses and all, is one step. */
+  onHold?: (held: boolean) => void;
 }
 
 /** Rounds a stepped value to the step's own decimals, so 0.1 steps never show 3.0000000004. */
@@ -37,7 +39,7 @@ function clamp(value: number, def: NumberDef | AutoDef): number {
  * again. The wheel steps the slider or the box once it has focus: Shift ten steps, Ctrl a tenth of one.
  */
 export function SliderRow(props: SliderRowProps) {
-  const { name, label, unit, def, value, auto, range, step, hint, problems = [], onChange } = props;
+  const { name, label, unit, def, value, auto, range, step, hint, problems = [], onChange, onHold } = props;
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const row = useRef<HTMLDivElement>(null);
@@ -104,6 +106,18 @@ export function SliderRow(props: SliderRowProps) {
         step={step}
         value={slider}
         disabled={shown === null}
+        onPointerDown={() => {
+          if (!onHold) return;
+          onHold(true);
+          // The release can land anywhere on the page once the thumb is dragged off the track.
+          const release = (): void => {
+            window.removeEventListener('pointerup', release);
+            window.removeEventListener('pointercancel', release);
+            onHold(false);
+          };
+          window.addEventListener('pointerup', release);
+          window.addEventListener('pointercancel', release);
+        }}
         onInput={(event) => {
           setDraft(null);
           setError(null);
@@ -118,6 +132,8 @@ export function SliderRow(props: SliderRowProps) {
         inputMode="decimal"
         autocomplete="off"
         spellcheck={false}
+        // With nothing typed and not yet committed, the box shows the project's value, and Ctrl+Z is the app's.
+        data-undo={draft === null ? 'app' : undefined}
         placeholder={shown === null ? 'auto' : undefined}
         value={draft ?? (shown === null ? '' : formatNumber(shown, 3))}
         aria-invalid={error ? true : undefined}

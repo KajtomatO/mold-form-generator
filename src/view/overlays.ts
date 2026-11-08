@@ -9,6 +9,8 @@ export interface OpeningMarker {
   radius: number;
   kind: 'pour' | 'vent';
   valid: boolean;
+  /** Where a dragged opening would land if let go now, faint, and not something a press can grab. */
+  ghost?: boolean;
 }
 
 /** A plain box between two corners, for the proxies T1 shows until T2's solids arrive. */
@@ -22,16 +24,20 @@ const RING_WIDTH = 0.6;
 const LIFT = 0.05;
 
 /**
- * Rings on the flat top for the openings: pour, vent and invalid. Dragging them is M8's; this only
- * shows where they are, for every copy across the grid.
+ * Rings on the flat top for the openings, pour, vent and invalid, for every copy across the grid. A
+ * drag sets them again on every pointer move, so rings of one radius share one geometry.
  */
 export class OpeningMarkers {
   readonly group = new THREE.Group();
-  private readonly materials = {
+  readonly materials = {
     pour: new THREE.MeshBasicMaterial({ color: MARKER_COLOURS.pour, side: THREE.DoubleSide }),
     vent: new THREE.MeshBasicMaterial({ color: MARKER_COLOURS.vent, side: THREE.DoubleSide }),
     invalid: new THREE.MeshBasicMaterial({ color: MARKER_COLOURS.invalid, side: THREE.DoubleSide }),
+    pourGhost: new THREE.MeshBasicMaterial({ color: MARKER_COLOURS.pour, side: THREE.DoubleSide, transparent: true, opacity: 0.5, depthWrite: false }),
+    ventGhost: new THREE.MeshBasicMaterial({ color: MARKER_COLOURS.vent, side: THREE.DoubleSide, transparent: true, opacity: 0.5, depthWrite: false }),
   };
+  private readonly rings = new Map<number, THREE.RingGeometry>();
+  private markers: OpeningMarker[] = [];
 
   constructor() {
     this.group.renderOrder = 3;
@@ -39,20 +45,60 @@ export class OpeningMarkers {
 
   set(markers: OpeningMarker[], top: number): void {
     this.clear();
+    this.markers = markers;
     for (const marker of markers) {
-      const outer = marker.radius + RING_WIDTH / 2, inner = Math.max(0.1, marker.radius - RING_WIDTH / 2);
-      const ring = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 48), this.materials[marker.valid ? marker.kind : 'invalid']);
+      const material = marker.ghost ? this.materials[`${marker.kind}Ghost`] : this.materials[marker.valid ? marker.kind : 'invalid'];
+      const ring = new THREE.Mesh(this.ring(marker.radius), material);
       ring.position.set(marker.x, marker.y, top + LIFT);
       ring.renderOrder = 3;
       this.group.add(ring);
     }
   }
 
+  /**
+   * The marker a point of the top falls on, by its index in the list last set, or null. The whole disc
+   * inside a ring counts, as a vent's ring is small to hit; where two overlap, the nearer centre wins.
+   */
+  hit(x: number, y: number, keep: (marker: OpeningMarker) => boolean = () => true): number | null {
+    let best: number | null = null, nearest = Infinity;
+    this.markers.forEach((marker, k) => {
+      const d = Math.hypot(x - marker.x, y - marker.y);
+      if (!marker.ghost && d <= marker.radius + RING_WIDTH && d < nearest && keep(marker)) {
+        best = k;
+        nearest = d;
+      }
+    });
+    return best;
+  }
+
+  /** Where each ring is now, in the order set, for tests. */
+  positions(): { x: number; y: number; valid: boolean; ghost: boolean }[] {
+    return this.markers.map(({ x, y, valid, ghost }) => ({ x, y, valid, ghost: ghost === true }));
+  }
+
   clear(): void {
-    for (const child of [...this.group.children]) {
-      (child as THREE.Mesh).geometry.dispose();
-      this.group.remove(child);
+    for (const child of [...this.group.children]) this.group.remove(child);
+    this.markers = [];
+  }
+
+  dispose(): void {
+    this.clear();
+    for (const ring of this.rings.values()) ring.dispose();
+    this.rings.clear();
+  }
+
+  private ring(radius: number): THREE.RingGeometry {
+    let ring = this.rings.get(radius);
+    if (!ring) {
+      // A size change makes new radii, and the old ones are not coming back.
+      if (this.rings.size > 8) {
+        for (const old of this.rings.values()) old.dispose();
+        this.rings.clear();
+      }
+      ring = new THREE.RingGeometry(Math.max(0.1, radius - RING_WIDTH / 2), radius + RING_WIDTH / 2, 48);
+      this.rings.set(radius, ring);
     }
+    return ring;
   }
 }
 

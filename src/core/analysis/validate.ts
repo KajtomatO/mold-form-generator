@@ -358,14 +358,16 @@ export function offPeakWarning(space: PlacementSpace, spot: OpeningSpot, peakHei
 
 /**
  * The plan's soft rule on funnels, from the rim and the closest pair of pours. Default 40 mm funnels
- * collide at x8's 22 mm pitch, so this says what size would fit. Null if nothing collides.
+ * collide at x8's 22 mm pitch, so this says what size would fit. Null if nothing collides. With `only`,
+ * one of `pours`, just the pairs it is in count, as a moved opening answers for its own funnel.
  */
-export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSpot[]): Diagnostic | null {
+export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSpot[], only?: OpeningSpot): Diagnostic | null {
   const { funnelTop, funnelMinTop } = space.sizes;
   if (funnelTop === null || pours.length === 0) return null;
   let closest = selfCopyDistance(space);
   for (let a = 0; a < pours.length; a++) {
     for (let b = a + 1; b < pours.length; b++) {
+      if (only && pours[a] !== only && pours[b] !== only) continue;
       closest = Math.min(closest, nearestCopy(space, pours[a].x, pours[a].y, pours[b].x, pours[b].y));
     }
   }
@@ -388,7 +390,8 @@ export interface DropResult {
 
 /**
  * What happens on the drop of a dragged opening. Runs on the main thread, so it reads only the plain
- * inputs and no solid. `peakHeight` is the height of its body's highest point, when it is a first pour.
+ * inputs and no solid. `peak` is its body's highest point, when it is a first pour. The warnings are the
+ * plan's soft rules where it ends up, about this opening alone.
  */
 export function dropOpening(space: PlacementSpace, spot: OpeningSpot, others: readonly OpeningSpot[], peak?: { height: number; drop: number }): DropResult {
   const check = checkOpening(space, spot, others);
@@ -401,7 +404,7 @@ export function dropOpening(space: PlacementSpace, spot: OpeningSpot, others: re
   const offPeak = peak ? offPeakWarning(space, at, peak.height, peak.drop) : null;
   if (offPeak) warnings.push(offPeak);
   if (at.kind === 'pour') {
-    const collision = funnelCollision(space, [at, ...others.filter((other) => other.kind === 'pour' && other !== spot)]);
+    const collision = funnelCollision(space, [at, ...others.filter((other) => other.kind === 'pour' && other !== spot)], at);
     if (collision) warnings.push(collision);
   }
   return { x: at.x, y: at.y, snapped: moved !== null, valid: final.valid, problems: final.problems, warnings };

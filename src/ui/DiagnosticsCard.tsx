@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { allDiagnostics, diagnosticMarkers } from '../app/derived';
 import { useStore } from './context';
 import { units } from './format';
+import { Chevron } from './icons';
 
 export function diagnosticKey(d: { code: string; message: string }): string {
   return `${d.code}|${d.message}`;
@@ -20,7 +21,7 @@ function rowsBelow(list: HTMLUListElement | null): number {
  * Floating: bottom left while all is well, top right once there is a warning or an error. One sentence
  * a row, and a Show toggle on each that names a place, which puts a marker there in the view. When the
  * list is longer than the card, a line under it says how many rows are below, as an overlay scrollbar
- * may not show at all.
+ * may not show at all. Its title folds it, and Top view folds it too, as it would cover the top.
  */
 export function DiagnosticsCard() {
   const store = useStore();
@@ -39,10 +40,23 @@ export function DiagnosticsCard() {
   const warn = all.some((d) => d.severity !== 'info');
   const top = pipeline.field?.value.rim.Zt ?? 0;
   const shown = store.shown.value;
+  // Folded to its title, so it covers none of the top while openings are placed; the title keeps the count.
+  const folded = store.diagnosticsFolded.value;
+  const count = (severity: string, one: string, many: string): string | null => {
+    const n = all.filter((d) => d.severity === severity).length;
+    return n === 0 ? null : n === 1 ? `1 ${one}` : `${n} ${many}`;
+  };
+  const summary = [count('error', 'error', 'errors'), count('warning', 'warning', 'warnings'), count('info', 'note', 'notes')].filter((s) => s !== null).join(', ') || 'no problems';
   return (
-    <div class={`card diagnostics ${warn ? 'warn' : 'ok'}`} data-testid="diagnostics" role="status" aria-live="polite">
-      <h2>Diagnostics</h2>
-      {all.length === 0 ? (
+    <div class={`card diagnostics ${warn ? 'warn' : 'ok'}${folded ? ' folded' : ''}`} data-testid="diagnostics" role="status" aria-live="polite">
+      <h2>
+        <button type="button" class="fold" data-testid="diagnostics-fold" aria-expanded={!folded} title={folded ? 'Show the list' : 'Fold the card to its title'} onClick={() => (store.diagnosticsFolded.value = !folded)}>
+          <Chevron />
+          Diagnostics
+          {folded ? <span class="summary">{summary}</span> : null}
+        </button>
+      </h2>
+      {folded ? null : all.length === 0 ? (
         <div class="all-ok">
           <i />
           No problems found.
@@ -71,7 +85,7 @@ export function DiagnosticsCard() {
           })}
         </ul>
       )}
-      {below > 0 && all.length > 0 ? (
+      {below > 0 && all.length > 0 && !folded ? (
         <button type="button" class="more" data-testid="diagnostics-more" title="Scroll the list down" onClick={() => list.current?.scrollBy({ top: list.current.clientHeight * 0.8, behavior: 'smooth' })}>
           {below === 1 ? '1 more row below' : `${below} more rows below`}
         </button>

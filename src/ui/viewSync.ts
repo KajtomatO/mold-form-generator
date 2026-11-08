@@ -1,7 +1,7 @@
 import { effect } from '@preact/signals';
-import { allDiagnostics, diagnosticMarkers, markerRadius } from '../app/derived';
+import { allDiagnostics, diagnosticMarkers, markerRadius, moldExtent } from '../app/derived';
 import type { Marker } from '../app/pipeline';
-import type { Store } from '../app/store';
+import { explodeDistance, sectionPlane, type Store } from '../app/store';
 import { toMat4 } from '../core/base/orient';
 import { coverBottom } from '../core/parts/cover';
 import { HOVER_COLOUR, SELECTED_COLOUR } from '../view/materials';
@@ -49,12 +49,20 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     const field = p.field?.value ?? null;
     if (changed('field', field?.field ?? null)) scene.setField(field?.field ?? null);
     const rim = field?.rim ?? null;
+    // The model at every tile, so a cut through any tile shows the model there in the silicone.
+    const tiles = field?.mold.offsets ?? [[0, 0]];
+    if (changed('tiles', JSON.stringify(tiles))) scene.setTiles(tiles);
+    const closed = p.modelClosed();
+    if (changed('closed', closed)) scene.setModelClosed(closed);
+    const box = rim ? moldExtent(rim) : null;
+    if (changed('box', JSON.stringify(box))) scene.setMoldBox(box?.min ?? null, box?.max ?? null);
 
     // A solid stands for the rim it was cut on. Until one exists for the rim on screen, a box does.
     const cover = p.cover && p.field && p.cover.mold === p.field.mold ? p.cover.value : null;
     const base = p.base && p.field && p.base.mold === p.field.mold ? p.base.value : null;
     if (changed('cover', cover)) scene.setPart('cover', cover);
     if (changed('base', base)) scene.setPart('base', base);
+    if (changed('modelInBase', base?.merged ?? false)) scene.setModelInBase(base?.merged ?? false);
     const coverProxy = !cover && rim ? { min: [rim.O.x0, rim.O.y0, coverBottom(rim)] as [number, number, number], max: [rim.O.x1, rim.O.y1, rim.Zt] as [number, number, number] } : null;
     const baseProxy = !base && rim ? { min: [rim.B.x0, rim.B.y0, -rim.Tb] as [number, number, number], max: [rim.B.x1, rim.B.y1, 0] as [number, number, number] } : null;
     if (changed('coverProxy', JSON.stringify(coverProxy))) scene.setProxy('cover', coverProxy);
@@ -66,14 +74,22 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     const funnelChanged = changed('funnel', funnel), poursChanged = changed('pours', JSON.stringify(pours));
     if (funnelChanged || poursChanged) scene.setFunnel(funnel, pours);
 
-    // Each opening has one copy per tile, listed opening by opening.
+    // Each opening has one copy per tile, listed opening by opening. The one being dragged is drawn where
+    // the pointer has it, on every tile, in the invalid colour while it may not stand there.
     const markers: OpeningMarker[] = [];
+    const drag = store.drag.value;
     if (rim && placement) {
-      const tiles = placement.space.offsets.length;
+      const { offsets } = placement.space;
       placement.copies.forEach((copy, k) => {
-        const opening = placement.placement.openings[Math.floor(k / tiles)];
-        markers.push({ x: copy.x, y: copy.y, kind: copy.kind, valid: opening?.valid ?? true, radius: markerRadius(p, copy.kind) });
+        const opening = placement.placement.openings[Math.floor(k / offsets.length)];
+        const [ox, oy] = offsets[k % offsets.length];
+        const moving = drag !== null && opening?.id === drag.id;
+        const at = moving ? { x: drag.x + ox, y: drag.y + oy } : copy;
+        markers.push({ x: at.x, y: at.y, kind: copy.kind, valid: moving ? drag.check.valid : (opening?.valid ?? true), radius: markerRadius(p, copy.kind) });
       });
+      // Where a drop would snap to while the spot is not valid, faint, on every tile, after the rest.
+      const lands = drag && !drag.check.valid ? drag.check.lands : null;
+      if (drag && lands) for (const [ox, oy] of offsets) markers.push({ x: lands.x + ox, y: lands.y + oy, kind: drag.kind, valid: true, ghost: true, radius: markerRadius(p, drag.kind) });
     }
     const markersChanged = changed('markers', JSON.stringify(markers)), topChanged = changed('top', rim?.Zt);
     if (markersChanged || topChanged) scene.setOpenings(markers, rim?.Zt ?? 0);
@@ -120,6 +136,23 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     if (changed('diagnosticMarkers', JSON.stringify(marks))) scene.setDiagnosticMarkers(marks, size);
   });
 
+  // T0: the section and the exploded view are the view's alone, and start no job.
+  const views = effect(() => {
+    void store.tick.value;
+    const rim = store.pipeline.field?.value.rim;
+    const section = store.section.value;
+    const plane = section.on && rim ? sectionPlane(section, moldExtent(rim)) : null;
+    if (changed('section', JSON.stringify(plane))) scene.setSection(plane);
+    const explode = store.explode.value;
+    const distance = explode.on ? explodeDistance(explode, rim ?? null) : 0;
+    if (changed('explode', distance)) scene.setExplode(distance);
+  });
+
+  const topView = effect(() => {
+    const asked = store.topView.value;
+    if (asked > 0 && changed('topView', asked)) scene.topView();
+  });
+
   const look = effect(() => {
     const layers = store.layers.value;
     for (const [name, style] of Object.entries(layers)) scene.setLayer(name as keyof typeof layers, style);
@@ -132,6 +165,8 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     geometry();
     highlights();
     markers();
+    views();
+    topView();
     look();
   };
 }

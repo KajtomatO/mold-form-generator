@@ -4,7 +4,7 @@ import { formatCount, formatSize } from './format';
 
 /**
  * File, triangles, size, box, silicone, clearance and rebuild time, then the view toggles and how the
- * mouse moves the view. Section and Explode join the toggles in M8.
+ * mouse moves the view. Section and Explode bring their controls up in the Parts card.
  */
 export function StatusStrip() {
   const store = useStore();
@@ -61,6 +61,20 @@ export function StatusStrip() {
         <label>
           <input type="checkbox" data-testid="perspective" checked={store.perspective.value} onChange={(event) => (store.perspective.value = event.currentTarget.checked)} />
           Perspective
+        </label>
+        <label title="Cut the mold open with one plane, to see the silicone's thickness. Its controls are in the Parts card.">
+          <input type="checkbox" data-testid="section" checked={store.section.value.on} onChange={(event) => store.setSection({ on: event.currentTarget.checked })} />
+          Section
+        </label>
+        <label title="Move the cover and funnels up and the base down, apart. Its slider is in the Parts card.">
+          <input
+            type="checkbox"
+            data-testid="explode"
+            checked={store.explode.value.on}
+            // Until the slider moves, a quarter of the box's height apart: enough to show at once, and the parts stay in view.
+            onChange={(event) => store.setExplode({ on: event.currentTarget.checked })}
+          />
+          Explode
         </label>
       </span>
       <span class="hint">Drag: turn · Right-drag: move · Wheel: zoom</span>

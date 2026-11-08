@@ -16,6 +16,7 @@ attribute vec3 slope;
 #endif
 varying float vHeight;
 varying vec3 vNormal;
+#include <clipping_planes_pars_vertex>
 
 #ifndef CPU_HEIGHTS
 float heightAt(ivec2 ij) {
@@ -40,7 +41,9 @@ void main() {
   vHeight = max(h, -1.0);
   vNormal = n;
   vec3 world = vec3(lattice.x + position.x * lattice.z, lattice.y + position.y * lattice.z, max(h, 0.0));
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+  vec4 mvPosition = modelViewMatrix * vec4(world, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <clipping_planes_vertex>
 }`;
 
 const FRAGMENT = /* glsl */ `
@@ -51,8 +54,15 @@ uniform vec3 colour;
 uniform float opacity;
 varying float vHeight;
 varying vec3 vNormal;
+#include <clipping_planes_pars_fragment>
 
 void main() {
+  #include <clipping_planes_fragment>
+#ifdef STENCIL_ONLY
+  // The section's count of surfaces needs the whole closed height field, flat parts at z = 0 included.
+  fragColour = vec4(0.0);
+  return;
+#endif
   // G7: the silicone is shown trimmed at z = 0, where the base plate closes it.
   if (vHeight <= 0.0) discard;
   vec3 n = normalize(vNormal);
@@ -89,6 +99,7 @@ export class HeightPreview {
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
       side: THREE.DoubleSide,
+      clipping: true,
     });
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
     // The vertices are lattice indices until the shader places them, so a computed bound would be wrong.
@@ -119,6 +130,28 @@ export class HeightPreview {
     applyStyle(material, style, wireframe);
     material.uniforms.opacity.value = style.opacity;
     this.mesh.visible = this.field !== null;
+  }
+
+  /**
+   * The same surface for the section's stencil count, sharing the uniforms, so it follows every field.
+   * Unlike the drawn one it keeps the flat parts at z = 0, which close the field's solid from above.
+   */
+  stencilMaterial(): THREE.ShaderMaterial {
+    const shown = this.mesh.material;
+    return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      defines: { ...shown.defines, STENCIL_ONLY: '' },
+      uniforms: shown.uniforms,
+      vertexShader: VERTEX,
+      fragmentShader: FRAGMENT,
+      clipping: true,
+    });
+  }
+
+  /** The rectangle the lattice spans in mm, which the section closes from below at z = 0. */
+  span(): { x0: number; y0: number; x1: number; y1: number } | null {
+    const f = this.field;
+    return f ? { x0: f.x0, y0: f.y0, x1: f.x0 + (f.nx - 1) * f.cell, y1: f.y0 + (f.ny - 1) * f.cell } : null;
   }
 
   /** The node nearest a point in mm, for tests and markers: the height the preview draws there. */

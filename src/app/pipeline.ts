@@ -1,4 +1,4 @@
-import { replicateOpenings, type OpeningPin } from '../core/analysis/placement';
+import { firstPourPeak, replicateOpenings, type OpeningPin } from '../core/analysis/placement';
 import { withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
 import type { SolidReport } from '../core/mesh/shells';
@@ -313,10 +313,35 @@ export class Pipeline {
     this.changed();
   }
 
+  /**
+   * Undo and redo: the whole project at once, plane, pins and removed vents as they were, with one
+   * change. Unlike setPlane, another plane here keeps the pins the snapshot holds for it.
+   */
+  setProject(project: Project): void {
+    this.params = project.params;
+    this.plane = project.plane;
+    this.pins = project.pins;
+    this.removed = project.removed;
+    this.dragState = null;
+    this.changed();
+  }
+
   /** T2b while the opening moves: only its copies are cut, into the cover already cut for the rest. */
   dragOpening(id: string, x: number, y: number): void {
     this.dragState = { id, x, y };
     this.changed();
+  }
+
+  /** Esc during a drag: the opening stays where it was, and the cover is cut for all openings again. */
+  cancelDrag(): void {
+    if (!this.dragState) return;
+    this.dragState = null;
+    this.changed();
+  }
+
+  /** The opening being dragged and where it is now, or null. */
+  get dragging(): StageInputs['drag'] {
+    return this.dragState;
   }
 
   /** The drop: snapped to the nearest valid place if needed, pinned there, and placed and cut again in full. */
@@ -329,7 +354,7 @@ export class Pipeline {
       return null;
     }
     const others = shown.placement.openings.filter((o) => o.id !== id);
-    const result = dropOpening(shown.space, { kind: opening.kind, x, y }, others);
+    const result = dropOpening(shown.space, { kind: opening.kind, x, y }, others, firstPourPeak(shown.placement, id, this.params.silicone.t / 2));
     this.pins = [...this.pins.filter((pin) => pin.id !== id), { id, kind: opening.kind, x: result.x, y: result.y }];
     this.changed();
     return result;
@@ -364,6 +389,15 @@ export class Pipeline {
   /** The mesh the base plane orients: the welded one, or the import's when it flipped or rebuilt it. */
   modelMesh(): WeldedMesh | null {
     return this.importInput.mesh ?? this.parsed?.value.welded ?? null;
+  }
+
+  /**
+   * Whether that mesh is a closed solid, which a filled section cut needs: true once the import made a
+   * solid of it, false in soup mode, and null until the import has said.
+   */
+  modelClosed(): boolean | null {
+    if (!this.parsed || this.imported?.key !== this.parsed.key) return null;
+    return !this.importInput.soup;
   }
 
   wallStatus(): WallStatus {

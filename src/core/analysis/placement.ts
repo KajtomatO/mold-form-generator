@@ -413,7 +413,20 @@ export function placeOpenings(input: PlacementInput): Placement {
   return { openings: work.openings, bodies: byBody, uncovered, ceilingLeaves, diagnostics: work.diagnostics };
 }
 
-function describeProblem(problem: HardProblem): string {
+/**
+ * The peak a moved opening is held to by the plan's soft rule: its body's highest point, with t / 2 to
+ * spare, when it is that body's first pour, which belongs there. Undefined for any other opening.
+ */
+export function firstPourPeak(placement: Pick<Placement, 'openings' | 'bodies'>, id: string, coverDrop: number): { height: number; drop: number } | undefined {
+  const opening = placement.openings.find((o) => o.id === id);
+  if (!opening || opening.kind !== 'pour' || opening.body < 0) return undefined;
+  const first = placement.openings.find((o) => o.body === opening.body && o.kind === 'pour');
+  const body = placement.bodies[opening.body];
+  return first?.id === id && body ? { height: body.peak[2], drop: coverDrop } : undefined;
+}
+
+/** A hard rule's breach in a maker's words, for the diagnostics here and the drag's own note on main. */
+export function describeProblem(problem: HardProblem): string {
   switch (problem) {
     case 'off-cavity': return 'it runs off the cavity';
     case 'land': return 'it is too close to another opening';

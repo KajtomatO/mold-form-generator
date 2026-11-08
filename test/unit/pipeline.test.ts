@@ -347,17 +347,21 @@ describe('the preview against a build through core alone', () => {
     expect(p.geometryHash().cover).toBe(cover);
   }, 60_000);
 
-  it('a drag step shows the cover cut once with the dragged opening where it is now', async () => {
+  it.each([1, 2])('a drag step shows the cover cut once with the dragged opening where it is now, on every tile of %i x 1', async (tiles) => {
     const p = pipeline();
+    p.setParams((params) => (params.grid.nx = tiles));
     load(p, 'jersey');
     await p.idle();
     const shown = p.placement!.value;
+    expect(shown.space.offsets).toHaveLength(tiles);
     const pour = shown.placement.openings.find((o) => o.kind === 'pour')!;
     const at = { kind: pour.kind, x: pour.x + 0.5, y: pour.y };
     p.dragOpening(pour.id, at.x, at.y);
     await p.idle();
     expect(p.cover!.value.provisional).toBe(true);
+    // Every copy of the dragged opening moves, on every tile, and every other opening stays cut.
     const moved = replicateOpenings([at, ...shown.placement.openings.filter((o) => o.id !== pour.id)], shown.space);
+    expect(moved.filter((c) => c.kind === 'pour')).toHaveLength(tiles);
     const { field, rim } = p.field!.value;
     withArena(api, (arena) => {
       const tool = toolSolid(arena, buildToolMesh(field, { raise: 0.1, tol: 0.1, clip: rim.D }));

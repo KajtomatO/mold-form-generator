@@ -287,6 +287,16 @@ describe('the soft rules', () => {
     expect(funnelCollision(spaceOf([[0, 0], [41, 0]]), [pour(20, 30)])).toBeNull();
   });
 
+  it('for one pour, count only the pairs it is in', () => {
+    const space = spaceOf();
+    const moved = pour(100, 30);
+    // Two other pours collide with each other, 25 mm apart, but not with the one asked about.
+    const pours = [moved, pour(20, 30), pour(45, 30)];
+    expect(funnelCollision(space, pours)?.message).toContain('25.0 mm apart');
+    expect(funnelCollision(space, pours, moved)).toBeNull();
+    expect(funnelCollision(space, pours, pours[2])?.message).toContain('25.0 mm apart');
+  });
+
   it('say so when no funnel fits at all, and nothing when no funnel is made', () => {
     expect(funnelCollision(spaceOf(), [pour(20, 30), pour(33, 30)])?.message).toContain('No funnel fits');
     const params = defaultParams();

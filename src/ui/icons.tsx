@@ -74,3 +74,32 @@ export function Inbox() {
     </svg>
   );
 }
+
+/** A hooked arrow back to the left. Redo is its mirror image, drawn on its own. */
+export function Undo() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
+      <path d="M9 14.5L4 9.5l5-5" />
+      <path d="M4 9.5h10.5a5.5 5.5 0 0 1 0 11H11" />
+    </svg>
+  );
+}
+
+export function Redo() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
+      <path d="M15 14.5l5-5-5-5" />
+      <path d="M20 9.5H9.5a5.5 5.5 0 0 0 0 11H13" />
+    </svg>
+  );
+}
+
+/** Looking down on a box from above: its outline with a ring on the top, for the top view. */
+export function TopView() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...stroke}>
+      <rect x="3.5" y="5.5" width="17" height="13" rx="1.5" />
+      <circle cx="12" cy="12" r="2.6" />
+    </svg>
+  );
+}

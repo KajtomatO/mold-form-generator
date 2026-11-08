@@ -64,7 +64,8 @@ export interface SolidOutputs {
   S1?: ImportOutput;
   S2?: FootprintOutput;
   S13?: PartMesh & { provisional: boolean; diagnostics: Diagnostic[] };
-  S15?: PartMesh & { diagnostics: Diagnostic[] };
+  /** `merged` when the base holds the model's copies, as Mode B's does once the model is a solid. */
+  S15?: PartMesh & { diagnostics: Diagnostic[]; merged: boolean };
   S16?: PartMesh | null;
 }
 
@@ -282,13 +283,13 @@ export class SolidStages {
           const merged = buildMergedBase(arena, body, placed, print, { planeTol, offsets: inputs.offsets });
           diagnostics.push(...merged.diagnostics);
           // Without a solid there is no merged base, and the plate alone shows what there is.
-          return { ...meshOf(merged.base ?? body), diagnostics };
+          return { ...meshOf(merged.base ?? body), diagnostics, merged: merged.base !== null };
         }
         const section = placed ? arena.track(placed.slice(pocketDepth)) : triangleContour(arena, mesh, pocketDepth);
         const outline = pocketOutline(arena, print, section, params.base.pocketEnlarge);
         const glue = buildGlueBase(arena, body, outline, pocketDepth, inputs.offsets);
         diagnostics.push(...glue.diagnostics);
-        return { ...meshOf(glue.base), diagnostics };
+        return { ...meshOf(glue.base), diagnostics, merged: false };
       }));
     }
 

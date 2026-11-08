@@ -19,8 +19,11 @@ export class Picker {
     this.bvh = null;
   }
 
-  /** The triangle a ray in the model's own coordinates hits first, or null. */
-  pick(ray: THREE.Ray): number | null {
+  /**
+   * The triangle a ray in the model's own coordinates hits first, or null. With `keep`, the first hit
+   * whose point, in those coordinates, it keeps, as a section's cut-away half has nothing to pick.
+   */
+  pick(ray: THREE.Ray, keep?: (point: THREE.Vector3) => boolean): number | null {
     if (!this.mesh) return null;
     if (!this.bvh) {
       const geometry = new THREE.BufferGeometry();
@@ -28,8 +31,9 @@ export class Picker {
       geometry.setIndex(new THREE.BufferAttribute(this.mesh.indices, 1));
       this.bvh = new MeshBVH(geometry, { indirect: true });
     }
-    const hit = this.bvh.raycastFirst(ray, THREE.DoubleSide);
-    return hit?.faceIndex ?? null;
+    if (!keep) return this.bvh.raycastFirst(ray, THREE.DoubleSide)?.faceIndex ?? null;
+    const hits = this.bvh.raycast(ray, THREE.DoubleSide).sort((a, b) => a.distance - b.distance);
+    return hits.find((hit) => keep(hit.point))?.faceIndex ?? null;
   }
 }
 

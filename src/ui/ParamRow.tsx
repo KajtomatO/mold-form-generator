@@ -30,6 +30,7 @@ export function ParamRow({ path }: { path: ParamPath }) {
       hint={hint}
       problems={problems}
       onChange={set}
+      onHold={(held) => store.holdParam(held ? path : null)}
     />
   );
 }

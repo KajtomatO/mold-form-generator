@@ -10,6 +10,12 @@ export function units(text: string): string {
   return text.replace(/\bmm2\b/g, 'mm²').replace(/\bmm3\b/g, 'mm³').replace(/\bcm3\b/g, 'cm³');
 }
 
+/** Fixed decimals, with no "-0.00" for a value that rounds to zero, such as a float's residue off an axis. */
+export function fixed(value: number, digits: number): string {
+  const text = value.toFixed(digits);
+  return Number(text) === 0 ? (0).toFixed(digits) : text;
+}
+
 export function formatMm(value: number, digits = 1): string {
   return `${value.toFixed(digits)} mm`;
 }

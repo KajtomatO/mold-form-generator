@@ -26,6 +26,8 @@ Export ZIP, at the foot of the sidebar, builds the mold at full detail, measures
 
 The Demold report, after Grid, estimates from the model's shape how the silicone comes off it: pulled out while the silicone stays in the cover, out of the cover first so it can stretch, or cut, with the places it holds and where to cut each one, which Show marks in the view. It lists where air may stay, such as a pocket under the model that no vent in the top reaches. Cover & joint says how much tape holds the cover down against the liquid silicone, and Diagnostics warns of a part larger than the bed and estimates the plastic. README.txt in the ZIP carries all of it.
 
+To look inside, tick Section in the status strip: one plane cuts every part, X, Y and Z set its direction, Flip keeps the other side, and the slider or the handle in the view moves it; each closed part's cut face is filled in its own colour, so the silicone's thickness shows. Explode moves the cover up and the base down. The rings on the cover's top are the pour openings and vents: drag one in the view, on any copy of a grid, to move that opening on all of them, or type its position under Pour & funnel, where Top view looks straight down. A ring turns red where the opening may not stand, with the reason beside the pointer, and a drop there moves it to the nearest place that is valid; Esc puts it back. Undo and redo are in the header, or Ctrl+Z, and Ctrl+Shift+Z or Ctrl+Y.
+
 `pipeline.html`, `diag.html` and `bench.html` are linked from the Advanced section: a bare page for the worker pipeline, the browser check with the fit-test download, and the benchmark.
 
 ## Test it
