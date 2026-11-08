@@ -14,8 +14,18 @@ node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' || {
   exit 1
 }
 
-# Only when the lockfile changed, so this is safe to run while tests or the server are running.
-if [ ! node_modules/.package-lock.json -nt package-lock.json ]; then
+# npm ci deletes node_modules and installs every package again, which breaks tests or a server that
+# are running, so it runs only when the lockfile's packages differ from those npm recorded at the last
+# install: not for a change of the project's own version alone. npm leaves out of its record the
+# optional packages for other platforms, which the lockfile lists.
+if ! node -e '
+  const fs = require("fs");
+  const want = JSON.parse(fs.readFileSync("package-lock.json", "utf8")).packages;
+  const have = JSON.parse(fs.readFileSync("node_modules/.package-lock.json", "utf8")).packages;
+  const same = Object.keys(have).every((path) => path in want) && Object.entries(want).every(([path, entry]) =>
+    path === "" || (path in have ? JSON.stringify(entry) === JSON.stringify(have[path]) : entry.optional === true));
+  process.exit(same ? 0 : 1);
+' 2>/dev/null; then
   npm ci --no-audit --no-fund
 fi
 

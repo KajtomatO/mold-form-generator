@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { previewSilicone } from '../src/app/derived';
 import type { OpeningPin } from '../src/core/analysis/placement';
@@ -111,9 +113,15 @@ test.describe('the app on index.html', () => {
     await page.locator('.collapse-tab').click();
     await expect.poll(async () => (await page.getByTestId('viewport').boundingBox())!.width).toBe(before);
     // The developer pages sit at the foot of Advanced, each opening in a tab of its own, so the model stays.
-    await expect(page.locator('.advanced .links')).toContainText('Developer pages');
-    await expect(page.locator('.advanced a')).toHaveText(['Browser check', 'Benchmark', 'Pipeline test page']);
+    await expect(page.locator('.advanced .links').first()).toContainText('Developer pages');
+    await expect(page.locator('.advanced a')).toHaveText(['Browser check', 'Benchmark', 'Pipeline test page', 'Third-party licences']);
     for (const link of await page.locator('.advanced a').all()) await expect(link).toHaveAttribute('target', '_blank');
+    // M11b: the licence notices the minified build drops ship as a file of their own, served as it is in public/.
+    const notices = await page.request.get(new URL((await page.getByTestId('notices-link').getAttribute('href'))!, page.url()).href);
+    expect(notices.status()).toBe(200);
+    expect(notices.headers()['content-type']).toMatch(/^text\/plain/);
+    // Byte for byte: the file is plain ASCII, which the licence test holds, so no charset can misread it.
+    expect(Buffer.compare(await notices.body(), readFileSync(join(import.meta.dirname, '..', 'public', 'third-party-notices.txt')))).toBe(0);
   });
 
   test('@smoke a dropped STL loads, its base is confirmed on the top candidate, and the status strip is what core gives in Node', async ({ page }) => {

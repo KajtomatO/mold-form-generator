@@ -61,7 +61,7 @@ export function geometryReports(params: Params, inputs: ReportInputs): GeometryR
       code: 'air-underside',
       severity: 'warning',
       at: [p.x, p.y, p.z],
-      message: `Air stays under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${ml(p.volume)}, where no vent in the top reaches: brush a first coat of silicone onto the model there, tilt the mold as you pour, or degas it in a vacuum ${RISING}.`,
+      message: `Air stays under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${ml(p.volume)}, where no vent in the top reaches: brush a first coat of silicone onto the model there before you close the mold, tilt the mold as you pour, or degas the filled mold in a vacuum, which is untested on printed molds ${RISING}.`,
     });
   }
   for (const d of air.sealed) {

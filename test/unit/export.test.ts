@@ -225,12 +225,18 @@ describe('README.txt', () => {
     const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
     const order = [
       'Cure-inhibition test',
-      'Leak test',
+      'Put a dab of the glue you will use, a strip of the tape and a smear of the Vaseline on them',
+      'Leak test, before you glue the model in: seal the mold as below, with the Vaseline in the groove and the tape',
+      'take the mold apart, and let the parts dry fully. Seal it the same way again for the pour',
       'POURING',
       'Glue the model into the pocket of the base',
+      // The first coat where air would stay goes on while the model can still be reached.
+      'brush a thin first coat onto the model there now, then close the mold',
+      'Spread a thin film of Vaseline in the groove of the cover',
       'Fit the base into the cover',
       'Tape the joint with at least 2 strips',
-      'Vaseline in the groove',
+      'Stand the mold on its base',
+      'Mix the silicone, and degas it in the cup if you have a vacuum chamber.',
       'until silicone shows at every vent',
       'Let it cure',
       'The sprue rule: if you pour without a funnel',
@@ -248,6 +254,17 @@ describe('README.txt', () => {
       expect(next, phrase).toBeGreaterThan(at);
       at = next;
     }
+    // Mode B has no glue and no model of its own to print, and no pocket of air means no first coat.
+    const merged = exportReadme(input((i) => (i.params.base.mode = 'merged'))).replace(/\r\n\s*/g, ' ');
+    expect(merged).toContain('Print a small scrap in the material of the base, which carries your model, and the cover. Put a strip of the tape and a smear of the Vaseline on them');
+    expect(merged).not.toContain('dab of the glue');
+    expect(merged).not.toContain('before you glue the model in');
+    expect(merged).toContain('Leak test: seal the mold as below');
+    const noAir = sampleReports();
+    noAir.air.underside = [];
+    const plain = exportReadme(input((i) => (i.reports = noAir))).replace(/\r\n\s*/g, ' ');
+    expect(plain).not.toContain('first coat');
+    expect(plain).not.toContain('untested on printed molds');
   });
 
   it('says the demold estimate and where the silicone holds, the air, the tape to hold the cover and the plastic, all as estimates', () => {
@@ -268,7 +285,8 @@ describe('README.txt', () => {
       'Cut the sprues',
       'AIR',
       "All 2 peaks of the cover's ceiling have an opening",
-      'Air stays in a pocket under an overhang of the model, 37 mm up, 9 mm right of the middle, 7 mm to the front, about 0.52 ml. No vent in the top reaches it: brush a first coat',
+      'Air stays in a pocket under an overhang of the model, 37 mm up, 9 mm right of the middle, 7 mm to the front, about 0.52 ml. No vent in the top reaches it: brush a first coat of silicone onto the model there before you close the mold',
+      'A vacuum on the filled mold could also draw that air out, but it is untested on printed molds',
       'This assumes the silicone rises slowly and evenly',
       'THIS MOLD',
     ];
@@ -885,7 +903,9 @@ describe('the export with bolts, in Node', () => {
     expect(readme).not.toContain('Tape the joint with at least');
     expect(readme).not.toContain('Tape the middle of the joint');
     expect(readme).toContain('the bolts pull the base against the shelf');
-    expect(readme).toContain('assemble and bolt the mold as below');
+    expect(readme).toContain('Leak test, before you glue the model in: seal the mold as below, with the Vaseline in the groove and the bolts');
+    // Four bolts hold jersey's lift with no tape, so its test patch needs none.
+    expect(readme).toContain('Put a dab of the glue you will use and a smear of the Vaseline on them');
     // Demolding: unscrew, not untape.
     expect(readme).toContain('Unscrew the 4 bolts from under the base, leaving the nuts in their slots, take off any tape, and lever the base out at the pry notches');
     expect(readme).not.toContain('Take off the tape and lever');
@@ -934,7 +954,8 @@ describe('the export with bolts, in Node', () => {
     expect(fit).toEqual([...Object.keys(M9.fitTest), 'fit_test/README.txt', 'fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl'].sort());
     for (const name of Object.keys(M9.fitTest)) expect(sha(files[name]), name).toBe(M9.fitTest[name]);
     for (const name of ['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']) expect(readPart(files[name]).audit, name).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
-    const fitReadme = text(files['fit_test/README.txt']);
+    expect(text(files['fit_test/README.txt']).split('\r\n').filter((line) => line.length > 76)).toEqual([]);
+    const fitReadme = text(files['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');
     expect(fitReadme).toContain('Bolt coupon:');
     expect(fitReadme).toContain('an M3 x 12 mm countersunk screw and an M3 hex nut');
     expect(fitReadme).toContain('raise Nut clearance per side under Cover & joint, Bolts, by 0.05 mm');

@@ -36,6 +36,6 @@ test('@smoke a printer that needs a looser taper gets its groove series rebuilt 
   params.joint.taperClearance = 0.2;
   await checkPieces(files, params);
   expect(Object.keys(files)).toContain('fit_test/groove-0.35-taper-0.20_cover.stl');
-  expect(new TextDecoder().decode(files['fit_test/README.txt'])).toContain('builds it at a taper clearance of 0.20 mm');
+  expect(new TextDecoder().decode(files['fit_test/README.txt']).replace(/\r\n\s*/g, ' ')).toContain('builds it at a taper clearance of 0.20 mm');
   expect(errors).toEqual([]);
 });

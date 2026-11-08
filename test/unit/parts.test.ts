@@ -195,7 +195,12 @@ describe('the fit-test piece of G12', () => {
   it('says in its README which taper clearance the groove series has, how to change it, and what to do if nothing seats', () => {
     const chosen = defaultParams();
     chosen.joint.taperClearance = 0.3;
-    const readme = new TextDecoder().decode(fitTestFiles(api, chosen)['fit_test/README.txt']);
+    const raw = new TextDecoder().decode(fitTestFiles(api, chosen)['fit_test/README.txt']);
+    // Notepad's rules, as README.txt keeps them: plain ASCII, CRLF line endings and lines of at most 76.
+    expect([...raw].filter((c) => c.charCodeAt(0) > 126 || (c.charCodeAt(0) < 32 && c !== '\r' && c !== '\n'))).toEqual([]);
+    expect(/[^\r]\n|\r[^\n]/.test(raw)).toBe(false);
+    expect(raw.split('\r\n').filter((line) => line.length > 76)).toEqual([]);
+    const readme = raw.replace(/\r\n\s*/g, ' ');
     expect(readme).toContain('builds it at a taper clearance of 0.30 mm');
     expect(readme).toContain('diag.html');
     expect(readme).toContain('If no pair seats');

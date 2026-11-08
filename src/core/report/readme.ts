@@ -5,6 +5,7 @@ import type { BoltLayout } from '../parts/bolts';
 import { SEAL_SPACING_MM, type BoltAdvice, type ClampAdvice, type CoverLift } from './clamp';
 import type { Diagnostic } from './diagnostics';
 import type { PlasticEstimate } from './printability';
+import { EOL, wrap } from './text';
 
 /** Everything the README of an export ZIP says, as measured or chosen. */
 export interface ReadmeInput {
@@ -41,62 +42,6 @@ export interface ReadmeInput {
   diagnostics: Diagnostic[];
 }
 
-/** Lines are kept short for any editor, and end in CRLF, so Windows Notepad shows them as they are. */
-const WIDTH = 76;
-const EOL = '\r\n';
-
-/** Letters that keep no plain form when their accents come off: l and L with a stroke, o slash, d bar, sharp s, ae, oe. */
-const PLAIN_LETTERS: Record<string, string> = {
-  'ł': 'l', 'Ł': 'L', 'ø': 'o', 'Ø': 'O', 'đ': 'd', 'Đ': 'D',
-  'ß': 'ss', 'æ': 'ae', 'Æ': 'AE', 'œ': 'oe', 'Œ': 'OE',
-};
-
-/**
- * Text as plain ASCII: a model's file name can hold any letter, as Polish ones do. Accents come off,
- * and what still has no ASCII form becomes '?'.
- */
-export function ascii(text: string): string {
-  return text
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^\x20-\x7e]/g, (c) => PLAIN_LETTERS[c] ?? (/\s/.test(c) ? ' ' : '?'));
-}
-
-/**
- * Words to lines of at most WIDTH, the first after `first`, the rest after `rest`, in plain ASCII. A word
- * longer than a whole line, such as a long file name, is broken where the line ends.
- */
-function wrap(text: string, first = '', rest = first): string[] {
-  const lines: string[] = [];
-  let line = first;
-  let empty = true;
-  const next = (): void => {
-    lines.push(line);
-    line = rest;
-    empty = true;
-  };
-  for (const word of ascii(text).split(/\s+/).filter(Boolean)) {
-    let left = word;
-    while (left.length > 0) {
-      const room = WIDTH - line.length - (empty ? 0 : 1);
-      if (left.length <= room) {
-        line += (empty ? '' : ' ') + left;
-        empty = false;
-        break;
-      }
-      if (!empty && (left.length <= WIDTH - rest.length || room <= 0)) {
-        next();
-        continue;
-      }
-      line += (empty ? '' : ' ') + left.slice(0, room);
-      left = left.slice(room);
-      next();
-    }
-  }
-  lines.push(line);
-  return lines;
-}
-
 function heading(title: string): string[] {
   return ['', title.toUpperCase(), '-'.repeat(title.length)];
 }
@@ -108,6 +53,12 @@ const grams = (g: number): string => (g >= 1000 ? `${(g / 1000).toFixed(2)} kg` 
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
+
+/** The sprue rule of README.txt, with a funnel seat. docs/WORKFLOW.md is held to its words. */
+export const SPRUE_RULE = 'The sprue rule: if you pour without a funnel, silicone fills the cone-shaped seat at the top of each pour opening. Cut that sprue at the floor of the seat, where the cone meets the straight bore, and not flush with the top. A cone of silicone left in the seat is wider than the bore under it, so it would lock the mold in the cover.';
+
+/** Said where air stays under an overhang: nobody has tried a vacuum on a printed mold yet. */
+export const VACUUM_NOTE = 'A vacuum on the filled mold could also draw that air out, but it is untested on printed molds: air held in the infill may come through the walls into the silicone. Try it first on a fit-test pair filled with silicone, and look for bubbles at its walls.';
 
 /**
  * README.txt of the export ZIP, for the maker who prints and pours the mold: what each file is and
@@ -182,23 +133,33 @@ export function exportReadme(input: ReadmeInput): string {
   item(`Use the layer height of ${mm(params.print.layerHeight, 2)} this mold was made for: the base and its pocket are sized in whole layers of it.`);
   item(`Plastic: about ${grams(input.plastic.printed)} at that infill, or ${grams(input.plastic.solid)} printed solid. This is an estimate: slicers differ.`);
 
+  // With the bolts, tape is needed only where they stand far apart or hold too little.
+  const taped = !bolts || bolts.advice.strips > 0;
+  const underside = input.reports?.air.underside.length ?? 0;
   out.push(...heading('Before the first pour'));
-  step(1, 'Cure-inhibition test: some resins, glues, paints and plastics stop silicone from curing where they touch it, and platinum-cure silicone is the sensitive kind. Pour a small test patch of your silicone onto a scrap printed in the same resin, with the same glue you will use, and let it cure fully. If it stays sticky where it touches, seal the model first, for example with a clear coat, and test again.');
-  step(2, `Leak test: assemble and ${bolts ? 'bolt' : 'tape'} the mold as below, and fill it with water through the pour opening until water shows at the vents. Let it stand for several minutes: the joint should stay dry. Pour the water out and let the mold dry fully before you use silicone.`);
+  const touches = [glue ? 'a dab of the glue you will use' : '', taped ? 'a strip of the tape' : '', 'a smear of the Vaseline'].filter(Boolean);
+  const touching = touches.length === 1 ? touches[0] : `${touches.slice(0, -1).join(', ')} and ${touches[touches.length - 1]}`;
+  const scraps = glue
+    ? 'Print a small scrap in the material of your model, a resin if you print it on a resin printer, and one in the material of the base and the cover.'
+    : 'Print a small scrap in the material of the base, which carries your model, and the cover.';
+  step(1, `Cure-inhibition test: some resins, plastics, glues, tapes and sealants stop silicone from curing where they touch it, and platinum-cure silicone is the sensitive kind. ${scraps} Put ${touching} on them, pour a small test patch of your silicone over all of it, and let it cure fully. If it stays sticky or soft anywhere it touches, do not use that material as it is: seal it, for example with a clear coat, or choose another, and test again.`);
+  step(2, `Leak test${glue ? ', before you glue the model in' : ''}: seal the mold as below, with the Vaseline in the groove and the ${bolts ? 'bolts' : 'tape'}, then fill it with water through the pour opening until water shows at the vents. Let it stand for several minutes: the joint should stay dry. Pour the water out, take the mold apart, and let the parts dry fully. Seal it the same way again for the pour: the test checks your print and your way of sealing it.`);
 
   out.push(...heading('Pouring'));
   let n = 0;
   if (glue) step(++n, copies === 1 ? 'Glue the model into the pocket of the base, flat face down, and let the glue cure.' : `Glue a model into each of the ${copies} pockets of the base, flat face down, and let the glue cure.`);
+  // The coat goes on while the model can still be reached, before the mold is closed.
+  if (underside > 0) step(++n, `Air would stay in ${underside === 1 ? 'a pocket' : `${underside} pockets`} under an overhang of the model, as AIR below says. Mix a small batch of silicone and brush a thin first coat onto the model there now, then close the mold and pour the rest within the time your silicone's data sheet gives for a second coat to bond.`);
+  step(++n, 'Spread a thin film of Vaseline in the groove of the cover: it helps the joint seal.');
   step(++n, `Fit the base into the cover: the ridge on the base goes into the groove of the cover. Press until the base rests on the cover's shelf all round. It then stands ${mm(params.joint.baseProud, 2)} proud of the cover's bottom edge, which is meant: the ${bolts ? 'bolts pull' : 'tape pulls'} the base against the shelf.`);
   const { clamp, lift } = input.tape;
   const head = lift.level > input.box[2] - params.base.thickness ? 'up to the rim of a full funnel' : 'up to the flat top';
-  const vaseline = 'A thin film of Vaseline in the groove, before you fit the base, makes the seal better.';
   if (bolts) {
     const { layout, advice } = bolts;
     const holds = !advice.lengthFits
       ? `which the ${layout.spots.length} bolts hold only at a length that fits this mold: see Warnings`
       : advice.boltsHoldN >= advice.holdN ? `which the ${layout.spots.length} bolts hold, at about ${advice.boltsHoldN} N together when snug, an estimate for printed plastic` : `more than the ${layout.spots.length} bolts hold, at about ${advice.boltsHoldN} N together when snug, so the tape below makes up the rest`;
-    step(++n, `Put an ${layout.size} x ${layout.length} mm countersunk screw up through each corner hole of the base and turn it into its nut until it is snug and its head sits flush in the countersink. Tighten them in turn, a little at a time, and no more than snug: a printed plate bends if the screws are forced, and the seal then opens between the corners. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the joint should hold twice that, and never less than 10 N: here ${advice.holdN.toFixed(1)} N, ${holds}. ${vaseline}`);
+    step(++n, `Put an ${layout.size} x ${layout.length} mm countersunk screw up through each corner hole of the base and turn it into its nut until it is snug and its head sits flush in the countersink. Tighten them in turn, a little at a time, and no more than snug: a printed plate bends if the screws are forced, and the seal then opens between the corners. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the joint should hold twice that, and never less than 10 N: here ${advice.holdN.toFixed(1)} N, ${holds}.`);
     const middle = advice.middle;
     if (advice.strips > 0) {
       const where = [middle[0] > 0 ? `${middle[0]} from front to back` : '', middle[1] > 0 ? `${middle[1]} from left to right` : ''].filter(Boolean).join(' and ');
@@ -208,7 +169,7 @@ export function exportReadme(input: ReadmeInput): string {
       step(++n, `Tape the middle of the joint too, as ${why}: at least ${plural(advice.strips, 'strip')} of tape at ${figure(advice.stripN)} N each${where ? `, ${where}` : ''}, each from a side wall of the cover across the base to the opposite wall, spread evenly between the bolts.`);
     }
   } else {
-    step(++n, `Tape the joint with at least ${plural(clamp.strips, 'strip')} of tape at ${figure(clamp.stripN)} N each, each running from a side wall of the cover across the base to the opposite wall: at least ${clamp.across[0]} from front to back and ${clamp.across[1]} from left to right, spread evenly, no more than about ${SEAL_SPACING_MM} mm apart along any wall, so the tape presses the seal all round. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the tape should hold twice that, and never less than 10 N: here ${clamp.holdN.toFixed(1)} N, which ${clamp.liftStrips === 1 ? 'one strip holds' : `${clamp.liftStrips} of the strips hold`}. ${vaseline}`);
+    step(++n, `Tape the joint with at least ${plural(clamp.strips, 'strip')} of tape at ${figure(clamp.stripN)} N each, each running from a side wall of the cover across the base to the opposite wall: at least ${clamp.across[0]} from front to back and ${clamp.across[1]} from left to right, spread evenly, no more than about ${SEAL_SPACING_MM} mm apart along any wall, so the tape presses the seal all round. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the tape should hold twice that, and never less than 10 N: here ${clamp.holdN.toFixed(1)} N, which ${clamp.liftStrips === 1 ? 'one strip holds' : `${clamp.liftStrips} of the strips hold`}.`);
   }
   const collide = input.diagnostics.some((d) => d.code === 'funnel-collision');
   const funnels = !has('funnel.stl')
@@ -217,9 +178,9 @@ export function exportReadme(input: ReadmeInput): string {
       ? ' The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.'
       : ' Push a funnel into the seat of each pour opening.';
   step(++n, `Stand the mold on its base on a level surface.${funnels}`);
-  step(++n, `Mix and degas the silicone. Pour it slowly, in a thin stream, into the pour opening${input.pours === 1 ? '' : 's'}, until silicone shows at every vent. This mold has ${plural(input.pours, 'pour opening')} and ${plural(input.vents, 'vent')}.`);
+  step(++n, `Mix the silicone, and degas it in the cup if you have a vacuum chamber. Pour it slowly, in a thin stream, into the pour opening${input.pours === 1 ? '' : 's'}, until silicone shows at every vent. This mold has ${plural(input.pours, 'pour opening')} and ${plural(input.vents, 'vent')}.`);
   step(++n, 'Let it cure for the full time the maker of your silicone gives.');
-  if (params.seat.enabled) para("The sprue rule: if you pour without a funnel, silicone fills the cone-shaped seat at the top of each pour opening. Cut that sprue at the floor of the seat, where the cone meets the straight bore, and not flush with the top. A cone of silicone left in the seat is wider than the bore under it, so it would lock the mold in the cover.");
+  if (params.seat.enabled) para(SPRUE_RULE);
   else para('The pour openings have no funnel seat, so cut the silicone in each of them flush with the top.');
 
   out.push(...heading('Demolding'));
@@ -250,8 +211,9 @@ export function exportReadme(input: ReadmeInput): string {
     if (air.uncovered.length === 0) item(air.ceilingLeaves === 1 ? 'The one peak of the cover\'s ceiling has an opening, so its air gets out.' : `All ${air.ceilingLeaves} peaks of the cover's ceiling have an opening, so their air gets out.`);
     else item(`${air.uncovered.length} of the ${air.ceilingLeaves} peaks of the cover's ceiling have no opening, so air stays there: see the warnings.`);
     if (air.underside.length === 0) item('No pocket under the model traps air.');
-    for (const p of air.underside) item(`Air stays in a pocket under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${(p.volume / 1000).toFixed(2)} ml. No vent in the top reaches it: brush a first coat of silicone onto the model there, tilt the mold as you pour, or degas the poured mold in a vacuum.`);
+    for (const p of air.underside) item(`Air stays in a pocket under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${(p.volume / 1000).toFixed(2)} ml. No vent in the top reaches it: brush a first coat of silicone onto the model there before you close the mold, as POURING says, or tilt the mold as you pour.`);
     for (const d of air.sealed) item(d.inModel ? `${(d.volume / 1000).toFixed(2)} ml is a sealed hollow inside the model, which no silicone reaches.` : `${(d.volume / 1000).toFixed(2)} ml of space is closed off between the model and the base, so no silicone goes there. That is harmless.`);
+    if (air.underside.length > 0) para(VACUUM_NOTE);
   } else {
     item('The air report could not be worked out for this export.');
   }

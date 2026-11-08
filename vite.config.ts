@@ -10,6 +10,9 @@ export default defineConfig({
   preview: { host: true },
   build: {
     target: 'es2022',
+    // Every browser the app supports preloads modules itself. Vite's polyfill for those that do not is
+    // adapted from es-module-shims, and Vite ships it without that project's notice, so it stays out.
+    modulePreload: { polyfill: false },
     rolldownOptions: {
       input: {
         index: resolve(root, 'index.html'),

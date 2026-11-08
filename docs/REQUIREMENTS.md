@@ -84,41 +84,41 @@ Follow-up from the user: "I assumed first version will use adhesive tape, but yo
 
 ## 3. Requirement table
 
-"Check" names the test or user check that verifies each requirement. Milestone numbers refer to `docs/PLAN.md`.
+"Check" names the automated checks that verify each requirement, as test files with the titles of the tests or checks inside them that matter, and the checks only the user can do, by their id in section 10. `test/unit/requirements.test.ts` reads this column: it fails when a requirement names no check, when a file named here is no test file (`.test.ts` or `.spec.ts`) or does not exist, when a test file is named with no title, when a title named here is in no test title or check name of that file (a test's or group's own title, or a name in the table its `.each` reads, and never an assertion's message), and when a user check is not in section 10. Several titles are run only by `scripts/ci.sh --full` (`CFG_FULL=1`), the 150 MB test only by `--soak`. Milestone numbers refer to `docs/PLAN.md`.
 
 | ID | Requirement | Status | Decision | Check |
 |---|---|---|---|---|
-| R01 | App takes a user STL and generates a container that reduces silicone use | kept | | M6 export on all examples; M2 silicone numbers |
-| R02 | Two parts, base and cover, fitting together to form the mold | kept | | M3 cover-base intersection and gap |
-| R03 | Model has at least one flat "model-base" face | kept, user confirms the detected face | | M1 candidates; M6 base confirmation |
-| R04 | Base is a mostly flat rectangle, 3 mm minimum | kept, default 4 mm, rounded corners | A4 | M3 with Tb=3 |
-| R05 | Mode A: glued, pocket 0.1 mm default, enlarged 0.2 mm, both configurable | changed: pocket defaults to one layer | D6 | M3 pocket volume; M6 layer tracking |
-| R06 | Mode B: model is part of the base STL; user chooses A or B | kept | | M3, M6 |
-| R07 | Cover outside is a box | kept | | M3 box dimensions |
-| R08 | Cavity mimics the model plus silicone thickness, default 3 mm | changed: never narrows towards the base | D1, D9 | M3 `minGap`, nesting |
-| R09 | Fatten by adding a layer per face, not by scaling, then boolean | changed: height map dilated by a sphere, then boolean; delivers a true offset wherever the surface is visible from above | D1 | M2 oracles; M3 `minGap` |
-| R10 | Model-base plane stays fixed, crossings are trimmed, all faces on the plane count, even disconnected | kept; islands below `minIsland` are dropped and listed | A7 | M1 footprints; M2 trim fixture |
-| R11 | Base and cover form a closed volume except for pour openings | kept | | M3 and M4 shell lists with negative control |
-| R12 | Cover cut-out with a matching chamfer for the base | extended: taper plus tongue and groove | D4 | M3 gap equals `cT*cos(tau)` |
-| R13 | Grid: size, spacing and edge distance configurable | kept; edge is a minimum; spacing defaults to auto | A5, A6 | M2, M3, M6 grid checks |
-| R14 | Openings: configurable count, minimum 1 per model, spread around centre, drag and drop | changed: peak first, per body | D3, A3 | M4 placement; M8 drag |
-| R15 | Opening default 10 mm, configurable funnel cut-out, funnel model | kept; seat is conical | | M4 funnel checks |
-| R16 | Box shaped, base opening opposite the pour side, that side otherwise flat | kept; vents also pass through it | D3 | M3 and M4 slice below `Zt` |
-| R17 | Usage steps 1 to 5 | step 5 changed: silicone can come out with the model | D2 | `docs/WORKFLOW.md`; user pour |
-| R18 | Connection quality minimises leakage | kept | D4, D5, A2 | M3 joint checks; fit-test by user |
-| R19 | Pour opening at the highest point of the open space | kept, vents added | D3 | M4 root peak within 1 mm |
-| R20 | Fully in the browser, no back end | kept | D7 | M6 no non-LAN request |
-| R21 | Realtime preview of base and cover if possible | kept as tiers with measured latency | | M5 budgets; M6 T1 test |
-| R22 | Scalable primitives for demolding | dropped, as the text allowed | D1 | none needed |
-| R23 | Question: simulate or never-narrowing tool | answered yes | D1, D2 | M3 nesting; M7 demold report |
-| R24 | Simplify detailed models first, then add layers | changed: raster replaces it for the cover; simplification only for display and heavy Manifold input | A1 | M2 timing; M11 heavy input |
-| R25 | A file detailing the requirements | this file | | present |
-| R26 | Script installing any additional software | `scripts/install.sh` | | M0 runs twice with exit 0 |
-| R27 | BumpMesh as GUI reference | kept; own stylesheet because BumpMesh is AGPL | | M6 layout checks and screenshot review |
-| R28 | Local deployment | kept | D7 | `scripts/serve.sh` |
-| R29 | Git init, commit without attribution | kept | D8 | this repository |
-| R30 | Ask questions | done, recorded below | | decisions below |
-| R31 | Connection system with nuts and bolts, FDM friendly (follow-up) | done (M10): optional toggle, off by default; 4 countersunk M2.5, M3 or M4 screws up through the base's corners into ISO 4032 hex nuts in side slots of the cover, nothing through the flat top, no supports | D5 | M10: `test/unit/bolts.test.ts`, the bolts-on blocks of `test/regression/solid.test.ts` and `openings.test.ts`, `test/unit/export.test.ts`, `e2e/bolts.spec.ts`; print, fasten and leak test by the user |
+| R01 | App takes a user STL and generates a container that reduces silicone use | kept | | `e2e/export.spec.ts` "the ZIP from the button checks out against a Node build"; `test/unit/export.test.ts` "the ZIP holds the parts in print pose"; `test/regression/field.test.ts` "matches its golden number at plan defaults"; `test/regression/solid.test.ts` "uses at most 1.25 times the silicone M2 measured"; U7 |
+| R02 | Two parts, base and cover, fitting together to form the mold | kept | | `test/regression/solid.test.ts` "intersection of cover and base is about 0", "the ridge and taper gaps are as designed", "an L-shaped fixture: minGap at least t, no overlap, and a mirrored cover fails on both"; `e2e/export.spec.ts` "the ZIP from the button checks out against a Node build"; U3 |
+| R03 | Model has at least one flat "model-base" face | kept, user confirms the detected face | | `test/regression/base.test.ts` "ranks -z first, on the support plane"; `test/unit/baseDetection.test.ts` "counts both feet of an arch on one plane"; `e2e/app.spec.ts` "base confirmation: hovering a candidate highlights its plane" |
+| R04 | Base is a mostly flat rectangle, 3 mm minimum | kept, default 4 mm, rounded corners | A4 | `test/regression/solid.test.ts` "Tb=3", "plate and rebate have their corners, and the plate its bed relief"; `test/unit/params.test.ts` "has exactly the rows of the plan, with its defaults and ranges"; `test/unit/parts.test.ts` "warns on a base or pocket a slicer would round"; U6 |
+| R05 | Mode A: glued, pocket 0.1 mm default, enlarged 0.2 mm, both configurable | changed: pocket defaults to one layer | D6 | `test/regression/solid.test.ts` "the Mode A pocket is where the model stands, by the set enlargement", "pocket 0.1, enlarge 0.4"; `e2e/app.spec.ts` "the pocket follows the layer height at 0.1, 0.2 and 0.3 until it is edited"; `test/unit/reports.test.ts` "a pocket of 0.1 mm at 0.2 mm layers warns under its control"; `test/unit/export.test.ts` "an open mesh exports a glue-mode base whose pocket is right"; U5; U6 |
+| R06 | Mode B: model is part of the base STL; user chooses A or B | kept | | `test/regression/solid.test.ts` "Mode B fills what it seals off"; `test/unit/export.test.ts` "Mode B on a 2 x 3 grid"; `e2e/app.spec.ts` "mode, grid and pour count change the geometry to what Node builds" |
+| R07 | Cover outside is a box | kept | | `test/regression/solid.test.ts` "the box, proud and flat top match the formulas"; `test/unit/rim.test.ts` "derives B, O and Zt, by hand"; `e2e/app.spec.ts` "the status strip is what core gives in Node" |
+| R08 | Cavity mimics the model plus silicone thickness, default 3 mm | changed: never narrows towards the base | D1, D9 | `test/regression/solid.test.ts` "clearance by minGap is at least t, and at most t+0.6 with draft 0", "cavity slices at 12 levels are nested"; `test/regression/field.test.ts` "clears every vertex by t"; `e2e/export.spec.ts` "the ZIP from the button checks out against a Node build"; U7 |
+| R09 | Fatten by adding a layer per face, not by scaling, then boolean | changed: height map dilated by a sphere, then boolean; delivers a true offset wherever the surface is visible from above | D1 | `test/regression/field.test.ts` "is within 2% of its closed form at the export cell", "a radius short of the margin fails the clearance test"; `test/unit/dilate.test.ts` "pruned dilation equals brute force"; `test/regression/solid.test.ts` "clearance by minGap is at least t" |
+| R10 | Model-base plane stays fixed, crossings are trimmed, all faces on the plane count, even disconnected | kept; islands below `minIsland` are dropped and listed | A7 | `test/regression/base.test.ts` "matches the measured footprint, with polygon area within 2% of projected", "wolf: 3 footprints above the filter"; `test/unit/fieldRaster.test.ts` "skips what lies wholly below the plane and clips what crosses it"; `test/unit/baseDetection.test.ts` "gives the warning and the trim for a deep spike when the user picks the face"; `e2e/app.spec.ts` "wolf: the footprint islands it drops are listed in Diagnostics" |
+| R11 | Base and cover form a closed volume except for pour openings | kept | | `test/regression/solid.test.ts` "the closed-volume list is exact", "a slot through the wall changes the closed-volume list"; `test/regression/openings.test.ts` "after bores, only the groove residual is left as a negative shell", "a bore that stops short of the ceiling leaves the cavity sealed"; `test/unit/placement.test.ts` "a crumb far from everything is no body either, but its cavity must not stay sealed"; U4 |
+| R12 | Cover cut-out with a matching chamfer for the base | extended: taper plus tongue and groove | D4 | `test/regression/solid.test.ts` "the ridge and taper gaps are as designed"; `test/unit/rim.test.ts` "groove clearance beats taper clearance at defaults"; `test/unit/parts.test.ts` "passes the joint checks with the real builders"; `e2e/fit-test.spec.ts` "the fit-test pieces download from diag.html"; U3 |
+| R13 | Grid: size, spacing and edge distance configurable | kept; edge is a minimum; spacing defaults to auto | A5, A6 | `test/regression/solid.test.ts` "every check, with %i cavities", "edge 30 gives O = half + 30, and edge 1 says it was raised"; `test/unit/gridField.test.ts` "snaps the pitch to whole export cells"; `test/regression/field.test.ts` "auto spacing leaves %s a printable wall both ways"; `e2e/app.spec.ts` "mode, grid and pour count change the geometry to what Node builds" |
+| R14 | Openings: configurable count, minimum 1 per model, spread around centre, drag and drop | changed: peak first, per body | D3, A3 | `test/regression/openings.test.ts` "every body has at least 1 valid pour", "x8 at perModel = 3 gives 24 valid pours"; `test/unit/placement.test.ts` "then spread around where the body stands"; `e2e/view.spec.ts` "opening drag in 3D on a 2 x 1 grid"; `e2e/app.spec.ts` "a typed position pins the opening"; U2 |
+| R15 | Opening default 10 mm, configurable funnel cut-out, funnel model | kept; seat is conical | | `test/unit/funnel.test.ts` "sits in a real seat with no intersection and the gap set", "prints wide rim down with every wall within 45 degrees of vertical"; `test/regression/openings.test.ts` "a counterbore in place of the cone fails the overhang audit"; `test/unit/params.test.ts` "has exactly the rows of the plan, with its defaults and ranges" |
+| R16 | Box shaped, base opening opposite the pour side, that side otherwise flat | kept; vents also pass through it | D3 | `test/regression/solid.test.ts` "the box, proud and flat top match the formulas"; `test/regression/openings.test.ts` "the slice just below Zt is the box less the seats", "only the seat cone overhangs in print pose"; U6 |
+| R17 | Usage steps 1 to 5 | step 5 changed: silicone can come out with the model; the full workflow is `docs/WORKFLOW.md` | D2 | `test/unit/requirements.test.ts` "docs/WORKFLOW.md covers what the plan's M11 check names"; `test/unit/export.test.ts` "has the workflow: fit, tape, Vaseline, pour until every vent shows silicone, cure, the sprue rule and the D2 demold"; `test/regression/reports.test.ts` "verdicts: jersey and x8 plausible, wolf cut-required"; U5; U7 |
+| R18 | Connection quality minimises leakage | kept | D4, D5, A2 | `test/regression/solid.test.ts` "the ridge and taper gaps are as designed", "the box, proud and flat top match the formulas"; `test/unit/reports.test.ts` "advises twice the lift and never under 10 N"; `test/unit/bolts.test.ts` "jersey: four bolts are enough, as they hold the lift and stand under 100 mm apart", "VIS-35: tape across the middle where the bolts stand over 100 mm apart"; U3; U4 |
+| R19 | Pour opening at the highest point of the open space | kept, vents added | D3 | `test/regression/openings.test.ts` "so its pour goes within 1 mm of its root peak", "each body has a vent beside its first pour"; `test/unit/placement.test.ts` "puts the pour at the highest point, a vent beside it"; U7 |
+| R20 | Fully in the browser, no back end | kept | D7 | `e2e/app.spec.ts` "with nothing fetched past the LAN host"; `e2e/lan-spike.spec.ts` "the app runs over plain http on the LAN address"; `test/unit/static.test.ts` "uses no API that needs a secure context"; U1 |
+| R21 | Realtime preview of base and cover if possible | kept as tiers with measured latency | | `e2e/app.spec.ts` "T1: dragging t from 3 to 6 changes the box and the pixels before any solid job ends"; `e2e/pipeline.spec.ts` "T1, T2 and T2b measured here stay within the budgets derived from Node"; `test/unit/pipeline.test.ts` "a burst of 50 t changes runs few jobs"; U2 |
+| R22 | Scalable primitives for demolding | dropped, as the text allowed; the never-narrowing cavity (R23) takes their place | D1 | `test/unit/params.test.ts` "has exactly the rows of the plan, with its defaults and ranges"; `test/regression/solid.test.ts` "cavity slices at 12 levels are nested" |
+| R23 | Question: simulate or never-narrowing tool | answered yes | D1, D2 | `test/regression/solid.test.ts` "cavity slices at 12 levels are nested"; `test/regression/reports.test.ts` "verdicts: jersey and x8 plausible, wolf cut-required"; `test/unit/intervals.test.ts` "a mushroom is jacket-out"; `e2e/app.spec.ts` "demold: wolf reads cut-required"; U7 |
+| R24 | Simplify detailed models first, then add layers | changed: raster replaces it for the cover; simplification only for display and heavy Manifold input. The 3 million triangle input works, but its memory check is open (section 9) | A1 | `test/regression/field.test.ts` "builds its field in under 5 s at cell 0.125"; `test/regression/heavy.test.ts` "above the Manifold limit, every Manifold step after the import uses a simplified copy"; `test/regression/heavyPath.test.ts` "the preview checks it whole once"; `e2e/hardening.spec.ts` "a 150 MB STL imports, previews in glue and merged mode, exports and cuts" |
+| R25 | A file detailing the requirements | this file | | `test/unit/requirements.test.ts` "maps every requirement R01 to R31" |
+| R26 | Script installing any additional software | `scripts/install.sh`; system packages only with `WITH_SYSTEM_DEPS=1` | | `test/unit/requirements.test.ts` "scripts/install.sh needs Node 24" |
+| R27 | BumpMesh as GUI reference | kept; own stylesheet because BumpMesh is AGPL | | `e2e/app.spec.ts` "layout at 1366 x 768 and 1920 x 1080"; `test/unit/layout.test.ts` "places every parameter exactly once"; U2 |
+| R28 | Local deployment | kept: `scripts/serve.sh`, see `docs/DEPLOY.md` | D7 | `test/unit/requirements.test.ts` "scripts/serve.sh builds, then serves the build"; `e2e/lan-spike.spec.ts` "the app runs over plain http on the LAN address"; U1 |
+| R29 | Git init, commit without attribution | kept | D8 | `test/unit/requirements.test.ts` "no commit message names Claude or Anthropic" |
+| R30 | Ask questions | done, recorded below | | `test/unit/requirements.test.ts` "records the decisions D1 to D9" |
+| R31 | Connection system with nuts and bolts, FDM friendly (follow-up) | done (M10): optional toggle, off by default; 4 countersunk M2.5, M3 or M4 screws up through the base's corners into ISO 4032 hex nuts in side slots of the cover, nothing through the flat top, no supports | D5 | `test/unit/bolts.test.ts` "ISO 4032 nuts and 90 degree countersunk heads", "puts one bolt in each corner", "a corner of the base and cover with one bolt each, as the fit test makes them, are closed solids with the mold's cuts"; `test/regression/solid.test.ts` "with bolts on (M10)"; `test/regression/openings.test.ts` "cut, with bolts on"; `test/unit/export.test.ts` "the export with bolts, in Node"; `e2e/bolts.spec.ts` "the Bolts group: off it is the toggle and the tape", "Export ZIP with the bolts on"; U3; U4 |
 
 ## 4. Decisions
 
@@ -183,15 +183,18 @@ These follow from research and design review. `docs/PLAN.md` has the full constr
 
 ## 7. User workflow as implemented
 
-1. Print model, base and cover.
-2. Glue the model into the pocket (Mode A). Test the adhesive for cure inhibition first.
-3. Join base and cover. Seal with tape, optionally Vaseline in the groove, or with the bolts turned on: fit the nuts into the cover's side slots, then turn the 4 countersunk screws up through the base's corners until snug, with tape across the middle of a side longer than about 100 mm between bolts.
-4. Insert the funnel and pour through the pour opening, watching silicone reach the vents.
-5. After curing, cut the sprues.
-6. Remove the silicone with the model inside it from the cover, cut or flex it, take out the model, and re-seat the silicone in the cover. Mild shapes may release while still in the cover, and the app says which.
-7. The silicone in the cover is the finished mold, with the cover's flat top as its bottom.
+1. Open the STL in the app, confirm the base face, choose Mode A or B, and set the printer's layer height, nozzle and bed. Mode A is the better choice for a model that stands on several footprints, such as the wolf.
+2. Print the fit-test pieces first (the Fit test button, with a model open) and set the clearances they give; with the bolts on, the bolt coupon too. Then export the mold with Export ZIP.
+3. Print the base and the cover, each in the pose it is saved in, with no supports, and in Mode A the model in whatever pose suits it, on a resin printer if wanted.
+4. Test the silicone for cure inhibition on each print material, the glue (Mode A), the tape and the petroleum jelly.
+5. Join base and cover and seal them: petroleum jelly (Vaseline) in the groove, which helps the seal, and tape, or with the bolts turned on: fit the nuts into the cover's side slots, corner first, then turn the 4 countersunk screws up through the base's corners until snug, in turn, with tape across the middle of a side longer than about 100 mm between bolts. Fill the mold with water to test it for leaks before the model is glued in, then take it apart and let it dry.
+6. Glue the model into the pocket (Mode A). Where air would stay under an overhang, brush a first coat of silicone onto the model there. Then close the mold, sealed the same way.
+7. Stand the mold level with the funnels in place, mix the silicone, degas it in the cup if a vacuum chamber is at hand, and pour it through the funnel at the pour opening, watching silicone reach the vents.
+8. After curing, cut the sprues: each pour sprue at the floor of its seat, not flush with the top, with or without a funnel, and the vents flush with the top.
+9. Remove the silicone with the model inside it from the cover, cut or flex it, take out the model, and re-seat the silicone in the cover. Mild shapes may release while still in the cover, and the Demold report says which, with the places to cut.
+10. The silicone in the cover is the finished mold, with the cover's flat top as its bottom.
 
-`docs/WORKFLOW.md` will hold the full version.
+`docs/WORKFLOW.md` has the full workflow, from printing to recasting, and README.txt in each export ZIP has the steps for that mold with its own numbers.
 
 ## 8. Out of scope for now
 
@@ -201,12 +204,23 @@ Base-mounted displacers for overhangs, bottom-fill channel, shell-and-rib cover,
 
 | Item | Who | Status |
 |---|---|---|
-| Does the user's browser (Firefox 158 on Windows) prompt or block saving STL and ZIP from `http://192.168.0.153:5173/diag.html`? | User | answered 2026-11-07: downloaded without a problem. Chrome remains untested. |
+| Does the user's browser (Firefox 158 on Windows) prompt or block saving STL and ZIP from `http://192.168.0.153:5173/diag.html`? | User | answered 2026-11-07: downloaded without a problem. Chrome remains untested (U1). |
 | `bench.html` numbers from the user's machine | User | answered 2026-11-07, see `docs/DEPLOY.md` |
 | Run browser tests in Firefox too, since the user's browser is Firefox and the plan assumed Chromium | Builder | done 2026-11-07, on Firefox 155 (the newest build Playwright 1.63 ships, while the user runs 158). The WebGL tests need `xvfb`: without it they skip and `scripts/ci.sh` says so |
-| Whether 3 mm holds up in use, whether a top pour behaves as modelled, tape sealing, cure inhibition | User, by test pour | open |
+| Whether 3 mm holds up in use, whether a top pour behaves as modelled, tape sealing, cure inhibition | User, by test pour | open: U3 to U7 in section 10 |
 | M11's "peak RSS sampled from /proc under 3 GB" on the 3 million triangle input is not met as written: each process's RSS summed over the browser peaked at 2,789 to 3,010 MiB in Chromium and 3,088 to 3,171 MiB in Firefox, where 3 GB is 2,861 MiB. That sum counts every page the browser's processes share once per process; counted once (PSS) the peaks are 2,158 to 2,375 and 2,759 to 2,843 MiB, Firefox's within 18 MiB of 3 GB. Firefox's parent process, which the page has no hold on, holds 964 to 1,021 MiB of its RSS. The test holds PSS under 3 GB and reports summed RSS as a deviation. Accept PSS as the measure, or ask for the memory to come down (`docs/PLAN.md`, Measured at M11a) | User | open, since 2026-11-08 |
+| Which licence, if any, the project itself is published under | User | open: none chosen, so `package.json` stays private and `docs/THIRD_PARTY.md` and the README say so |
 
 ## 10. Verification matrix
 
-Section 3 maps each requirement to its check. `docs/PLAN.md` lists the checks per milestone. These can only be verified by the user: Chrome download behaviour, feel with a real GPU and mouse, printed fit, leakage, and the real pour.
+Section 3 maps each requirement to its automated checks and to the checks below, which only the user can do, as they need a printer, silicone, a real GPU and mouse, or a browser other than the ones on the server. `docs/PLAN.md` lists the checks per milestone. `test/unit/requirements.test.ts` holds the two tables to each other: a requirement names a user check here only if that check lists it, and the other way round.
+
+| ID | Check only the user can do | Requirements | How |
+|---|---|---|---|
+| U1 | Save the STL and ZIP test files from `diag.html` in Chrome over plain http, and say whether it prompts or blocks (Firefox 158 saves them without a prompt) | R20, R28 | `docs/DEPLOY.md` |
+| U2 | Look and feel on your own screen and GPU: how quickly the preview follows, dragging openings with a real mouse, and whether the layout reads well | R14, R21, R27 | `README.md` |
+| U3 | Print the fit-test pieces and set the clearances they give; with the bolts on, print the bolt coupon and fit a screw and nut | R02, R12, R18, R31 | `fit_test/README.txt`, `docs/WORKFLOW.md` |
+| U4 | Fill the assembled mold with water before the first pour, and check that the joint stays dry | R11, R18, R31 | `docs/WORKFLOW.md`, README.txt |
+| U5 | Cure-inhibition test patch: your silicone on your print material, glue and sealant | R05, R17 | `docs/WORKFLOW.md`, README.txt |
+| U6 | In the slicer: the parts in their saved poses need no supports, and the base and the pocket come out in whole layers | R04, R05, R16 | `docs/WORKFLOW.md` |
+| U7 | A full pour, from printing the model to a recast: whether 3 mm of silicone holds up, how the top pour fills and vents, whether the seal holds, and whether the demold estimate holds | R01, R08, R17, R19, R23 | `docs/WORKFLOW.md` |

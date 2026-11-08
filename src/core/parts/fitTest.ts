@@ -1,6 +1,7 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { defaultParams } from '../params/defaults';
 import type { Params } from '../params/schema';
+import { EOL, wrap } from '../report/text';
 import { checked, withArena, type Arena } from '../solid/arena';
 import { TOOL_BOTTOM } from '../solid/tool';
 import { buildBaseBody } from './base';
@@ -161,38 +162,48 @@ export function buildFitPiece(arena: Arena, params: Params, variant: FitVariant)
   return { rim, cover, base };
 }
 
-const README = (variants: FitVariant[], params: Params): string => `Fit-test pieces for the base and cover joint.
+/** fit_test/README.txt as lines, wrapped and in plain ASCII like the export's README.txt. */
+function readmeLines(variants: FitVariant[], params: Params): string[] {
+  const out: string[] = [];
+  const para = (text: string): void => {
+    out.push(...wrap(text), '');
+  };
+  const step = (n: number, text: string): void => {
+    out.push(...wrap(text, `${n}. `, '   '));
+  };
+  const item = (text: string): void => {
+    out.push(...wrap(text, '- ', '  '));
+  };
+  para('Fit-test pieces for the base and cover joint.');
+  para('Each pair is a small mold with the real taper, ridge and groove, a pour bore, a funnel seat and a vent. Use it to find the clearances that suit your printer, and as a leak test.');
+  para('The file names give each pair\'s clearances. Printed pieces are told apart by the notches on one edge: on the +x side for the taper series and on the +y side for the groove series, one notch for the first in the series, two for the second, and so on.');
+  out.push('How to read the result:');
+  step(1, 'Print the taper series, one pair at a time, in the material and settings of the real mold, in the poses of these files. The groove is generous here, so only the taper decides the fit.');
+  step(2, `The best fit is the tightest pair whose base seats fully on the cover's shelf by hand. The base then stands proud of the cover by ${params.joint.baseProud} mm. If it rocks or stands higher, go one step looser. Set Taper clearance per side to that pair's value.`);
+  step(3, `Print the groove series. This ZIP builds it at a taper clearance of ${params.joint.taperClearance.toFixed(2)} mm, and a base that is too tight in the taper stops short whatever the groove does. So if step 2 gave you another value, set Taper clearance per side to it under Cover & joint in the app, and save the fit test again with the Fit test button under Export (diag.html offers the same under Printer check). Choose the tightest pair that still seats fully, and set Groove clearance per side to that pair's value.`);
+  step(4, 'For a leak test, seat the chosen pair, tape it as for a real pour, and fill it with water through the pour opening until water shows at the vent. The joint should stay dry for several minutes. A little Vaseline in the groove helps.');
+  out.push('', 'If no pair seats:');
+  item('In the taper series, even the loosest: your printer is printing well over size. Check its flow and first-layer squish, then print the series again.');
+  item('In the groove series, when it was built at a taper clearance that seats: clean any stringing from the ridge and groove and try again. If it still stops short, set Groove clearance per side one step past the loosest pair.');
+  out.push('', 'Variants:');
+  for (const v of variants) item(`${v.id}: taper clearance ${v.cT.toFixed(2)} mm, groove clearance ${v.cG.toFixed(2)} mm, ${v.notches} notch${v.notches > 1 ? 'es' : ''} on the ${v.series === 'taper' ? '+x' : '+y'} side`);
+  return out;
+}
 
-Each pair is a small mold with the real taper, ridge and groove, a pour bore, a funnel seat and a vent. Use it to find the clearances that suit your printer, and as a leak test.
-
-The file names give each pair's clearances. Printed pieces are told apart by the notches on one edge: on the +x side for the taper series and on the +y side for the groove series, one notch for the first in the series, two for the second, and so on.
-
-How to read the result:
-1. Print the taper series, one pair at a time, in the material and settings of the real mold, in the poses of these files. The groove is generous here, so only the taper decides the fit.
-2. The best fit is the tightest pair whose base seats fully on the cover's shelf by hand. The base then stands proud of the cover by ${params.joint.baseProud} mm. If it rocks or stands higher, go one step looser. Set Taper clearance per side to that pair's value.
-3. Print the groove series. This ZIP builds it at a taper clearance of ${params.joint.taperClearance.toFixed(2)} mm, and a base that is too tight in the taper stops short whatever the groove does. So if step 2 gave you another value, set Taper clearance per side to it under Cover & joint in the app, and save the fit test again with the Fit test button under Export (diag.html offers the same under Printer check). Choose the tightest pair that still seats fully, and set Groove clearance per side to that pair's value.
-4. For a leak test, seat the chosen pair, tape it as for a real pour, and fill it with water through the pour opening until water shows at the vent. The joint should stay dry for several minutes. A little Vaseline in the groove helps.
-
-If no pair seats:
-- In the taper series, even the loosest: your printer is printing well over size. Check its flow and first-layer squish, then print the series again.
-- In the groove series, when it was built at a taper clearance that seats: clean any stringing from the ridge and groove and try again. If it still stops short, set Groove clearance per side one step past the loosest pair.
-
-Variants:
-${variants.map((v) => `${v.id}: taper clearance ${v.cT.toFixed(2)} mm, groove clearance ${v.cG.toFixed(2)} mm, ${v.notches} notch${v.notches > 1 ? 'es' : ''} on the ${v.series === 'taper' ? '+x' : '+y'} side`).join('\n')}
-`;
-
-const BOLT_README = (coupon: BoltCoupon, params: Params): string => {
+function boltLines(coupon: BoltCoupon, params: Params): string[] {
   const { bolts } = coupon;
   const b = params.bolts;
-  return `
-Bolt coupon:
-bolt_coupon_base.stl and bolt_coupon_cover.stl are a corner of the base and of the cover with one bolt, cut as the real mold's are: an ${bolts.size} countersink at a hole clearance of ${b.holeClearance} mm per side, and a nut slot at a nut clearance of ${b.nutClearance} mm per side, with its membrane. Print them as they are saved, in the material and settings of the real mold. Then, with an ${bolts.size} x ${bolts.length} mm countersunk screw and an ${bolts.size} hex nut:
-1. Push the nut into the slot from the +x side, corner first, with two of its flats against the sides of the slot: it should slide in by hand until its leading corner stops at the end of the slot, and stay in. If it will not go, raise Nut clearance per side under Cover & joint, Bolts, by 0.05 mm; if it falls out, lower it.
-2. Put the screw up through the base piece from its underside, into the cover piece, and push it through the membrane, the thin layer of plastic between the hole and the nut slot, under the nut, which is meant to be pierced. It should pass the hole without binding; if it binds, raise Hole clearance per side.
-3. Turn the screw into the nut until snug. Its head should sit flush with the base piece's underside or a little below it, and the pieces should close without a gap.
-The coupon's slot sits at the lowest height the mold's can. The mold's is up to one layer higher, so that its bridge starts on a layer under its flat top, so in the mold the same screw passes its nut by up to ${bolts.layer} mm less than here.
-`;
-};
+  const out: string[] = ['', 'Bolt coupon:'];
+  const step = (n: number, text: string): void => {
+    out.push(...wrap(text, `${n}. `, '   '));
+  };
+  out.push(...wrap(`bolt_coupon_base.stl and bolt_coupon_cover.stl are a corner of the base and of the cover with one bolt, cut as the real mold's are: an ${bolts.size} countersink at a hole clearance of ${b.holeClearance} mm per side, and a nut slot at a nut clearance of ${b.nutClearance} mm per side, with its membrane. Print them as they are saved, in the material and settings of the real mold. Then, with an ${bolts.size} x ${bolts.length} mm countersunk screw and an ${bolts.size} hex nut:`));
+  step(1, 'Push the nut into the slot from the +x side, corner first, with two of its flats against the sides of the slot: it should slide in by hand until its leading corner stops at the end of the slot, and stay in. If it will not go, raise Nut clearance per side under Cover & joint, Bolts, by 0.05 mm; if it falls out, lower it.');
+  step(2, "Put the screw up through the base piece from its underside, into the cover piece, and push it through the membrane, the thin layer of plastic between the hole and the nut slot, under the nut, which is meant to be pierced. It should pass the hole without binding; if it binds, raise Hole clearance per side.");
+  step(3, "Turn the screw into the nut until snug. Its head should sit flush with the base piece's underside or a little below it, and the pieces should close without a gap.");
+  out.push(...wrap(`The coupon's slot sits at the lowest height the mold's can. The mold's is up to one layer higher, so that its bridge starts on a layer under its flat top, so in the mold the same screw passes its nut by up to ${bolts.layer} mm less than here.`));
+  return out;
+}
 
 /** Everything in the fit-test ZIP, by path, in print pose. The caller zips it, so core needs no zip library. */
 export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultParams()): Record<string, Uint8Array> {
@@ -205,16 +216,16 @@ export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultPara
       files[`fit_test/${variant.id}_base.stl`] = poseToStl(api, base, basePose(rim));
     });
   }
-  let readme = README(variants, params);
+  const readme = readmeLines(variants, params);
   if (params.bolts.enabled) {
     withArena(api, (arena) => {
       const coupon = buildBoltCoupon(arena, params);
       files['fit_test/bolt_coupon_cover.stl'] = poseToStl(api, coupon.cover, coverPose({ Zt: coupon.top }));
       files['fit_test/bolt_coupon_base.stl'] = poseToStl(api, coupon.base, basePose({ Tb: params.base.thickness }));
-      readme += BOLT_README(coupon, params);
+      readme.push(...boltLines(coupon, params));
     });
   }
-  // Plain ASCII, and core has no TextEncoder without the DOM types.
-  files['fit_test/README.txt'] = Uint8Array.from(readme, (c) => c.charCodeAt(0));
+  // Plain ASCII in CRLF lines for Notepad, and core has no TextEncoder without the DOM types.
+  files['fit_test/README.txt'] = Uint8Array.from(readme.join(EOL) + EOL, (c) => c.charCodeAt(0));
   return files;
 }

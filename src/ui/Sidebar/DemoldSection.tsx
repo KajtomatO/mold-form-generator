@@ -79,7 +79,7 @@ export function DemoldSection() {
           {air.underside.length === 0 ? <li>No pocket under the model traps air.</li> : null}
           {air.underside.map((p, k) => (
             <li key={`u${k}`} class="trap" data-trap="underside">
-              {`Under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${ml(p.volume)}: no top vent reaches it, so brush a first coat there, tilt the mold as you pour, or use a vacuum.`}
+              {`Under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${ml(p.volume)}: no top vent reaches it, so brush a first coat there before you close the mold, tilt the mold as you pour, or try a vacuum, which is untested on printed molds.`}
             </li>
           ))}
           {air.sealed.map((d, k) => (

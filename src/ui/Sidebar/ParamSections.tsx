@@ -185,6 +185,12 @@ export function AdvancedSection() {
         <a href="./bench.html" target="_blank" rel="noopener">Benchmark</a>
         <a href="./pipeline.html" target="_blank" rel="noopener">Pipeline test page</a>
       </div>
+      {/* The minified build drops the libraries' own licence comments, so their notices ship as a file of their own. */}
+      <div class="links">
+        <a href="./third-party-notices.txt" target="_blank" rel="noopener" data-testid="notices-link" title="The licences of the open-source libraries this app is built with. Opens in a new tab.">
+          Third-party licences
+        </a>
+      </div>
     </details>
   );
 }
