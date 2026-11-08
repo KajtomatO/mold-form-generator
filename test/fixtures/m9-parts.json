@@ -1,0 +1,39 @@
+{
+  "note": "SHA-256 of the parts M9 (09df91e) exported in Node at these settings, before any M10 change. Bolts off must give the same bytes.",
+  "parts": {
+    "jersey": {
+      "cover.stl": "ef507904edd294346edd34880f94e1b26bc636dbec4a54daf6dc404130cf42eb",
+      "base.stl": "25c396bdeafb689adbac68fa9e82e4bea901eb0e94111a38578f12c2d3373848"
+    },
+    "jersey-merged": {
+      "cover.stl": "ef507904edd294346edd34880f94e1b26bc636dbec4a54daf6dc404130cf42eb",
+      "base.stl": "1631f342a8df7d0964f9d8196ed4ec792e6b5b7faa6d77f8dc6bbd9ac47caf4b"
+    },
+    "jersey-2x1": {
+      "cover.stl": "ddec464807513a5a020a75e1e662798c7a0665027a326b4c492e0315da6e5c27",
+      "base.stl": "f001e2adedb243587df1cec5f2e1a9dcf9439a04cad92352f6a9a3926246c9e9"
+    },
+    "barrel": {
+      "cover.stl": "930a7aba7d9b8f0f52a0176e70abcf6013db55eff60b75e416e9b57b8967ce1d",
+      "base.stl": "65964af2342486eb61ed88749f0c998597c2f191293d86683097b9816d9dd921"
+    }
+  },
+  "fitTest": {
+    "fit_test/taper-0.10_cover.stl": "98291430411cb7ca46512c1426888cfb597ecd76903b0f1e2a4b6d286804faea",
+    "fit_test/taper-0.10_base.stl": "38d4a5897fddff96f93ad66b01b4ab4db7a038735caa33d5791ebfcdcbcfea31",
+    "fit_test/taper-0.20_cover.stl": "04881b176240f12142e22c34665df30fc92c2b9cff13f1c7c28fbaac6831b09b",
+    "fit_test/taper-0.20_base.stl": "710f78b2bb86403da277af878a55d3442146ace535dc66213c8afa606081700f",
+    "fit_test/taper-0.30_cover.stl": "9d108bccb6c072bc175e5339e2caa00c8e2e65fe67bbd60ef9385390e6203103",
+    "fit_test/taper-0.30_base.stl": "3eb2617c97b01f26e4a49594da2b7d63fd2dffb17cb1cf038dae068c6436eb65",
+    "fit_test/taper-0.40_cover.stl": "0295fdfd1e2b6adb4185ee63835fce9da81bc9c6489c18b9cc13a15395ebfa35",
+    "fit_test/taper-0.40_base.stl": "1901f95f8206a3e881b5a9e2fa7e3450699a419ac5aad456f01fcd539427aae3",
+    "fit_test/groove-0.25-taper-0.10_cover.stl": "1432d33522ac08bd3bfe78a7091a5df34a16a6397b016c25dc74c1c174b6c799",
+    "fit_test/groove-0.25-taper-0.10_base.stl": "a6579f6270b027b20f3edf5d5ff1ad3ed32a3ba21e005d34ef8dd7ac6cef8f19",
+    "fit_test/groove-0.35-taper-0.10_cover.stl": "018e8f2006ebf74c36b7a4373fa17ea5764684dd08a2df19a4f1f380b2b6a64e",
+    "fit_test/groove-0.35-taper-0.10_base.stl": "ae927b9dc8067abc36ba70a0a0d53990c6dd4104aff992695f79dc5fa1d98efa",
+    "fit_test/groove-0.45-taper-0.10_cover.stl": "f7223cf30cdbaad68a077d9a4ba5e18b9e1be6e40e3dc22f6dc764cb30a5f7b9",
+    "fit_test/groove-0.45-taper-0.10_base.stl": "d401bf5c98cee6fb6d0c6c60067f7f72dca5c96bbb4cb56fc838ad3b0d3a3fed",
+    "fit_test/groove-0.55-taper-0.10_cover.stl": "aad217a31942855fb7f9ee58b70e66ffd5088edce3961960e0e5a5d5a9439481",
+    "fit_test/groove-0.55-taper-0.10_base.stl": "479775fa309a10cbbf0d682372e6f86351a9f3a0b779c38d171fb4fdf4a6eb43"
+  }
+}

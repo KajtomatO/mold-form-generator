@@ -26,6 +26,8 @@ import { box, join as joinMeshes } from '../fixtures/synthetic';
 
 const fixtures = join(import.meta.dirname, '..', 'fixtures', 'projects');
 const fixture = (name: string): string => readFileSync(join(fixtures, name), 'utf8');
+/** What the 2 to 3 step adds: the bolts off, at the values format 3 started with. */
+const V3_BOLTS = { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 };
 const nodeSha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
@@ -160,16 +162,31 @@ describe('pack and unpack', () => {
 });
 
 describe('migration', () => {
-  it('today\'s version 1 project.json, from a real export ZIP, migrates to version 2 with the hash and plane unknown', () => {
+  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 3 with the hash and plane unknown and the bolts off', () => {
     const read = readProjectJson(fixture('v1-jersey-export.json'));
     const v1 = JSON.parse(fixture('v1-jersey-export.json'));
     expect(v1.schemaVersion).toBe(1);
     expect(read.from).toBe(1);
-    expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null });
+    expect(SCHEMA_VERSION).toBe(3);
+    expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS } });
     // The pocket's edited flag is its value, 0.4, where an unedited one is null.
     expect(read.file.params.base.pocketDepth).toBe(0.4);
     expect(read.file.params.silicone.printMargin).toBeNull();
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 2.' }]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 3.' }]);
+  });
+
+  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 3 with the bolts off and nothing else changed', () => {
+    const read = readProjectJson(fixture('v2-jersey-export.json'));
+    const v2 = JSON.parse(fixture('v2-jersey-export.json'));
+    expect(v2).toMatchObject({ schemaVersion: 2, appVersion: '0.2.0' });
+    expect(v2.params.bolts).toBeUndefined();
+    expect(read.from).toBe(2);
+    expect(read.file).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, params: { ...v2.params, bolts: V3_BOLTS } });
+    expect(read.file.params.bolts).toEqual(defaultParams().bolts);
+    // The hash and the plane came with format 2, and stay as saved.
+    expect(read.file.modelSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(read.file.basePlane).toEqual(v2.basePlane);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 3.' }]);
   });
 
   it('runs one step per version, in order, so a version 0 with renamed fields and no pins or removed vents reaches the current one, with its gaps filled', () => {
@@ -187,14 +204,19 @@ describe('migration', () => {
       seen.push(f.schemaVersion as number);
       return MIGRATIONS[1](f, notes);
     };
-    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2 });
-    expect(seen).toEqual([0, 1]);
+    const v2ToV3: Migration = (f, notes) => {
+      seen.push(f.schemaVersion as number);
+      return MIGRATIONS[2](f, notes);
+    };
+    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3 });
+    expect(seen).toEqual([0, 1, 2]);
+    expect(read.file.params.bolts).toEqual(V3_BOLTS);
     expect(read.from).toBe(0);
     expect(read.file).toMatchObject({ schemaVersion: SCHEMA_VERSION, model: 'jersey-barrier.stl', appVersion: '0.0.1', pins: [], removed: [], modelSha256: null, basePlane: null });
     expect(read.file.params.grid.nx).toBe(2);
     expect(read.file.params.reports).toEqual(defaultParams().reports);
     expect(read.notes).toEqual([
-      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 2.' },
+      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 3.' },
       { severity: 'warning', message: 'Not in the file, so as for a new model: moved openings, so none; removed vents, so none.' },
       { severity: 'warning', message: 'Not in the file, so at their defaults: Smallest reported volume, Smallest air pocket depth.' },
     ]);
@@ -203,7 +225,7 @@ describe('migration', () => {
   });
 
   it('a version newer than the app knows, and a file with no version, say so plainly, naming the file', () => {
-    expect(reason(() => readProjectJson(edited('schemaVersion', 3), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${APP_VERSION}), in project format 3; this one reads formats up to ${SCHEMA_VERSION}. Open it in the newer version, or update this one.`);
+    expect(reason(() => readProjectJson(edited('schemaVersion', 4), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${APP_VERSION}), in project format 4; this one reads formats up to ${SCHEMA_VERSION}. Open it in the newer version, or update this one.`);
     expect(reason(() => readProjectJson(edited('schemaVersion', undefined)))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => readProjectJson(edited('schemaVersion', '2')))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => migrate([1, 2]))).toBe(`project.json holds no settings this app can read. ${OPEN_AGAIN}`);
@@ -252,6 +274,26 @@ describe('validation', () => {
       'Settings this version does not know, left out: silicone.glitter, lighting.',
     ]);
     expect(read.notes.every((n) => n.severity === 'warning')).toBe(true);
+  });
+
+  it('a bolt length off the list of lengths screws are sold in is brought to the nearest one, the shorter on a tie, with a note', () => {
+    const read = (length: unknown) => readProjectJson(edited('params.bolts.length', length));
+    const cases: [number, number, string][] = [
+      [13, 12, 'Bolt length (bolts.length) was 13 mm, which is not one of 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, so it is 12 mm.'],
+      [14, 12, 'Bolt length (bolts.length) was 14 mm, which is not one of 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, so it is 12 mm.'],
+      [15, 16, 'Bolt length (bolts.length) was 15 mm, which is not one of 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, so it is 16 mm.'],
+      // Past the longest, it is the longest.
+      [50, 40, 'Bolt length (bolts.length) was 50 mm, which is not one of 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, so it is 40 mm.'],
+      [2, 6, 'Bolt length (bolts.length) was 2 mm, which is not one of 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, so it is 6 mm.'],
+    ];
+    for (const [length, kept, note] of cases) {
+      const { file: opened, notes } = read(length);
+      expect(opened.params.bolts.length, String(length)).toBe(kept);
+      expect(notes, String(length)).toEqual([{ severity: 'warning', message: note }]);
+    }
+    // A listed length and auto stay as they are, with nothing to say.
+    expect(read(16)).toMatchObject({ file: { params: { bolts: { length: 16 } } }, notes: [] });
+    expect(read(null)).toMatchObject({ file: { params: { bolts: { length: null } } }, notes: [] });
   });
 
   it('a top-level field the file lacks takes its default or is unknown, with a note; only the model and the settings must be there', () => {
@@ -560,6 +602,46 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(saves.map((s) => s.name)).toEqual(['jersey-barrier.moldproj', 'jersey-barrier.moldproj']);
   });
 
+  it('with the bolts on, Save and Open give the bolts back with the same geometry, and undo walks them back to the taped mold', async () => {
+    const saves = captureSaves();
+    let now = 0;
+    const store = new Store(fresh(), () => (now += 1000), files);
+    const p = store.pipeline;
+    store.load(jersey, EXAMPLE_FILES.jersey);
+    await p.idle();
+    const taped = { project: structuredClone(p.project()), hash: p.geometryHash() };
+    store.setParam('bolts.enabled', true);
+    store.setParam('bolts.size', 'M4');
+    store.setParam('bolts.length', 16);
+    store.setParam('bolts.nutClearance', 0.2);
+    await p.idle();
+    expect(p.params.bolts).toEqual({ enabled: true, size: 'M4', length: 16, holeClearance: 0.2, nutClearance: 0.2, minWall: 1.2 });
+    expect(p.field!.value.rim.bolts).toMatchObject({ size: 'M4', length: 16 });
+    const bolted = { project: structuredClone(p.project()), hash: p.geometryHash() };
+    expect(bolted.hash.cover).not.toBe(taped.hash.cover);
+    expect(bolted.hash.base).not.toBe(taped.hash.base);
+
+    await store.saveProject();
+    const zip = await saves[0].bytes;
+    expect((JSON.parse(text(unzipSync(zip)[PROJECT_ENTRY])) as ProjectFile).params.bolts).toEqual(bolted.project.params.bolts);
+    const second = new Store(fresh(), () => (now += 1000), files);
+    await second.openFile(new File([zip.slice()], 'jersey-barrier.moldproj'));
+    await second.pipeline.idle();
+    expect(second.pipeline.project()).toEqual(bolted.project);
+    expect(second.pipeline.geometryHash()).toEqual(bolted.hash);
+    expect(second.fileNotice.value).toBeNull();
+
+    // Four steps, one per control, and back to the mold with no bolts, geometry and all.
+    expect(store.history.depth.undo).toBe(4);
+    for (let k = 0; k < 4; k++) store.undo();
+    await p.idle();
+    expect(p.project()).toEqual(taped.project);
+    expect(p.geometryHash()).toEqual(taped.hash);
+    for (let k = 0; k < 4; k++) store.redo();
+    await p.idle();
+    expect(p.geometryHash()).toEqual(bolted.hash);
+  });
+
   it('keeps the plane in the STL\'s own coordinates: jersey raised to stand at z = 5 saves offset -5, and its base triangles lie on it', async () => {
     const p = fresh();
     const high = raised(jersey, 5);
@@ -655,11 +737,13 @@ describe('save and open with the real pipeline on jersey', () => {
       severity: 'info',
       message: 'Applied the settings of project.json to jersey-barrier.stl.',
       notes: [
-        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 2.' },
+        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 3.' },
         { severity: 'info', message: 'project.json does not record its model\'s contents, so it was matched to jersey-barrier.stl by the file name alone.' },
       ],
     });
-    expect(p.project()).toEqual({ params: v1.params, plane: v1.plane, pins: v1.pins, removed: v1.removed });
+    // Migrated, so with the bolts off as version 1 molds were.
+    const params = { ...v1.params, bolts: V3_BOLTS } as ProjectFile['params'];
+    expect(p.project()).toEqual({ params, plane: v1.plane, pins: v1.pins, removed: v1.removed });
     // The file opens again to just this, so leaving the page now loses nothing.
     expect(store.unsaved()).toBe(false);
     expect(store.history.depth).toEqual({ undo: 2, redo: 0 });
@@ -672,11 +756,11 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(p.params.silicone.t).toBe(5);
 
     // The same settings saved for another model of the same name, by hash: the parameters only.
-    const other = projectFile({ params: v1.params, plane: { rank: 2, upper: false }, pins: v1.pins, removed: v1.removed }, EXAMPLE_FILES.jersey, { modelSha256: nodeSha(barrel), basePlane: null });
+    const other = projectFile({ params, plane: { rank: 2, upper: false }, pins: v1.pins, removed: v1.removed }, EXAMPLE_FILES.jersey, { modelSha256: nodeSha(barrel), basePlane: null });
     const zip = zipSync({ 'cover.stl': new Uint8Array(84), [PROJECT_ENTRY]: strToU8(projectJson(other)) });
     await store.openFile(new File([zip.slice()], 'barrel-mold.zip'));
     expect(store.fileNotice.value).toMatchObject({ severity: 'warning', message: 'barrel-mold.zip was saved for another model of the same name, jersey-barrier.stl, whose contents differ from the one on screen, so only its settings were applied: the model keeps its own base face, pinned openings and removed vents.' });
-    expect(p.project()).toEqual({ params: v1.params, plane: DEFAULT_PLANE, pins: [], removed: [] });
+    expect(p.project()).toEqual({ params, plane: DEFAULT_PLANE, pins: [], removed: [] });
     expect(p.modelSha256).toBe(nodeSha(jersey));
     const renamed = zipSync({ [PROJECT_ENTRY]: strToU8(projectJson({ ...other, model: 'cube.stl' })) });
     await store.openFile(new File([renamed.slice()], 'cube-mold.zip'));

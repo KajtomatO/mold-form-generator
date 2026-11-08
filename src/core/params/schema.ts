@@ -1,6 +1,8 @@
+import { BOLT_LENGTHS, BOLT_SIZES } from '../parts/fasteners';
+
 /**
  * The parameter table of docs/PLAN.md, as data, so the sidebar and project files can both be
- * driven from it. Ranges appear only where the plan states them. Bolts arrive with M10.
+ * driven from it. Ranges appear only where the plan states them, and for the bolts of M10.
  *
  * An `auto` parameter stores null until the user types a value, and that null is its edited flag:
  * it keeps following its rule until edited, and reset is just setting it back to null.
@@ -8,10 +10,10 @@
 
 /**
  * The version of project.json, which holds these parameters with the plane, pins and removed vents.
- * Version 1 came with M6b's export ZIP; 2 added the STL's hash and the base plane itself (M9). An older
- * file is migrated one version at a time, by src/app/projectFile.ts.
+ * Version 1 came with M6b's export ZIP; 2 added the STL's hash and the base plane itself (M9); 3 the bolts
+ * (M10). An older file is migrated one version at a time, by src/app/projectFile.ts.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface NumberDef {
   kind: 'number';
@@ -31,6 +33,8 @@ export interface AutoDef {
   unit?: string;
   min?: number;
   max?: number;
+  /** The only values it takes once set, such as the lengths screws are sold in. */
+  options?: readonly number[];
 }
 export interface FlagDef {
   kind: 'flag';
@@ -102,6 +106,15 @@ export const PARAM_SCHEMA = {
     pryWidth: num('Pry notch width', 12),
     pryHeight: num('Pry notch height', 1.2),
   },
+  // M10, off by default: tape stays the plain way. Clearances are per side, for a 0.4 mm nozzle (docs/PLAN.md, Measured at M10).
+  bolts: {
+    enabled: flag('Nuts and bolts', false),
+    size: choice('Bolt size', BOLT_SIZES, 'M3'),
+    length: { ...auto('Bolt length', 'the shortest standard length that reaches through the base and the nut, with 2 threads past it', { min: BOLT_LENGTHS[0], max: BOLT_LENGTHS[BOLT_LENGTHS.length - 1] }), options: BOLT_LENGTHS },
+    holeClearance: num('Hole clearance per side', 0.2, { min: 0, max: 1 }),
+    nutClearance: num('Nut clearance per side', 0.15, { min: 0, max: 2 }),
+    minWall: num('Least wall round bolts', 1.2, { min: 0.4, max: 5 }),
+  },
   pour: {
     perModel: num('Pours per body', 1, { unit: '', min: 1, max: 16, integer: true }),
     diameter: num('Pour diameter', 10, { min: 4, max: 30 }),
@@ -161,6 +174,7 @@ export const GROUP_TITLES: Record<string, string> = {
   silicone: 'Silicone',
   cover: 'Cover',
   joint: 'Joint',
+  bolts: 'Bolts',
   pour: 'Pour',
   vents: 'Vents',
   seat: 'Seat',

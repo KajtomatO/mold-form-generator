@@ -48,8 +48,17 @@ export type Migration = (file: Json, notes: ProjectNote[]) => Json;
 /** Version 1, M6b's export ZIP, recorded neither the STL's hash nor the plane itself, so both are unknown. */
 const v1ToV2: Migration = (file) => ({ ...file, modelSha256: null, basePlane: null });
 
+/**
+ * Version 2 had no bolts, so its molds were taped: the bolts come in off, at the values version 3 started
+ * with, written out here so a later change of the defaults never changes what an old file opens to.
+ */
+const v2ToV3: Migration = (file) => {
+  const params = isObject(file.params) ? file.params : {};
+  return { ...file, params: { ...params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 } } };
+};
+
 /** Each older version's step to the one after it. */
-export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2 };
+export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3 };
 
 export interface Migrated {
   file: Json;
@@ -155,6 +164,15 @@ function readParam(path: ParamPath, def: ParamDef, value: unknown, notes: Projec
   const low = range.min ?? 0, high = range.max ?? Infinity;
   let kept = Math.min(high, Math.max(low, value));
   if (def.kind === 'number' && def.integer) kept = Math.round(kept);
+  // A setting that takes only listed values, such as the lengths screws are sold in, takes the nearest of them.
+  if (def.kind === 'auto' && def.options) {
+    const options = def.options;
+    kept = options.reduce((best, option) => (Math.abs(option - kept) < Math.abs(best - kept) ? option : best), options[0]);
+    if (kept !== value) {
+      notes.push({ severity: 'warning', message: `${name} was ${value}${def.unit ? ` ${def.unit}` : ''}, which is not one of ${options.join(', ')}, so it is ${kept}${def.unit ? ` ${def.unit}` : ''}.` });
+      return kept;
+    }
+  }
   if (kept !== value) {
     const unit = def.unit ? ` ${def.unit}` : '';
     const span = def.kind === 'number' && def.integer && value >= low && value <= high ? 'a whole number' : high === Infinity ? `at least ${low}${unit}` : `from ${low} to ${high}${unit}`;

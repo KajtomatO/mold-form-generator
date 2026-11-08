@@ -165,7 +165,9 @@ export function demoldSteps(verdict: Verdict | null, params: Params): string[] {
   const sprues = params.seat.enabled
     ? 'Cut the sprues: take out any funnels, cut each pour sprue at the floor of its seat, where the cone meets the straight bore, and cut the silicone in each vent flush with the top.'
     : 'Cut the silicone in each pour opening and each vent flush with the top.';
-  const lever = `Take off the tape and lever the base out${params.joint.pryNotches ? ' at the pry notches on the bottom edge of the cover' : ''}`;
+  // With bolts the base comes off once they are out; the nuts stay in their slots for the next pour.
+  const free = params.bolts.enabled ? 'Unscrew the 4 bolts from under the base, leaving the nuts in their slots, take off any tape,' : 'Take off the tape';
+  const lever = `${free} and lever the base out${params.joint.pryNotches ? ' at the pry notches on the bottom edge of the cover' : ''}`;
   const slide = `${lever}, and slide the silicone out of the cover with the model still in it. The cover widens towards the base, so the silicone slides out that way.`;
   const back = 'Put the silicone back into the cover, the way it came out. The cover holds it in shape.';
   switch (verdict) {

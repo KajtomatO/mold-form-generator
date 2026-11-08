@@ -299,3 +299,31 @@ export const REPORT_GOLDEN: Record<ExampleId, ReportGolden> = {
   barrel: { verdict: 'jacket-out', bodies: 1, footprints: [1], underPlugMl: 1.035, sandwichedMl: 0.218, hints: 2, looped: 0, undersideMl: [], sealed: [{ ml: 3.432, inModel: true }], raw: { pockets: 0, sealed: 1 } },
   wolf: { verdict: 'cut-required', bodies: 1, footprints: [3], underPlugMl: 66.167, sandwichedMl: 14.727, hints: 16, looped: 2, undersideMl: [], sealed: [], raw: { pockets: 71, sealed: 18 } },
 };
+
+/**
+ * M10, bolts on at plan defaults (M3, auto length 12 mm), one tile, export cell. The box is M3's grown by
+ * twice the outer land the bolts add, 2 x (6.146 - 2) = 8.292 mm each way, and Zt is M3's: on every
+ * example the joint's top already leaves the bolts their wall. Volumes in mm3, at 1%; `slotFloor` is
+ * where the bridge sits, a whole number of layers under Zt; `cavity` and `notches` are the least walls the
+ * bolts' cuts leave to them, the cavity's read off the export field, at 1%.
+ */
+export interface BoltGolden {
+  cover: number;
+  glue: number;
+  merged: number;
+  boxX: number;
+  boxY: number;
+  slotFloor: number;
+  cavity: number;
+  notches: number;
+}
+
+export const BOLT_GOLDEN: Record<ExampleId, BoltGolden> = {
+  benchy: { cover: 318114, glue: 21962, merged: 37638, boxX: 97.217, boxY: 68.172, slotFloor: 2.8162, cavity: 11.735, notches: 31.82 },
+  goddess: { cover: 692365, glue: 27462, merged: 116363, boxX: 101.551, boxY: 80.178, slotFloor: 2.8159, cavity: 12.529, notches: 33.937 },
+  vis35: { cover: 1612190, glue: 60464, merged: 305145, boxX: 71.889, boxY: 238.882, slotFloor: 2.7023, cavity: 12.677, notches: 102.111 },
+  jersey: { cover: 111534, glue: 13817, merged: 21929, boxX: 86.038, boxY: 51.427, slotFloor: 2.8846, cavity: 7.962, notches: 26.409 },
+  x8: { cover: 378402, glue: 63135, merged: 123998, boxX: 152.038, boxY: 117.427, slotFloor: 2.8846, cavity: 7.962, notches: 58.877 },
+  barrel: { cover: 106074, glue: 11057, merged: 18591, boxX: 59.979, boxY: 59.98, slotFloor: 2.7183, cavity: 12.503, notches: 14.214 },
+  wolf: { cover: 2813521, glue: 70122, merged: 328112, boxX: 129.526, boxY: 150.727, slotFloor: 2.8052, cavity: 21.64, notches: 58.219 },
+};

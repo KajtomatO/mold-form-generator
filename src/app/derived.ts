@@ -4,8 +4,9 @@ import { siliconeVolume } from '../core/field/silicone';
 import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
 import type { Params } from '../core/params/schema';
+import { boltNeeds } from '../core/parts/bolts';
 import type { Rim } from '../core/parts/rim';
-import { GRAVITY, type ClampAdvice } from '../core/report/clamp';
+import { boltAdvice, GRAVITY, type BoltAdvice, type ClampAdvice } from '../core/report/clamp';
 import type { Diagnostic } from '../core/report/diagnostics';
 import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
 import type { Marker, Pipeline, ShownDiagnostic } from './pipeline';
@@ -69,6 +70,8 @@ export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
       return pipeline.field?.value.rim.edge.minimum ?? null;
     case 'quality.cellPreview':
       return pipeline.field?.value.cell ?? null;
+    case 'bolts.length':
+      return boltNeeds(params).autoLength;
     default:
       return null;
   }
@@ -100,6 +103,14 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'ridge-too-thin': 'joint.ridgeWidth',
   'joint-clearance': 'joint.grooveClearance',
   'pry-clamped': 'joint.pryHeight',
+  // M10's bolts, from deriveRim and the field: each says what to change, and `also` names the control.
+  'bolt-land': 'bolts.enabled',
+  'bolt-cover-raised': 'cover.topCap',
+  'bolt-short': 'bolts.length',
+  'bolt-long': 'bolts.length',
+  'bolt-plate-thin': 'base.thickness',
+  'bolt-bridge': 'bolts.nutClearance',
+  'bolt-collision': 'bolts.minWall',
   // toolDiagnostics: the cavity's reach is set by the room the edge leaves.
   'tool-outside-rebate': 'grid.edge',
   // The base, the footprint and the grid.
@@ -236,6 +247,14 @@ export function clampFigure(pipeline: Pipeline): ClampFigure | null {
   const { cover, field } = pipeline;
   const own = cover && field && cover.mold === field.mold ? plasticEstimate([{ ...meshAmount(cover.value), count: 1 }], pipeline.params) : null;
   return { ...reports.clamp, liftN: reports.lift.forceN, level: reports.lift.level, coverWeightN: own ? (own.printed / 1000) * GRAVITY : null };
+}
+
+/** M10: with bolts on, Cover & joint shows them in place of the tape count, from the rim on screen and the reports' lift. */
+export function boltFigure(pipeline: Pipeline): BoltAdvice | null {
+  const bolts = pipeline.field?.value.rim.bolts;
+  const reports = pipeline.reports?.value;
+  if (!bolts || !reports) return null;
+  return boltAdvice(reports.lift.forceN, pipeline.params.print.tapeStrip, bolts);
 }
 
 /** The radius an opening shows at the top: its seat's for a pour, its mouth's for a vent. */

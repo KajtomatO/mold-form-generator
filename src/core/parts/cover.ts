@@ -5,7 +5,8 @@ import { contains, outset, type Rect } from '../solid/rect';
 import type { ToolMesh } from '../solid/tool';
 import { grooveSolid, ringHull } from './joint';
 import { openingCutters, type CutOpening } from './openings';
-import { rebateOutset, type Rim } from './rim';
+import { coverBoltCutters } from './bolts';
+import { notchBoxes, rebateOutset, type Rim } from './rim';
 
 /** The cover's bottom edge: `proud` above the base's underside, so the base always rests on the table. */
 export function coverBottom(rim: Rim): number {
@@ -35,27 +36,15 @@ function rebateSolid(arena: Arena, rim: Rim): Manifold {
 
 /** G9: two boxes at mid long sides, breaking through the wall into the rebate. */
 function notchSolids(arena: Arena, rim: Rim): Manifold[] {
-  if (rim.pryHeight <= 0) return [];
-  const { O, B, pryWidth } = rim;
   const { Manifold } = arena.api;
-  const bottom = coverBottom(rim);
-  const top = bottom + rim.pryHeight;
-  // The rebate narrows upward, so this reaches inside it all the way up the notch.
-  const reach = rebateOutset(rim, top) - 0.5;
-  const box = (x0: number, y0: number, x1: number, y1: number): Manifold =>
-    arena.track(arena.track(Manifold.cube([x1 - x0, y1 - y0, top - bottom + 1])).translate([x0, y0, bottom - 1]));
-  if (O.x1 - O.x0 >= O.y1 - O.y0) {
-    const cx = (O.x0 + O.x1) / 2;
-    return [box(cx - pryWidth / 2, B.y1 + reach, cx + pryWidth / 2, O.y1 + 1), box(cx - pryWidth / 2, O.y0 - 1, cx + pryWidth / 2, B.y0 - reach)];
-  }
-  const cy = (O.y0 + O.y1) / 2;
-  return [box(B.x1 + reach, cy - pryWidth / 2, O.x1 + 1, cy + pryWidth / 2), box(O.x0 - 1, cy - pryWidth / 2, B.x0 - reach, cy + pryWidth / 2)];
+  return notchBoxes(rim).map(({ x0, y0, x1, y1, bottom, top }) => arena.track(arena.track(Manifold.cube([x1 - x0, y1 - y0, top - bottom + 1])).translate([x0, y0, bottom - 1])));
 }
 
-/** G9, S12: the cover without its openings, which S13 cuts from this. */
+/** G9, S12: the cover without its openings, which S13 cuts from this. With bolts, their holes and nut slots too. */
 export function buildCoverBody(arena: Arena, rim: Rim, tool: Manifold): Manifold {
   const { Manifold } = arena.api;
-  return checked(arena.track(Manifold.difference([blockSolid(arena, rim), rebateSolid(arena, rim), grooveSolid(arena, rim), tool, ...notchSolids(arena, rim)])), 'The cover');
+  const bolts = rim.bolts ? coverBoltCutters(arena, rim.bolts) : [];
+  return checked(arena.track(Manifold.difference([blockSolid(arena, rim), rebateSolid(arena, rim), grooveSolid(arena, rim), tool, ...notchSolids(arena, rim), ...bolts])), 'The cover');
 }
 
 /**

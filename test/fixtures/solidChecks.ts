@@ -144,3 +144,66 @@ export function boxSolid(arena: Arena, min: [number, number, number], max: [numb
   const { track } = arena;
   return track(track(arena.api.Manifold.cube([max[0] - min[0], max[1] - min[1], max[2] - min[2]])).translate(min));
 }
+
+/** Area of a hole as the cutters make it: a 48-gon on the circle of radius r. */
+export const polygonArea = (r: number): number => 24 * r * r * Math.sin((2 * Math.PI) / 48);
+
+/** Ray parity: whether a point lies inside a closed outline. */
+export function insideOutline(x: number, y: number, outline: readonly (readonly number[])[]): boolean {
+  let inside = false;
+  for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+    const [xi, yi] = outline[i], [xj, yj] = outline[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+export function outlineArea(outline: readonly (readonly number[])[]): number {
+  return contourArea(outline as SimplePolygon);
+}
+
+/** A convex outline cut to a rectangle, side by side (Sutherland and Hodgman), so a slot's channel ends at the wall it opens through. */
+export function clipToBox(outline: readonly (readonly number[])[], box: Rect): [number, number][] {
+  let points = outline.map(([x, y]) => [x, y] as [number, number]);
+  const edges: [(p: [number, number]) => number][] = [[(p) => p[0] - box.x0], [(p) => box.x1 - p[0]], [(p) => p[1] - box.y0], [(p) => box.y1 - p[1]]];
+  for (const [side] of edges) {
+    const next: [number, number][] = [];
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i], b = points[(i + 1) % points.length];
+      const da = side(a), db = side(b);
+      if (da >= 0) next.push(a);
+      if (da >= 0 !== db >= 0) {
+        const f = da / (da - db);
+        next.push([a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])]);
+      }
+    }
+    points = next;
+  }
+  return points;
+}
+
+/**
+ * The holes of a solid's section at height z, near the given axes: for each axis, the centroid of the
+ * contour round it, which must be a 48-gon of radius r within 1% by area. Null where none is found.
+ */
+export function holeCentres(arena: Arena, solid: Manifold, z: number, axes: readonly { x: number; y: number }[], r: number): ([number, number] | null)[] {
+  const contours = arena.polygons(arena.track(solid.slice(z)));
+  return axes.map(({ x, y }) => {
+    for (const contour of contours) {
+      const points = contour as [number, number][];
+      if (!insideOutline(x, y, points)) continue;
+      const area = contourArea(contour);
+      if (Math.abs(area - polygonArea(r)) > polygonArea(r) * 0.01) continue;
+      // The centroid of the contour's own polygon, by the shoelace formula.
+      let cx = 0, cy = 0, doubled = 0;
+      for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+        const cross = points[j][0] * points[i][1] - points[i][0] * points[j][1];
+        doubled += cross;
+        cx += (points[j][0] + points[i][0]) * cross;
+        cy += (points[j][1] + points[i][1]) * cross;
+      }
+      return [cx / (3 * doubled), cy / (3 * doubled)];
+    }
+    return null;
+  });
+}

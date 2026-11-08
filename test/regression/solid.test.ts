@@ -9,10 +9,12 @@ import { meshBounds } from '../../src/core/mesh/weld';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { buildBaseBody, buildGlueBase, buildMergedBase, footprintSection, triangleContour } from '../../src/core/parts/base';
+import { boltBridges, boltCavityWall, slotOutline } from '../../src/core/parts/bolts';
 import { buildCoverBody, coverBottom, toolDiagnostics } from '../../src/core/parts/cover';
+import { BRIDGE_LIMIT } from '../../src/core/parts/fasteners';
 import { grooveResidualVolume, ringArea, wallRing } from '../../src/core/parts/joint';
 import { basePose, coverPose, modelOrientedStl, poseToStl } from '../../src/core/parts/poses';
-import { deriveRim, maskOverrun, moldBounds, rebateOutset } from '../../src/core/parts/rim';
+import { boltWalls, deriveRim, maskOverrun, moldBounds, rebateOutset } from '../../src/core/parts/rim';
 import { importSolid } from '../../src/core/mesh/shells';
 import { auditOverhang } from '../../src/core/report/overhang';
 import { Arena, checked, withArena } from '../../src/core/solid/arena';
@@ -22,9 +24,9 @@ import { recordSection } from '../fixtures/benchmarks';
 import { countHandles } from '../fixtures/handles';
 import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
 import { buildMold, type Mold, type MoldOptions } from '../fixtures/mold';
-import { boxSolid, cavitySection, compareVoids, contourArea, contourDistance, CRUMB_MM3, mirroredCoverStl, readPart, splitShells, unpose, type ExpectedVoid, type VoidShell } from '../fixtures/solidChecks';
+import { boxSolid, cavitySection, clipToBox, compareVoids, contourArea, contourDistance, CRUMB_MM3, holeCentres, insideOutline, mirroredCoverStl, outlineArea, polygonArea, readPart, splitShells, unpose, type ExpectedVoid, type VoidShell } from '../fixtures/solidChecks';
 import { BOX_BOTTOM, BOX_TOP, MUSHROOM, blockOnFeet, box, boxWithTopHole, join, lShape, mushroom, recessedBlock, signedVolume, withoutTriangles } from '../fixtures/synthetic';
-import { FIELD_GOLDEN, SOLID_GOLDEN } from './golden';
+import { BOLT_GOLDEN, FIELD_GOLDEN, SOLID_GOLDEN } from './golden';
 
 /** minGap on Benchy takes 30 s at the plan's search length, and every model gets several runs of the rest. */
 const FULL = process.env.CFG_FULL === '1';
@@ -168,7 +170,8 @@ function checkBox({ arena, m, params }: Ctx): void {
   const toBox = cT + (Tb - baseProud) * Math.tan((taperDeg * Math.PI) / 180) + params.cover.wall;
   expect(rim.O.x1).toBeCloseTo(rim.B.x1 + toBox, 6);
   expect(rim.O.y0).toBeCloseTo(rim.B.y0 - toBox, 6);
-  expect(rim.Zt).toBeCloseTo(Math.max(rim.hMax + params.cover.topCap, params.joint.ridgeHeight + params.joint.grooveExtraDepth + params.cover.topCap), 6);
+  // M10: on a model too low for the bolts, the shortest bolt and its slot raise the top.
+  expect(rim.Zt).toBeCloseTo(Math.max(rim.hMax + params.cover.topCap, params.joint.ridgeHeight + params.joint.grooveExtraDepth + params.cover.topCap, rim.bolts?.coverHeight ?? -Infinity), 6);
   const { edge } = params.grid;
   if (edge !== null && edge >= rim.edge.minimum) {
     expect(rim.O.x1 - mold.model.x1).toBeCloseTo(edge, 6);
@@ -243,16 +246,29 @@ function checkNesting({ arena, m }: Ctx): void {
 function checkOverhang({ arena, m }: Ctx): void {
   const { rim, cover } = m;
   const parsed = readPart(poseToStl(api, cover, coverPose(rim))).mesh;
-  const coverAudit = auditOverhang(parsed, { bedZ: 0 });
+  // M10: the nut slots' ceilings are bridges in print pose, listed apart, and nothing else may overhang.
+  const bridges = rim.bolts ? boltBridges(rim.bolts) : [];
+  const onBridge = (x: number, y: number, z: number): boolean => bridges.some((b) => Math.abs(z - (rim.Zt - b.z)) < 1e-3 && insideOutline(x, -y, b.outline));
+  const coverAudit = auditOverhang(parsed, { bedZ: 0, only: (x, y, z) => !onBridge(x, y, z) });
   expect(coverAudit, 'cover').toMatchObject({ steepCount: 0, steepArea: 0 });
   expect(coverAudit.ignoredArea, 'cover').toBeLessThan(0.05);
+  if (rim.bolts) {
+    // What was left out is the bridges and no more: each slot's outline inside the box, flat over the bed.
+    const listed = auditOverhang(parsed, { bedZ: 0, only: onBridge });
+    const area = bridges.reduce((sum, b) => sum + outlineArea(clipToBox(b.outline, rim.O)), 0);
+    within(listed.steepArea, area, 0.01);
+    expect(listed.worstDeg).toBeCloseTo(90, 3);
+    expect(Math.max(...bridges.map((b) => b.span))).toBeLessThanOrEqual(BRIDGE_LIMIT);
+  }
   const plate = readPart(poseToStl(api, m.glue!.base, basePose(rim))).mesh;
   const plateAudit = auditOverhang(plate, { bedZ: 0 });
   expect(plateAudit, 'plate').toMatchObject({ steepCount: 0, steepArea: 0 });
   expect(plateAudit.ignoredArea, 'plate').toBeLessThan(0.05);
-  // The relief is the one face of the plate that leans out over the bed, so it sets the worst angle.
+  // The relief is the one face of the plate that leans out over the bed, so it sets the worst angle. With
+  // bolts, the countersinks' facets lean further, just inside 45 degrees: a 48-gon's flat is cos(pi / 48) in.
   const reliefDeg = (Math.atan(rim.reliefRun / rim.reliefHeight) * 180) / Math.PI;
-  expect(plateAudit.worstDeg, 'plate: the relief').toBeCloseTo(reliefDeg, 1);
+  const sinkDeg = (Math.atan(Math.cos(Math.PI / 48)) * 180) / Math.PI;
+  expect(plateAudit.worstDeg, rim.bolts ? 'plate: the countersinks' : 'plate: the relief').toBeCloseTo(rim.bolts ? sinkDeg : reliefDeg, 1);
   if (!m.merged?.base) return;
   // Mode B: the model's own faces are reported apart. What is left must be plate and ridge.
   const { D, Tb } = rim;
@@ -416,8 +432,8 @@ function checkPlate({ arena, m, params }: Ctx): void {
   const { track } = arena;
   const { rim, cover } = m;
   const { B, D, Tb, tanTaper, reliefHeight, reliefRun } = rim;
-  // By hand: the set radius, unless it had to give way to the room around the cavity.
-  const radius = Math.min(params.base.cornerRadius, D.x0 - B.x0, D.y0 - B.y0, B.x1 - D.x1, B.y1 - D.y1);
+  // By hand: the set radius, unless it had to give way to the room around the cavity, or to the bolts' edge.
+  const radius = Math.min(params.base.cornerRadius, D.x0 - B.x0, D.y0 - B.y0, B.x1 - D.x1, B.y1 - D.y1, rim.bolts?.edge ?? Infinity);
   // Under the pocket and the joint, and over the notches and the relief: a plain rounded rectangle.
   const z = -m.pocketDepth - 0.5;
   const by = -z * tanTaper;
@@ -428,8 +444,10 @@ function checkPlate({ arena, m, params }: Ctx): void {
   // Just over the underside, where the relief has almost all of its run left to go.
   const lift = 1e-3;
   const foot = outset(B, spread - reliefRun + (lift * reliefRun) / reliefHeight);
+  // M10: at this height the bolts' holes pass the plate at their own radius, as 48-gons.
+  const holes = rim.bolts ? rim.bolts.spots.length * polygonArea(rim.bolts.holeRadius) : 0;
   for (const { name, base } of bases(m)) {
-    within(track(base.slice(z)).area(), ringArea(outset(B, by), radius + by), 1e-5);
+    within(track(base.slice(z)).area(), ringArea(outset(B, by), radius + by) - holes, 1e-5);
     const underside = track(base.slice(-Tb + lift)).bounds();
     expect(underside.min[0], name).toBeCloseTo(foot.x0, 5);
     expect(underside.min[1], name).toBeCloseTo(foot.y0, 5);
@@ -503,6 +521,185 @@ describe.each(FULL ? EXAMPLE_IDS : (['jersey', 'barrel'] as ExampleId[]))('%s at
     within(m.rim.O.y1 - m.rim.O.y0, golden.boxY, 1e-3);
     within(m.rim.Zt, golden.Zt, 1e-3);
   }, SLOW);
+});
+
+/** M10: the cuts are where the layout says, at its heights: the hole, the membrane, the slot, the hole over the nut, the countersink. */
+function checkBoltCuts({ arena, m }: Ctx): void {
+  const { track } = arena;
+  const { rim, cover } = m;
+  const b = rim.bolts!;
+  const at = (solid: Manifold, z: number, r: number): ([number, number] | null)[] => holeCentres(arena, solid, z, b.spots, r);
+  const on = (found: ([number, number] | null)[], what: string): void => b.spots.forEach((spot, k) => {
+    expect(found[k], `${what} at ${spot.x.toFixed(2)}, ${spot.y.toFixed(2)}`).not.toBeNull();
+    expect(Math.hypot(found[k]![0] - spot.x, found[k]![1] - spot.y), what).toBeLessThan(1e-6);
+  });
+  // A 0.2 mm square at each axis, filled with plastic or not.
+  const filled = (z: number, x: number, y: number, side = 0.2): number => track(track(cover.slice(z)).intersect(arena.crossSection([[[x - side / 2, y - side / 2], [x + side / 2, y - side / 2], [x + side / 2, y + side / 2], [x - side / 2, y + side / 2]]]))).area() / (side * side);
+  on(at(cover, (b.slotFloor - b.layer) / 2, b.holeRadius), 'the hole under the membrane');
+  on(at(cover, (b.slotTop + b.holeTop) / 2, b.holeRadius), 'the hole over the nut');
+  for (const spot of b.spots) {
+    // The membrane is exactly one layer: plastic through it, the hole just under it and the slot just over it.
+    expect(filled(b.slotFloor - b.layer + 0.005, spot.x, spot.y)).toBeCloseTo(1, 6);
+    expect(filled(b.slotFloor - 0.005, spot.x, spot.y)).toBeCloseTo(1, 6);
+    expect(filled(b.slotFloor - b.layer - 0.005, spot.x, spot.y)).toBe(0);
+    expect(filled(b.slotFloor + 0.005, spot.x, spot.y)).toBe(0);
+    // The hole runs up to its end, with plastic over it, a wall at least under the flat top, so nothing reaches Zt.
+    if (b.holeTop > b.slotTop) expect(filled(b.holeTop - 0.005, spot.x, spot.y)).toBe(0);
+    expect(filled(b.holeTop + 0.005, spot.x, spot.y)).toBeCloseTo(1, 6);
+    expect(filled(rim.Zt - b.minWall + 0.005, spot.x, spot.y)).toBeCloseTo(1, 6);
+    expect(rim.Zt - b.holeTop).toBeGreaterThanOrEqual(b.minWall - 1e-9);
+    // The slot is empty through its height, out through the wall, and plastic under its floor.
+    const outline = arena.crossSection([clipToBox(slotOutline(b, spot), rim.O)]);
+    const area = outline.area();
+    const inSlot = (z: number): number => track(track(cover.slice(z)).intersect(outline)).area();
+    expect(inSlot((b.slotFloor + b.slotTop) / 2)).toBeLessThan(1e-6);
+    within(inSlot(b.slotFloor - 0.005), area, 1e-4);
+    within(inSlot(b.slotTop + 0.005), area - polygonArea(b.holeRadius), 1e-3);
+  }
+  // In print pose the cover's layers start at the flat top: the bridge sits on a layer boundary.
+  const layers = (rim.Zt - b.slotFloor) / b.layer;
+  expect(Math.abs(layers - Math.round(layers))).toBeLessThan(1e-9);
+  expect(b.slotFloor).toBeGreaterThanOrEqual(rim.ridgeHeight + rim.grooveExtra + b.minWall - 1e-9);
+  // The base: the countersink at 45 degrees from the underside, then the hole.
+  for (const { name, base } of bases(m)) {
+    on(at(base, b.bed + 0.01, b.sinkRadius - 0.01), `${name}: the countersink at the underside`);
+    on(at(base, b.bed + b.sinkDepth / 2, b.sinkRadius - b.sinkDepth / 2), `${name}: the countersink half way up`);
+    on(at(base, (b.bed + b.sinkDepth) / 2, b.holeRadius), `${name}: the hole over the countersink`);
+  }
+}
+
+/** M10: every wall the bolts leave is at least the least wall: to the groove, outside, plate, notches, and to the cavity by the field in 3D. */
+function checkBoltWalls({ m }: Ctx): void {
+  const b = m.rim.bolts!;
+  const walls = boltWalls(m.rim)!;
+  for (const [what, wall] of Object.entries(walls)) expect(wall.wall, what).toBeGreaterThanOrEqual(b.minWall - 1e-9);
+  // The hole is held to exactly its wall on the groove's corner and the countersink at the underside: that is what sets the land.
+  expect(walls.groove.wall).toBeCloseTo(b.minWall, 9);
+  expect(walls.plate.wall).toBeCloseTo(b.minWall, 9);
+  expect(boltCavityWall(b, m.built.field, m.toolMesh.raise, m.rim.D, 30).wall).toBeGreaterThanOrEqual(b.minWall);
+  expect(m.rim.diagnostics.filter((d) => d.code.startsWith('bolt-') && d.code !== 'bolt-land')).toEqual([]);
+}
+
+/** M10: reassembled from the STL bytes of both print poses, the bolt axes in base and cover coincide, where the layout put them. */
+function checkBoltAxes({ arena, m }: Ctx): void {
+  const { rim } = m;
+  const b = rim.bolts!;
+  const cPose = coverPose(rim), bPose = basePose(rim);
+  const cover = unpose(arena, poseToStl(api, m.cover, cPose), cPose);
+  const inCover = holeCentres(arena, cover, (b.slotFloor - b.layer) / 2, b.spots, b.holeRadius);
+  for (const { name, base } of bases(m)) {
+    const back = unpose(arena, poseToStl(api, base, bPose), bPose);
+    const inBase = holeCentres(arena, back, (b.bed + b.sinkDepth) / 2, b.spots, b.holeRadius);
+    b.spots.forEach((spot, k) => {
+      const c = inCover[k], s = inBase[k];
+      expect(c && s, `${name}: both holes of the bolt at ${spot.x.toFixed(2)}, ${spot.y.toFixed(2)}`).toBeTruthy();
+      expect(Math.hypot(c![0] - s![0], c![1] - s![1]), name).toBeLessThan(1e-3);
+      expect(Math.hypot(c![0] - spot.x, c![1] - spot.y), name).toBeLessThan(1e-3);
+    });
+  }
+}
+
+const BOLT_CHECKS: [string, (ctx: Ctx) => void][] = [
+  ['the bolts\' cuts are where the layout says, with a membrane of one layer and nothing up to Zt', checkBoltCuts],
+  ['the bolts leave at least the least wall to the groove, the outside, the plate, the notches and the cavity', checkBoltWalls],
+  ['the bolt axes in the base and the cover coincide, reassembled from both print poses', checkBoltAxes],
+];
+
+describe('with bolts on (M10)', () => {
+  const bolted = (change: (p: Params) => void = () => {}): Params => paramsWith((p) => {
+    p.bolts.enabled = true;
+    change(p);
+  });
+
+  describe.each(FULL ? EXAMPLE_IDS : (['jersey'] as ExampleId[]))('%s at defaults', (id) => {
+    const ctx = sharedMold(id, bolted());
+    it.each([...CHECKS, ...BOLT_CHECKS])('%s', (_, check) => inOwnArena(ctx(), check), SLOW);
+
+    it('grows the box by the outer land the bolts add and no more, keeps Zt, and matches its golden numbers', () => {
+      const { m } = ctx();
+      const { rim } = m;
+      const b = rim.bolts!;
+      const golden = SOLID_GOLDEN[id], bolts = BOLT_GOLDEN[id];
+      const grow = 2 * (b.land - b.jointLand);
+      // M3's goldens are to 3 places, as its own test reads them.
+      within(rim.O.x1 - rim.O.x0, golden.boxX + grow, 1e-4);
+      within(rim.O.y1 - rim.O.y0, golden.boxY + grow, 1e-4);
+      within(rim.Zt, golden.Zt, 1e-4);
+      expect(grow).toBeCloseTo(8.292, 3);
+      within(rim.O.x1 - rim.O.x0, bolts.boxX, 1e-4);
+      within(rim.O.y1 - rim.O.y0, bolts.boxY, 1e-4);
+      within(m.cover.volume(), bolts.cover, 0.01);
+      within(m.glue!.base.volume(), bolts.glue, 0.01);
+      within(m.merged!.base!.volume(), bolts.merged, 0.01);
+      within(b.slotFloor, bolts.slotFloor, 1e-4);
+      within(boltCavityWall(b, m.built.field, m.toolMesh.raise, rim.D, 30).wall, bolts.cavity, 0.01);
+      within(boltWalls(rim)!.notches.wall, bolts.notches, 0.01);
+    }, SLOW);
+  });
+
+  // The plan's grid with bolts: the four bolts stand at the corners of the whole box, whatever the tiles.
+  it.runIf(FULL)('jersey 2 x 3 passes every check, the bolts at the outer corners', () => {
+    const params = bolted((p) => {
+      p.grid.nx = 2;
+      p.grid.ny = 3;
+    });
+    onModel('jersey', params, {}, (ctx) => {
+      for (const [, check] of [...CHECKS, ...BOLT_CHECKS]) inOwnArena(ctx, check);
+      const { B } = ctx.m.rim;
+      const edge = ctx.m.rim.bolts!.edge;
+      expect(ctx.m.rim.bolts!.spots.map((s) => [s.x, s.y])).toEqual([[B.x0 + edge, B.y0 + edge], [B.x1 - edge, B.y0 + edge], [B.x0 + edge, B.y1 - edge], [B.x1 - edge, B.y1 - edge]]);
+    });
+  }, SLOW);
+
+  // Nothing reaches Zt, on the solids: a screw too long for jersey's cover gets its hole stopped a wall under the
+  // top, and a model too low for the bolts gets a top raised over them. Both checked as built, with the top's slices.
+  it('a 40 mm screw on jersey: its hole stops a wall under Zt, the flat top is whole, and a cutter that ignored that is caught', () => {
+    const params = bolted((p) => (p.bolts.length = 40));
+    onModel('jersey', params, { modes: { glue: true } }, (ctx) => {
+      const { m, arena } = ctx;
+      const b = m.rim.bolts!;
+      // The screw would end at 37.2, past jersey's top; the hole stops 1.2 under it.
+      expect(b.wantedTop).toBeCloseTo(40 - 4 + 0.2 + 1, 9);
+      expect(b.wantedTop).toBeGreaterThan(m.rim.Zt);
+      expect(b.holeTop).toBeCloseTo(m.rim.Zt - b.minWall, 9);
+      expect(m.rim.diagnostics.map((d) => d.code)).toContain('bolt-long');
+      for (const check of [checkBodies, checkBox, checkBoltCuts, checkBoltAxes]) inOwnArena(ctx, check);
+      // Negative control: the hole cut on to where the screw would end breaks through the top.
+      const through = buildCoverBody(arena, { ...m.rim, bolts: { ...b, holeTop: b.wantedTop } }, m.tool);
+      expect(() => checkBox({ ...ctx, m: { ...m, cover: through } })).toThrow();
+      expect(() => checkBoltCuts({ ...ctx, m: { ...m, cover: through, merged: null } })).toThrow();
+    });
+  }, SLOW);
+
+  it('a 1 mm block with a 3 mm cap: the top is raised over the shortest bolt and its slot, and every check holds', () => {
+    const params = bolted((p) => (p.cover.topCap = 3));
+    withArena(api, (arena) => {
+      const m = buildMold(arena, box([-10, -5, 0], [10, 5, 1]), params, { pick: facingDown });
+      const ctx = { arena, m, params };
+      const b = m.rim.bolts!;
+      expect(m.rim.Zt).toBeCloseTo(b.coverHeight, 9);
+      expect(m.rim.Zt).toBeGreaterThan(m.rim.hMax + 3);
+      expect(m.rim.diagnostics.filter((d) => d.code.startsWith('bolt-')).map((d) => [d.code, d.severity])).toEqual([['bolt-land', 'info'], ['bolt-cover-raised', 'info']]);
+      checkAll(ctx);
+      for (const check of [checkBoltCuts, checkBoltAxes]) inOwnArena(ctx, check);
+      for (const [what, wall] of Object.entries(boltWalls(m.rim)!)) expect(wall.wall, what).toBeGreaterThanOrEqual(b.minWall - 1e-9);
+      expect(boltCavityWall(b, m.built.field, m.toolMesh.raise, m.rim.D, 30).wall).toBeGreaterThanOrEqual(b.minWall);
+    });
+  }, SLOW);
+
+  it('negative control: a bolt hole moved off its axis in the cover breaks the axis check', () => {
+    onModel('jersey', bolted(), { modes: { glue: true } }, (ctx) => {
+      const { m, arena } = ctx;
+      const b = m.rim.bolts!;
+      // The cover built from a layout with its first bolt 0.01 mm over in x, the base from the real one.
+      const moved = { ...m.rim, bolts: { ...b, spots: b.spots.map((s, k) => (k === 0 ? { ...s, x: s.x + 0.01 } : s)) } };
+      const cover = buildCoverBody(arena, moved, m.tool);
+      expect(() => checkBoltAxes({ ...ctx, m: { ...m, cover, merged: null } })).toThrow();
+      // And a cover with no membrane, its hole cut on up into the slot, fails the cut check.
+      const open = buildCoverBody(arena, { ...m.rim, bolts: { ...b, layer: 0 } }, m.tool);
+      expect(() => checkBoltCuts({ ...ctx, m: { ...m, cover: open, merged: null } })).toThrow();
+    });
+  });
 });
 
 describe('plan facts on the examples', () => {
@@ -1053,15 +1250,16 @@ describe('soup mode', () => {
 });
 
 describe('handles', () => {
-  it('every Manifold and CrossSection of a whole mold is freed', async () => {
+  // With the bolts on too: their cutters, the slots' outlines and their extrusions go through the arena.
+  it.each([false, true])('every Manifold and CrossSection of a whole mold is freed, bolts %s', async (bolts) => {
     const counted = await loadManifold();
     const ledger = countHandles(counted);
     withArena(counted, (arena) => {
-      const m = buildMold(arena, loadExample('jersey').welded, paramsWith());
+      const m = buildMold(arena, loadExample('jersey').welded, paramsWith((p) => (p.bolts.enabled = bolts)));
       poseToStl(api, m.cover, coverPose(m.rim));
       poseToStl(api, m.glue!.base, basePose(m.rim));
     });
-    expect(ledger.created()).toBeGreaterThan(30);
+    expect(ledger.created()).toBeGreaterThan(bolts ? 60 : 30);
     expect(ledger.live()).toEqual([]);
     expect(ledger.deleted()).toBe(ledger.created());
   });

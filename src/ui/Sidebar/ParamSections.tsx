@@ -1,4 +1,4 @@
-import { clampFigure, exportPitch, previewSilicone } from '../../app/derived';
+import { boltFigure, clampFigure, exportPitch, previewSilicone } from '../../app/derived';
 import { PARAM_SCHEMA } from '../../core/params/schema';
 import { SEAL_SPACING_MM } from '../../core/report/clamp';
 import { useContext } from 'preact/hooks';
@@ -46,15 +46,56 @@ export function SiliconeSection() {
   );
 }
 
+const figure = (value: number): string => value.toFixed(value < 10 ? 1 : 0);
+
+/** M10: with bolts on, what holds the cover is the bolt list, and tape only where the bolts leave the seal unpressed or the lift needs more. */
+function BoltAdviceFigure() {
+  const store = useStore();
+  const advice = boltFigure(store.pipeline);
+  const bolts = store.pipeline.field?.value.rim.bolts;
+  if (!advice || !bolts) return <p class="figure" data-testid="bolt-advice">Working out what holds the cover down…</p>;
+  const middle = advice.middle[0] + advice.middle[1];
+  const spans = advice.spans.map((v) => v.toFixed(0)).join(' × ');
+  const where = [advice.middle[0] > 0 ? `${advice.middle[0]} front to back` : '', advice.middle[1] > 0 ? `${advice.middle[1]} left to right` : ''].filter(Boolean).join(', ');
+  return (
+    <p
+      class="figure"
+      data-testid="bolt-advice"
+      data-enough={advice.enough}
+      title={`The joint should hold twice the silicone's lift, and never less than 10 N: here ${figure(advice.holdN)} N. Each snug bolt is counted at ${advice.boltsHoldN / advice.count} N, an estimate for printed plastic. Bolts at the corners press the seal where they stand, so between bolts more than 100 mm apart the plate bends and tape presses the middle.`}
+    >
+      Bolts: <strong>{advice.count} × {advice.size} × {advice.length} mm</strong> countersunk screws and <strong>{advice.count} × {advice.size}</strong> hex nuts, {spans} mm apart.{' '}
+      {!advice.lengthFits
+        ? `But ${advice.length} mm screws do not fit this mold, so they hold nothing to count on: see the warning under Bolt length for the length to use.`
+        : advice.enough
+          ? `Four bolts are enough for this box: together they hold about ${advice.boltsHoldN} N, over the ${figure(advice.holdN)} N it needs.`
+          : advice.liftStrips > middle
+            ? `They hold about ${advice.boltsHoldN} N, under the ${figure(advice.holdN)} N this box needs, so also tape ${advice.strips} ${advice.strips === 1 ? 'strip' : 'strips'} at ${advice.stripN} N across the base.`
+            : `They hold the lift, but the bolts stand over 100 mm apart and a printed plate bends between them, so also tape ${advice.strips} ${advice.strips === 1 ? 'strip' : 'strips'} across the middle: ${where}.`}
+    </p>
+  );
+}
+
 /** Plan: tape that holds max(2 x lift, 10 N), in strips of Tape strip holds each, and enough of them to press the seal all round. */
 export function CoverSection() {
   const store = useStore();
   const clamp = clampFigure(store.pipeline);
-  const n = (value: number): string => value.toFixed(value < 10 ? 1 : 0);
+  const n = figure;
+  const on = store.project.value.params.bolts.enabled;
+  const joint = SECTION_PARAMS.cover.filter((path) => !path.startsWith('bolts.'));
+  // Only the toggle while the bolts are off: the rest has nothing to say then.
+  const bolts = SECTION_PARAMS.cover.filter((path) => path.startsWith('bolts.') && (on || path === 'bolts.enabled'));
   return (
     <Section id="cover" title="Cover & joint">
-      <Rows section="cover" />
-      {store.pipeline.modelName ? (
+      {joint.map((path) => (
+        <ParamRow key={path} path={path} />
+      ))}
+      <h3 data-testid="bolts-group">Bolts</h3>
+      {bolts.map((path) => (
+        <ParamRow key={path} path={path} />
+      ))}
+      {store.pipeline.modelName && on ? <BoltAdviceFigure /> : null}
+      {store.pipeline.modelName && !on ? (
         <p
           class="figure"
           data-testid="clamp-advice"

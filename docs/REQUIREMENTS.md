@@ -118,7 +118,7 @@ Follow-up from the user: "I assumed first version will use adhesive tape, but yo
 | R28 | Local deployment | kept | D7 | `scripts/serve.sh` |
 | R29 | Git init, commit without attribution | kept | D8 | this repository |
 | R30 | Ask questions | done, recorded below | | decisions below |
-| R31 | Connection system with nuts and bolts, FDM friendly (follow-up) | kept as optional toggle after tape version | D5 | M10 |
+| R31 | Connection system with nuts and bolts, FDM friendly (follow-up) | done (M10): optional toggle, off by default; 4 countersunk M2.5, M3 or M4 screws up through the base's corners into ISO 4032 hex nuts in side slots of the cover, nothing through the flat top, no supports | D5 | M10: `test/unit/bolts.test.ts`, the bolts-on blocks of `test/regression/solid.test.ts` and `openings.test.ts`, `test/unit/export.test.ts`, `e2e/bolts.spec.ts`; print, fasten and leak test by the user |
 
 ## 4. Decisions
 
@@ -185,7 +185,7 @@ These follow from research and design review. `docs/PLAN.md` has the full constr
 
 1. Print model, base and cover.
 2. Glue the model into the pocket (Mode A). Test the adhesive for cure inhibition first.
-3. Join base and cover. Seal with tape, optionally Vaseline in the groove, or bolts if enabled.
+3. Join base and cover. Seal with tape, optionally Vaseline in the groove, or with the bolts turned on: fit the nuts into the cover's side slots, then turn the 4 countersunk screws up through the base's corners until snug, with tape across the middle of a side longer than about 100 mm between bolts.
 4. Insert the funnel and pour through the pour opening, watching silicone reach the vents.
 5. After curing, cut the sprues.
 6. Remove the silicone with the model inside it from the cover, cut or flex it, take out the model, and re-seat the silicone in the cover. Mild shapes may release while still in the cover, and the app says which.

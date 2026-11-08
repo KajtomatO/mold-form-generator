@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
+import type { ParamPath } from '../src/app/stages';
 import { EXAMPLE_FILES } from '../test/fixtures/loadExamples';
 import { app, canDraw, dropAndWait, dropExample, hooks, openApp } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
@@ -20,8 +21,12 @@ interface Shot {
   /** null for the empty app, before any model. */
   file: string | null;
   grid: readonly [number, number];
-  /** The sidebar section scrolled to the top, Advanced opened first. */
-  scroll?: 'cover' | 'pour' | 'grid' | 'demold' | 'advanced';
+  /** The sidebar section scrolled to the top, Advanced opened first; 'bolts' is the Bolts group's heading. */
+  scroll?: 'cover' | 'pour' | 'grid' | 'demold' | 'advanced' | 'bolts';
+  /** M10: settings made before the model is dropped, such as the bolts turned on. */
+  settings?: [ParamPath, unknown][];
+  /** M10: the section across y through the front right bolt's axis, the camera close on that corner and square to the cut. */
+  boltCut?: boolean;
   /** A Show toggle pressed first: the Demold report's first hint, or the Diagnostics row of this code. */
   show?: 'hint' | 'air-underside' | 'air-sealed';
   /** Which sets take this shot: every size and theme in Chromium, and 1366 x 768 in both themes in Firefox, unless narrowed. */
@@ -55,6 +60,8 @@ const EXPORT_SETS = (browser: Browser, width: number, theme: Theme): boolean => 
 const REPORT_SETS = EXPORT_SETS;
 const VIEW_SETS = EXPORT_SETS;
 const PROJECT_SETS = EXPORT_SETS;
+// M10's bolts: every size and theme in Chromium, and the user's browser at 1366 x 768, dark.
+const BOLT_SETS = EXPORT_SETS;
 const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
@@ -87,6 +94,12 @@ const CASES: Shot[] = [
   { name: 'jersey-project-corrupt', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'corrupt', only: PROJECT_SETS },
   { name: 'jersey-project-migrated', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'migrated', only: PROJECT_SETS },
   { name: 'jersey-replace-prompt', file: EXAMPLE_FILES.jersey, grid: [1, 1], project: 'replace', only: PROJECT_SETS },
+  // M10: the Bolts group with its rows and the bolt list; a cut through a bolt, showing its countersink, holes,
+  // nut slot and membrane; the parts apart; and a warning state, M4 on a 3 mm base with an 8 mm screw.
+  { name: 'jersey-bolts-group', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true]], scroll: 'bolts', only: BOLT_SETS },
+  { name: 'jersey-bolts-section', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true]], boltCut: true, scroll: 'bolts', only: BOLT_SETS },
+  { name: 'jersey-bolts-exploded', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true]], explode: true, only: BOLT_SETS },
+  { name: 'jersey-bolts-warning', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: [['bolts.enabled', true], ['bolts.size', 'M4'], ['base.thickness', 3], ['bolts.length', 8]], scroll: 'bolts', only: BOLT_SETS },
 ];
 
 const SIZES = [
@@ -115,6 +128,7 @@ test.describe('review screenshots', () => {
             h.setParam('grid.nx', grid[0]);
             h.setParam('grid.ny', grid[1]);
           }, shot.grid);
+          if (shot.settings) await hooks(page, (h, settings: [ParamPath, unknown][]) => settings.forEach(([path, value]) => h.setParam(path, value)), shot.settings);
           // The renderer card is what this server shows; it stays in one shot of the set to be reviewed there.
           const card = page.getByTestId('software-renderer');
           const keepCard = shot.name === 'benchy' && size.width === 1366 && theme === 'dark';
@@ -139,7 +153,7 @@ test.describe('review screenshots', () => {
               await expect(page.getByTestId('file-notice')).toHaveAttribute('data-severity', 'error');
             } else if (shot.project === 'migrated') {
               await input.setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: V1_PROJECT });
-              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 2');
+              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 3');
               await hooks(page, (h) => h.idle());
             } else if (shot.project === 'replace') {
               await hooks(page, (h) => h.setParam('silicone.t', 3.5));
@@ -163,7 +177,7 @@ test.describe('review screenshots', () => {
           else if (shot.show) await page.locator(`.diagnostic[data-code="${shot.show}"]`).first().getByRole('button', { name: 'Show' }).click();
           if (shot.scroll === 'advanced') await page.locator('.advanced > summary').click();
           if (shot.scroll) {
-            await page.locator(`[data-section="${shot.scroll}"]`).evaluate((section) => {
+            await page.locator(shot.scroll === 'bolts' ? '[data-testid="bolts-group"]' : `[data-section="${shot.scroll}"]`).evaluate((section) => {
               const sections = section.closest('[data-testid="sections"]')!;
               sections.scrollTop = (section as HTMLElement).offsetTop - (sections as HTMLElement).offsetTop;
             });
@@ -181,6 +195,18 @@ test.describe('review screenshots', () => {
               const n = a.scene.section.plane.normal;
               (window as unknown as { __pipeline: { setCamera: (v: unknown) => void } }).__pipeline.setCamera({ position: [c[0] - n.x * 1.6 * d, c[1] - n.y * 1.6 * d, c[2] - n.z * 1.6 * d + 0.35 * d], target: c, fov: 35 });
             });
+          }
+          if (shot.boltCut) {
+            await page.getByTestId('section').check();
+            await page.locator('[data-cut="y"]').click();
+            // The front right bolt: its slot opens through the right wall, so a cut across y shows all of it.
+            const spot = await app(page, (a) => {
+              const b = a.store.pipeline.field!.value.rim.bolts!;
+              return { x: b.spots[1].x, y: b.spots[1].y, z: (b.bed + b.holeTop) / 2 };
+            });
+            await app(page, (a, y: number) => a.store.setSection({ at: y }), spot.y);
+            // Close enough that the membrane, one 0.2 mm layer, shows as a band of its own.
+            await hooks(page, (h, s: { x: number; y: number; z: number }) => h.setCamera({ position: [s.x + 2, s.y - 27, s.z + 6], target: [s.x + 2, s.y, s.z], fov: 35 }), spot);
           }
           if (shot.explode) await page.getByTestId('explode').check();
           if (shot.topView) {

@@ -14,6 +14,7 @@ import { auditEdges, type MeshAudit, type OpenLoop } from '../core/mesh/audit';
 import { meshBounds, weld, type Bounds, type WeldedMesh } from '../core/mesh/weld';
 import { baseOptions, resolveAuto } from '../core/params/defaults';
 import type { Params } from '../core/params/schema';
+import { boltCavityDiagnostics } from '../core/parts/bolts';
 import { deriveRim, moldBounds, type MoldBounds, type Rim } from '../core/parts/rim';
 import type { Diagnostic } from '../core/report/diagnostics';
 import type { Rect } from '../core/solid/rect';
@@ -384,6 +385,9 @@ export class FieldStages {
     if (want.includes('S6')) {
       const conditioned = s6();
       const { mold, rim } = s10();
+      // M10: the bolts' wall to the cavity, against the field as the preview's tool cuts it, cropped to D. The
+      // TIN's raise belongs to S11, which this stage does not read; the export checks again with its own.
+      const bolts = boltCavityDiagnostics(rim.bolts, conditioned.field, 0, rim.D);
       outputs.S6 = {
         field: conditioned.field,
         cell: conditioned.plan.cell,
@@ -391,7 +395,7 @@ export class FieldStages {
         pitch: [conditioned.plan.pitchXmm, conditioned.plan.pitchYmm],
         mold,
         rim,
-        diagnostics: conditioned.diagnostics,
+        diagnostics: [...conditioned.diagnostics, ...bolts],
       };
     }
     if (want.includes('S7')) outputs.S7 = s7();

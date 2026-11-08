@@ -4,7 +4,9 @@ import type { Params } from '../params/schema';
 import { checked, withArena, type Arena } from '../solid/arena';
 import { TOOL_BOTTOM } from '../solid/tool';
 import { buildBaseBody } from './base';
+import { baseBoltCutters, boltNeeds, coverBoltCutters, type BoltLayout } from './bolts';
 import { buildCoverBody } from './cover';
+import { threadPast } from './fasteners';
 import { pourCutters, ventCutters } from './openings';
 import { basePose, coverPose, poseToStl } from './poses';
 import { deriveRim, type Rim } from './rim';
@@ -62,13 +64,56 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-/** The rim of one variant: the real derivation, around a cavity bound that is just the box tool. */
+/**
+ * The rim of one variant: the real derivation, around a cavity bound that is just the box tool. The joint
+ * pieces never carry bolts, which the bolt coupon tests on its own, so they stay small and the same.
+ */
 export function fitRim(params: Params, variant: FitVariant): Rim {
   const half = TOOL_SIDE / 2;
   const model = { x0: -half, y0: -half, x1: half, y1: half };
   const D = { x0: -half - BOUND_SLACK, y0: -half - BOUND_SLACK, x1: half + BOUND_SLACK, y1: half + BOUND_SLACK };
   const joint = { ...params.joint, taperClearance: variant.cT, grooveClearance: variant.cG };
-  return deriveRim({ D, model, hMax: TOOL_HEIGHT, offsets: [[0, 0]] }, { ...params, joint, grid: { ...params.grid, edge: null } });
+  return deriveRim({ D, model, hMax: TOOL_HEIGHT, offsets: [[0, 0]] }, { ...params, joint, grid: { ...params.grid, edge: null }, bolts: { ...params.bolts, enabled: false } });
+}
+
+/** The bolt coupon's two pieces, centred on one bolt, with its own flat top: the bolt's cuts as the mold has them. */
+export interface BoltCoupon {
+  bolts: BoltLayout;
+  base: Manifold;
+  cover: Manifold;
+  /** The cover piece's flat top, which is on the bed in its print pose. */
+  top: number;
+}
+
+/**
+ * M10's fit test of the bolts: a square of base with one countersunk hole, and a square of cover with one
+ * nut slot opening at +x, its membrane, and the hole for the screw's end, at the clearances set. The same
+ * cutters as the mold, with the slot's floor at the lowest the mold's takes, as the fit test is built
+ * without a model (the mold's is up to a layer higher), and a whole number of layers under the piece's top.
+ */
+export function buildBoltCoupon(arena: Arena, params: Params): BoltCoupon {
+  const needs = boltNeeds(params);
+  const { minWall, layer } = needs;
+  const half = Math.ceil(Math.max(needs.sinkRadius, needs.slotWidth / Math.sqrt(3), needs.slotWidth / 2) + minWall + 1);
+  const Tb = params.base.thickness;
+  const slotFloor = needs.slotFloorMin;
+  const slotTop = slotFloor + needs.slotHeight;
+  const top = slotFloor + layer * Math.ceil((Math.max(needs.wantedTop, slotTop) + minWall - slotFloor) / layer - 1e-9);
+  const bolts: BoltLayout = {
+    ...needs,
+    bed: -Tb,
+    slotFloor,
+    slotTop,
+    holeTop: Math.min(needs.wantedTop, top - minWall),
+    reach: Tb + slotFloor + needs.fastener.nutHeight + threadPast(needs.fastener),
+    longest: null,
+    jointLand: 0,
+    spots: [{ x: 0, y: 0, sx: 1, sy: 1, exit: 'x1', slotRun: half + 1 }],
+  };
+  const { Manifold } = arena.api;
+  const base = checked(arena.track(Manifold.difference([boxAt(arena, -half, -half, -Tb, half, half, 0), ...baseBoltCutters(arena, bolts)])), 'The bolt coupon base');
+  const cover = checked(arena.track(Manifold.difference([boxAt(arena, -half, -half, 0, half, half, top), ...coverBoltCutters(arena, bolts)])), 'The bolt coupon cover');
+  return { bolts, base, cover, top };
 }
 
 function boxAt(arena: Arena, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): Manifold {
@@ -136,6 +181,19 @@ Variants:
 ${variants.map((v) => `${v.id}: taper clearance ${v.cT.toFixed(2)} mm, groove clearance ${v.cG.toFixed(2)} mm, ${v.notches} notch${v.notches > 1 ? 'es' : ''} on the ${v.series === 'taper' ? '+x' : '+y'} side`).join('\n')}
 `;
 
+const BOLT_README = (coupon: BoltCoupon, params: Params): string => {
+  const { bolts } = coupon;
+  const b = params.bolts;
+  return `
+Bolt coupon:
+bolt_coupon_base.stl and bolt_coupon_cover.stl are a corner of the base and of the cover with one bolt, cut as the real mold's are: an ${bolts.size} countersink at a hole clearance of ${b.holeClearance} mm per side, and a nut slot at a nut clearance of ${b.nutClearance} mm per side, with its membrane. Print them as they are saved, in the material and settings of the real mold. Then, with an ${bolts.size} x ${bolts.length} mm countersunk screw and an ${bolts.size} hex nut:
+1. Push the nut into the slot from the +x side, corner first, with two of its flats against the sides of the slot: it should slide in by hand until its leading corner stops at the end of the slot, and stay in. If it will not go, raise Nut clearance per side under Cover & joint, Bolts, by 0.05 mm; if it falls out, lower it.
+2. Put the screw up through the base piece from its underside, into the cover piece, and push it through the membrane, the thin layer of plastic between the hole and the nut slot, under the nut, which is meant to be pierced. It should pass the hole without binding; if it binds, raise Hole clearance per side.
+3. Turn the screw into the nut until snug. Its head should sit flush with the base piece's underside or a little below it, and the pieces should close without a gap.
+The coupon's slot sits at the lowest height the mold's can. The mold's is up to one layer higher, so that its bridge starts on a layer under its flat top, so in the mold the same screw passes its nut by up to ${bolts.layer} mm less than here.
+`;
+};
+
 /** Everything in the fit-test ZIP, by path, in print pose. The caller zips it, so core needs no zip library. */
 export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultParams()): Record<string, Uint8Array> {
   const variants = fitVariants(params);
@@ -147,7 +205,16 @@ export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultPara
       files[`fit_test/${variant.id}_base.stl`] = poseToStl(api, base, basePose(rim));
     });
   }
+  let readme = README(variants, params);
+  if (params.bolts.enabled) {
+    withArena(api, (arena) => {
+      const coupon = buildBoltCoupon(arena, params);
+      files['fit_test/bolt_coupon_cover.stl'] = poseToStl(api, coupon.cover, coverPose({ Zt: coupon.top }));
+      files['fit_test/bolt_coupon_base.stl'] = poseToStl(api, coupon.base, basePose({ Tb: params.base.thickness }));
+      readme += BOLT_README(coupon, params);
+    });
+  }
   // Plain ASCII, and core has no TextEncoder without the DOM types.
-  files['fit_test/README.txt'] = Uint8Array.from(README(variants, params), (c) => c.charCodeAt(0));
+  files['fit_test/README.txt'] = Uint8Array.from(readme, (c) => c.charCodeAt(0));
   return files;
 }

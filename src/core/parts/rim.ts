@@ -3,6 +3,7 @@ import type { Bounds, WeldedMesh } from '../mesh/weld';
 import type { Params } from '../params/schema';
 import type { Diagnostic } from '../report/diagnostics';
 import { outset, type Rect } from '../solid/rect';
+import { boltClearances, boltNeeds, boltRimDiagnostics, placeBolts, type BoltClearances, type BoltLayout, type RimWalls } from './bolts';
 
 const DEGREE = Math.PI / 180;
 /**
@@ -111,6 +112,8 @@ export interface Rim {
   pryWidth: number;
   /** 0 with the notches off. */
   pryHeight: number;
+  /** M10: where the bolts go and what they are cut from, or null with the bolts off. */
+  bolts: BoltLayout | null;
   edge: {
     /** What the user typed, or null while it is on auto. */
     requested: number | null;
@@ -123,6 +126,8 @@ export interface Rim {
 
 /** The height a pry notch may reach while staying under the shelf at z = 0. */
 const PRY_MARGIN = 0.5;
+/** A length past another by more than float rounding. */
+const SLACK = 1e-6;
 
 export function deriveRim(bounds: MoldBounds, params: Params): Rim {
   const { D, model, hMax } = bounds;
@@ -133,42 +138,48 @@ export function deriveRim(bounds: MoldBounds, params: Params): Rim {
   const tanTaper = Math.tan(j.taperDeg * DEGREE);
   const tanRidge = Math.tan(j.ridgeDraftDeg * DEGREE);
 
+  // With bolts the outer land grows as far as their holes and walls need, and no further.
+  const bolts = params.bolts.enabled ? boltNeeds(params) : null;
   const e1 = j.landInner;
   const e2 = e1 + cG;
   const e3 = e2 + j.ridgeWidth;
   const e4 = e3 + cG;
-  const e5 = e4 + j.landOuter;
+  const e5 = bolts ? e4 + Math.max(j.landOuter, bolts.land) : e4 + j.landOuter;
 
   // From the base top out to the box, at the cover's bottom edge.
   const toBox = cT + (Tb - proud) * tanTaper + wall;
   const edge = params.grid.edge;
-  const smallest = outset(D, e5);
   // Extra width goes to the outer land, so the joint stays tight to the cavity.
-  const wider = edge === null ? smallest : outset(model, edge - toBox);
-  const B: Rect = {
-    x0: Math.min(smallest.x0, wider.x0),
-    y0: Math.min(smallest.y0, wider.y0),
-    x1: Math.max(smallest.x1, wider.x1),
-    y1: Math.max(smallest.y1, wider.y1),
+  const boxOf = (smallest: Rect): Rect => {
+    const wider = edge === null ? smallest : outset(model, edge - toBox);
+    return { x0: Math.min(smallest.x0, wider.x0), y0: Math.min(smallest.y0, wider.y0), x1: Math.max(smallest.x1, wider.x1), y1: Math.max(smallest.y1, wider.y1) };
   };
+  const minimumOf = (smallest: Rect): number => Math.max(model.x0 - smallest.x0, model.y0 - smallest.y0, smallest.x1 - model.x1, smallest.y1 - model.y1) + toBox;
+  const smallest = outset(D, e5);
+  const B = boxOf(smallest);
   const O = outset(B, toBox);
-  const minimum = Math.max(model.x0 - smallest.x0, model.y0 - smallest.y0, smallest.x1 - model.x1, smallest.y1 - model.y1) + toBox;
+  const minimum = minimumOf(smallest);
+  // The rim the joint alone would give, which the bolts' notes are told against.
+  const plain = outset(D, e4 + j.landOuter);
 
   const diagnostics: Diagnostic[] = [];
   if (edge !== null && edge < minimum) {
+    const why = bolts && minimum > minimumOf(plain) + SLACK ? 'the joint and the bolts in its corners need' : 'the joint needs';
     diagnostics.push({
       code: 'edge-raised',
       severity: 'info',
-      message: `Edge raised from ${edge.toFixed(1)} to ${minimum.toFixed(1)} mm, because the joint needs that much room around the cavity.`,
+      message: `Edge raised from ${edge.toFixed(1)} to ${minimum.toFixed(1)} mm, because ${why} that much room around the cavity.`,
     });
   }
   // G8 has it that the joint cannot hit the cavity, and the rings' corners follow the plate's. Past the
   // room between D and B, the inner ring would pass within s1 of D's corner, and at last open the groove
   // into the cavity, while the plate's corner cut into the outer land. Up to it, every land holds.
   const room = Math.min(D.x0 - B.x0, D.y0 - B.y0, B.x1 - D.x1, B.y1 - D.y1);
-  const cornerRadius = Math.min(params.base.cornerRadius, room);
+  // A bolt's axis sits bolts.edge in from both sides, so a corner no rounder than that keeps its wall.
+  const cornerRadius = bolts ? Math.min(params.base.cornerRadius, room, bolts.edge) : Math.min(params.base.cornerRadius, room);
   if (cornerRadius < params.base.cornerRadius) {
-    diagnostics.push({ code: 'corner-clamped', severity: 'info', message: `Corner radius lowered from ${params.base.cornerRadius.toFixed(1)} to ${cornerRadius.toFixed(1)} mm, as a rounder corner would cut into the lands around the cavity.` });
+    const what = bolts && bolts.edge < room ? 'the bolt holes in the corners' : 'the lands around the cavity';
+    diagnostics.push({ code: 'corner-clamped', severity: 'info', message: `Corner radius lowered from ${params.base.cornerRadius.toFixed(1)} to ${cornerRadius.toFixed(1)} mm, as a rounder corner would cut into ${what}.` });
   }
   if (j.grooveExtraDepth <= 0) {
     diagnostics.push({ code: 'groove-too-shallow', severity: 'error', message: `The groove must be deeper than the ridge: at an extra depth of ${j.grooveExtraDepth} mm the ridge meets the groove's roof, so the base cannot seat on the shelf.` });
@@ -188,13 +199,32 @@ export function deriveRim(bounds: MoldBounds, params: Params): Rim {
     diagnostics.push({ code: 'pry-clamped', severity: 'info', message: `Pry notches were lowered to ${pryRoom.toFixed(2)} mm, so they stay below the shelf the base seats on.` });
   }
 
-  return {
+  const jointTop = Math.max(hMax + topCap, j.ridgeHeight + j.grooveExtraDepth + topCap);
+  // The shortest bolt and its slot keep a wall under the flat top, which on a low model raises it.
+  const Zt = bolts ? Math.max(jointTop, bolts.coverHeight) : jointTop;
+  if (bolts) {
+    // What the bolts add to the box, which a wide edge may already hold in part or whole.
+    const without = boxOf(plain);
+    const grow = [B.x1 - B.x0 - (without.x1 - without.x0), B.y1 - B.y0 - (without.y1 - without.y0)];
+    if (grow[0] > SLACK || grow[1] > SLACK) {
+      const box = Math.abs(grow[0] - grow[1]) < 0.05
+        ? `is ${grow[0].toFixed(1)} mm wider each way`
+        : `grows by ${[grow[0] > SLACK ? `${grow[0].toFixed(1)} mm from left to right` : '', grow[1] > SLACK ? `${grow[1].toFixed(1)} mm from front to back` : ''].filter(Boolean).join(' and ')}`;
+      diagnostics.push({ code: 'bolt-land', severity: 'info', message: `The outer land grows from ${j.landOuter.toFixed(1)} to ${bolts.land.toFixed(1)} mm to hold the ${bolts.size} bolts with a wall of ${bolts.minWall} mm round them, so the box ${box}.` });
+    }
+    if (Zt > jointTop + SLACK) {
+      // A smaller size has a shorter auto length and a lower slot, so it always lowers the top; a base it may not.
+      const smaller = bolts.size === 'M2.5' ? '' : ' A smaller bolt size lowers it.';
+      diagnostics.push({ code: 'bolt-cover-raised', severity: 'info', also: ['bolts.size'], message: `The flat top is raised from ${jointTop.toFixed(1)} to ${Zt.toFixed(1)} mm, ${(Zt - jointTop).toFixed(1)} mm over what Top cap asks, so the ${bolts.size} x ${bolts.autoLength} mm screws and their nut slots keep a wall of ${bolts.minWall} mm under it.${smaller}` });
+    }
+  }
+  const rim: Rim = {
     D,
     e1, e2, e3, e4, e5,
     B,
     O,
     hMax,
-    Zt: Math.max(hMax + topCap, j.ridgeHeight + j.grooveExtraDepth + topCap),
+    Zt,
     Tb,
     proud,
     wall,
@@ -212,9 +242,53 @@ export function deriveRim(bounds: MoldBounds, params: Params): Rim {
     reliefRun,
     pryWidth: j.pryWidth,
     pryHeight,
+    bolts: bolts ? placeBolts(bolts, { D, e4, B, O, Zt, Tb, jointLand: j.landOuter }) : null,
     edge: { requested: edge, minimum },
     diagnostics,
   };
+  if (rim.bolts) diagnostics.push(...boltRimDiagnostics(wallsOf(rim)));
+  return rim;
+}
+
+function wallsOf(rim: Rim): RimWalls {
+  return { ...rim, notches: notchBoxes(rim).map((n) => ({ x0: n.x0, y0: n.y0, x1: n.x1, y1: n.y1, z0: n.bottom - 1, z1: n.top })) };
+}
+
+/** M10: the walls the bolts leave to the groove, the outside, the plate's sides and the notches, or null with the bolts off. */
+export function boltWalls(rim: Rim): BoltClearances | null {
+  return rim.bolts ? boltClearances(wallsOf(rim)) : null;
+}
+
+/** G9: where the two pry notches go, at mid long sides, breaking through the wall into the rebate. Empty with them off. */
+export interface NotchBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** The cover's bottom edge, which the cut starts a mm under, and the notch's top. */
+  bottom: number;
+  top: number;
+}
+
+export function notchBoxes(rim: Rim): NotchBox[] {
+  if (rim.pryHeight <= 0) return [];
+  const { O, B, pryWidth } = rim;
+  const bottom = -rim.Tb + rim.proud;
+  const top = bottom + rim.pryHeight;
+  // The rebate narrows upward, so this reaches inside it all the way up the notch.
+  const reach = rebateOutset(rim, top) - 0.5;
+  if (O.x1 - O.x0 >= O.y1 - O.y0) {
+    const cx = (O.x0 + O.x1) / 2;
+    return [
+      { x0: cx - pryWidth / 2, y0: B.y1 + reach, x1: cx + pryWidth / 2, y1: O.y1 + 1, bottom, top },
+      { x0: cx - pryWidth / 2, y0: O.y0 - 1, x1: cx + pryWidth / 2, y1: B.y0 - reach, bottom, top },
+    ];
+  }
+  const cy = (O.y0 + O.y1) / 2;
+  return [
+    { x0: B.x1 + reach, y0: cy - pryWidth / 2, x1: O.x1 + 1, y1: cy + pryWidth / 2, bottom, top },
+    { x0: O.x0 - 1, y0: cy - pryWidth / 2, x1: B.x0 - reach, y1: cy + pryWidth / 2, bottom, top },
+  ];
 }
 
 /** Half width of the rebate at height z <= 0, measured out from B. */

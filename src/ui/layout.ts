@@ -12,7 +12,11 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
   model: ['base.planeTol'],
   base: ['base.mode', 'base.thickness', 'print.layerHeight', 'base.pocketDepth', 'base.pocketEnlarge'],
   silicone: ['silicone.t', 'silicone.wallDraftDeg', 'silicone.density'],
-  cover: ['cover.wall', 'cover.topCap', 'joint.taperDeg', 'joint.taperClearance', 'joint.grooveClearance', 'joint.ridgeWidth', 'joint.ridgeHeight', 'joint.pryNotches'],
+  // The bolts close the section as a group of their own, and their rows show only once the toggle is on.
+  cover: [
+    'cover.wall', 'cover.topCap', 'joint.taperDeg', 'joint.taperClearance', 'joint.grooveClearance', 'joint.ridgeWidth', 'joint.ridgeHeight', 'joint.pryNotches',
+    'bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall',
+  ],
   pour: ['pour.perModel', 'pour.diameter', 'vents.enabled', 'vents.diameter', 'seat.enabled', 'seat.depth', 'funnel.generate', 'funnel.topDiameter', 'funnel.height'],
   grid: ['grid.nx', 'grid.ny', 'grid.spacing', 'grid.edge'],
   advanced: [
@@ -177,4 +181,10 @@ export const HINTS: Partial<Record<ParamPath, string>> = {
   'grid.spacing': 'Between the models\' bounding boxes. Auto keeps a printable wall between them.',
   'grid.edge': 'From the models to the outside of the box. A minimum: the joint may need more.',
   'pour.perModel': 'Pours for each separate body in the model.',
+  'bolts.enabled': 'Four countersunk screws up through the base\'s corners into hex nuts slid into the cover\'s sides, in place of most of the tape. The box grows to hold them.',
+  'bolts.size': 'Metric countersunk screws (ISO 10642 or DIN 7991; ISO 14581 for M2.5) and ISO 4032 hex nuts.',
+  'bolts.length': 'Over the head, as countersunk screws are sold. Auto takes the shortest that passes the nut by 2 threads.',
+  'bolts.holeClearance': 'Added to the screw\'s radius in the holes and countersinks. 0.2 suits a 0.4 mm nozzle, which prints holes about 0.1 mm small per side.',
+  'bolts.nutClearance': 'Added to each side of the nut in its slot. 0.15 lets a nut slide in by hand on a 0.4 mm nozzle and stay.',
+  'bolts.minWall': 'The least plastic between the bolts\' holes and slots and the cavity, the groove and the outside.',
 };

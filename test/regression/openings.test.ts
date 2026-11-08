@@ -8,6 +8,7 @@ import { defaultParams } from '../../src/core/params/defaults';
 import { crossParameterErrors } from '../../src/core/params/rules';
 import type { Params } from '../../src/core/params/schema';
 import { buildBaseBody, buildGlueBase, buildMergedBase } from '../../src/core/parts/base';
+import { boltBridges } from '../../src/core/parts/bolts';
 import { buildCoverFinal, coverBottom } from '../../src/core/parts/cover';
 import { buildFunnel, funnelFile } from '../../src/core/parts/funnel';
 import { funnelProfile } from '../../src/core/parts/funnelProfile';
@@ -22,7 +23,7 @@ import { orientedExample } from '../fixtures/fieldRuns';
 import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
 import { buildMold, type Mold } from '../fixtures/mold';
 import { openMold, planOpenings, type OpenedMold, type PlannedOpenings } from '../fixtures/openings';
-import { boxSolid, compareVoids, CRUMB_MM3, readPart, splitShells, unpose, type ExpectedVoid } from '../fixtures/solidChecks';
+import { boxSolid, clipToBox, compareVoids, CRUMB_MM3, insideOutline, outlineArea, readPart, splitShells, unpose, type ExpectedVoid } from '../fixtures/solidChecks';
 import { boxWithTopHole, signedVolume, withoutTriangles } from '../fixtures/synthetic';
 import { FIELD_GOLDEN, OPENING_GOLDEN } from './golden';
 
@@ -657,7 +658,10 @@ function checkBoreLengths({ arena, m, o }: Ctx): void {
 function checkOverhang({ m, o, params }: Ctx): void {
   const { rim } = m;
   const { mesh } = readPart(poseToStl(api, o.cover, coverPose(rim)));
-  const whole = auditOverhang(mesh, { bedZ: 0 });
+  // M10: the nut slots' ceilings are the bridges listed apart; the bolts' holes and slots are upright otherwise.
+  const bridges = rim.bolts ? boltBridges(rim.bolts) : [];
+  const onBridge = (x: number, y: number, z: number): boolean => bridges.some((b) => Math.abs(z - (rim.Zt - b.z)) < 1e-3 && insideOutline(x, -y, b.outline));
+  const whole = auditOverhang(mesh, { bedZ: 0, only: (x, y, z) => !onBridge(x, y, z) });
   expect(whole).toMatchObject({ steepCount: 0, steepArea: 0 });
   expect(whole.ignoredArea).toBeLessThan(0.1);
   const isIn = (copy: CutOpening, x: number, y: number, z: number, slack: number): boolean => {
@@ -669,9 +673,13 @@ function checkOverhang({ m, o, params }: Ctx): void {
     const ax = x, ay = -y;
     return z <= rim.topChamfer + 0.01 && (ax <= rim.O.x0 + rim.topChamfer + 0.01 || ax >= rim.O.x1 - rim.topChamfer - 0.01 || ay <= rim.O.y0 + rim.topChamfer + 0.01 || ay >= rim.O.y1 - rim.topChamfer - 0.01);
   };
-  // Bores' walls are upright, up to float rounding.
-  const rest = auditOverhang(mesh, { bedZ: 0, limitDeg: 1, only: (x, y, z) => !chamfer(x, y, z) && !o.copies.some((copy) => isIn(copy, x, y, z, 0.01)) });
+  // Bores' walls are upright, up to float rounding, and so are the bolts' holes and slots.
+  const rest = auditOverhang(mesh, { bedZ: 0, limitDeg: 1, only: (x, y, z) => !chamfer(x, y, z) && !onBridge(x, y, z) && !o.copies.some((copy) => isIn(copy, x, y, z, 0.01)) });
   expect(rest, 'overhang outside the seats and mouths').toMatchObject({ steepCount: 0, steepArea: 0 });
+  if (rim.bolts) {
+    const listed = auditOverhang(mesh, { bedZ: 0, only: onBridge });
+    within(listed.steepArea, bridges.reduce((sum, b) => sum + outlineArea(clipToBox(b.outline, rim.O)), 0), 0.01);
+  }
   const seats = o.copies.filter((copy) => copy.kind === 'pour');
   if (params.seat.enabled && seats.length > 0) {
     const inSeat = auditOverhang(mesh, { bedZ: 0, only: (x, y, z) => seats.some((copy) => isIn(copy, x, y, z, 0.01)) });
@@ -763,6 +771,27 @@ describe.each(FULL ? EXAMPLE_IDS : (['jersey', 'barrel'] as ExampleId[]))('%s, c
     expect(bore).toBeLessThan(FIELD_GOLDEN[id].silicone * 0.25);
   }, SLOW);
 });
+
+// M10: the same checks with the bolts on: only the groove is left as a void, the top is the box less the
+// seats (no bolt reaches it), and only the seat cone and the listed bridges overhang in print pose.
+describe.each(FULL ? EXAMPLE_IDS : (['jersey'] as ExampleId[]))('%s, cut, with bolts on', (id) => {
+  const ctx = sharedOpened(id, paramsWith((p) => (p.bolts.enabled = true)));
+  it.each(CHECKS)('%s', (_, check) => inOwnArena(ctx(), check), SLOW);
+});
+
+// The plan's grid with bolts, as M3's list has it: 6 copies of every opening and the 4 bolts at the outer corners.
+it.runIf(FULL)('jersey 2 x 3, cut, with bolts on, passes every check', () => {
+  const params = paramsWith((p) => {
+    p.bolts.enabled = true;
+    p.grid.nx = 2;
+    p.grid.ny = 3;
+  });
+  onOpened('jersey', params, (ctx) => {
+    expect(ctx.m.mold.offsets).toHaveLength(6);
+    expect(ctx.o.copies.length).toBe(6 * ctx.o.planned.placement.openings.length);
+    checkAll(ctx);
+  });
+}, SLOW);
 
 describe('negative controls: these checks can fail', () => {
   const ctx = sharedOpened('jersey');

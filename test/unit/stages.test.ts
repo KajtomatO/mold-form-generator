@@ -25,6 +25,7 @@ const AUTO_VALUES: Partial<Record<ParamPath, number>> = {
   'grid.spacing': 14,
   'grid.edge': 25,
   'quality.cellPreview': 0.75,
+  'bolts.length': 16,
 };
 
 /** Another valid value for each parameter, one that the stages can still build. */
@@ -44,8 +45,7 @@ function changedValue(path: ParamPath, def: ParamDef): unknown {
   }
 }
 
-function withChange(path: ParamPath, value: unknown): Params {
-  const params = defaultParams();
+function withChange(path: ParamPath, value: unknown, params: Params = defaultParams()): Params {
   const [group, key] = path.split('.') as [keyof Params, string];
   (params[group] as Record<string, unknown>)[key] = value;
   return params;
@@ -176,11 +176,17 @@ describe('the real stages read nothing the table does not name', () => {
     expect(Object.keys(base)).toHaveLength(9);
   }, 60_000);
 
+  // With the bolts off their settings reach nothing, so each is changed on a mold with the bolts on, where it must reach something.
+  const boltSetting = (path: ParamPath): boolean => path.startsWith('bolts.') && path !== 'bolts.enabled';
+  const bolted = (): Params => withChange('bolts.enabled', true);
+  let boltBase: Partial<Record<StageId, string>> | undefined;
   it.each(PATHS)('$path', ({ path, def }) => {
-    const after = outputsOf(withChange(path, changedValue(path, def)));
-    const changed = (Object.keys(base) as StageId[]).filter((id) => base[id] !== after[id]);
+    const before = boltSetting(path) ? (boltBase ??= outputsOf(bolted())) : base;
+    const after = outputsOf(withChange(path, changedValue(path, def), boltSetting(path) ? bolted() : defaultParams()));
+    const changed = (Object.keys(before) as StageId[]).filter((id) => before[id] !== after[id]);
     const allowed = invalidatedBy(path);
     expect(changed.filter((id) => !allowed.has(id)), `${path} changed outputs it is not declared for`).toEqual([]);
+    if (boltSetting(path)) expect(changed, `${path} changed nothing on a bolted mold`).toContain('S10');
   }, 60_000);
 
   it.each([
@@ -196,6 +202,8 @@ describe('the real stages read nothing the table does not name', () => {
     // The lift's level: with no seat a funnel has nowhere to stand, so the silicone stops at the top.
     ['seat.enabled', false, ['S7', 'S9', 'S13', 'S16']],
     ['funnel.height', 40, ['S9', 'S16']],
+    // M10: the bolts grow the rim and cut both parts; on jersey the bigger box changes no opening and no report.
+    ['bolts.enabled', true, ['S10', 'S13', 'S15']],
   ] as [ParamPath, unknown, StageId[]][])('sees real changes: %s changes %j', (path, value, expected) => {
     const after = outputsOf(withChange(path, value));
     const changed = (Object.keys(base) as StageId[]).filter((id) => base[id] !== after[id]);

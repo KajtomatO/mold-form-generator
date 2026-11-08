@@ -39,6 +39,13 @@ const PLAN_TABLE: Record<string, [value: unknown, min?: number, max?: number]> =
   'joint.pryNotches': [true],
   'joint.pryWidth': [12],
   'joint.pryHeight': [1.2],
+  // M10: off by default, so the taped mold of version 1 is what a new model gets.
+  'bolts.enabled': [false],
+  'bolts.size': ['M3'],
+  'bolts.length': [null, 6, 40],
+  'bolts.holeClearance': [0.2, 0, 1],
+  'bolts.nutClearance': [0.15, 0, 2],
+  'bolts.minWall': [1.2, 0.4, 5],
   'pour.perModel': [1, 1, 16],
   'pour.diameter': [10, 4, 30],
   'pour.minLand': [1.5],
@@ -93,8 +100,11 @@ describe('parameter schema', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('has no bolt parameters, which arrive in M10', () => {
-    expect(entries.filter(({ path }) => /bolt|nut|screw/i.test(path))).toEqual([]);
+  it('has the bolts of M10 in a group of their own, off by default, with the sizes and lengths screws are sold in', () => {
+    expect(entries.filter(({ path }) => /bolt|nut|screw/i.test(path)).map(({ path }) => path)).toEqual(['bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall']);
+    expect(PARAM_SCHEMA.bolts.size.options).toEqual(['M2.5', 'M3', 'M4']);
+    expect(PARAM_SCHEMA.bolts.length.options).toEqual([6, 8, 10, 12, 16, 20, 25, 30, 35, 40]);
+    expect(defaultParams().bolts.enabled).toBe(false);
   });
 
   it('keeps every number default inside its own range', () => {
@@ -131,7 +141,7 @@ describe('default parameters', () => {
 
   it('tie the auto values to their rules until edited', () => {
     const p = defaultParams();
-    expect(resolveAuto(p, BOUNDS)).toEqual({ pocketDepth: 0.2, printMargin: 0.1, ventPersistence: 1.5, planeTol: 0.05 });
+    expect(resolveAuto(p, BOUNDS)).toEqual({ pocketDepth: 0.2, printMargin: 0.1, ventPersistence: 1.5, planeTol: 0.05, boltLength: 12 });
 
     // Pocket follows layer height until the user types a value.
     p.print.layerHeight = 0.3;

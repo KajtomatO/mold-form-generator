@@ -1,7 +1,8 @@
 import { RISING_LEVEL_NOTE } from '../analysis/air';
 import { demoldSteps, hintWords, placeWords, VERDICT_MEANING, VERDICT_WORDS, type GeometryReports } from '../analysis/reports';
 import { GROUP_TITLES, PARAM_SCHEMA, type ParamDef, type Params } from '../params/schema';
-import { SEAL_SPACING_MM, type ClampAdvice, type CoverLift } from './clamp';
+import type { BoltLayout } from '../parts/bolts';
+import { SEAL_SPACING_MM, type BoltAdvice, type ClampAdvice, type CoverLift } from './clamp';
 import type { Diagnostic } from './diagnostics';
 import type { PlasticEstimate } from './printability';
 
@@ -33,6 +34,8 @@ export interface ReadmeInput {
   reportsError: string | null;
   /** The cover's lift and the tape that holds it, which need no S8. */
   tape: { lift: CoverLift; clamp: ClampAdvice };
+  /** M10: the bolts and the tape they still need, or null with the bolts off. */
+  bolts: { layout: BoltLayout; advice: BoltAdvice } | null;
   plastic: PlasticEstimate;
   /** Every diagnostic in force, the preview's and the export's. */
   diagnostics: Diagnostic[];
@@ -134,11 +137,16 @@ export function exportReadme(input: ReadmeInput): string {
 
   out.push(...heading('The files'));
   out.push('', 'cover.stl');
-  out.push(...wrap(`The cover: a box whose inside follows your model with ${mm(t)} of room for silicone, with the pour and vent openings in its flat top. Print it as it is saved: it is already turned flat top down on the bed. It needs no supports, as its only overhang is the cone of each funnel seat, at ${params.seat.halfAngleDeg} degrees from vertical.`, '  '));
+  const bolts = input.bolts;
+  const overhang = bolts
+    ? `It needs no supports: its only overhangs are the cone of each funnel seat, at ${params.seat.halfAngleDeg} degrees from vertical, and the ceiling of each nut slot in its corners, a ${mm(bolts.layout.slotWidth)} bridge your slicer prints straight across the slot, with one layer of plastic left across the end of the bolt hole so the bridge prints whole.`
+    : `It needs no supports, as its only overhang is the cone of each funnel seat, at ${params.seat.halfAngleDeg} degrees from vertical.`;
+  out.push(...wrap(`The cover: a box whose inside follows your model with ${mm(t)} of room for silicone, with the pour and vent openings in its flat top. Print it as it is saved: it is already turned flat top down on the bed. ${overhang}`, '  '));
   out.push('', 'base.stl');
+  const holes = bolts ? ` A countersunk hole in each corner takes a bolt from below.` : '';
   out.push(...wrap(glue
-    ? `The base plate, with a ridge that fits the groove in the cover and a shallow pocket that your model is glued into. Print it as it is saved, flat underside on the bed.`
-    : `The base plate with your model built onto it, and a ridge that fits the groove in the cover. Print it as it is saved, flat underside on the bed. The model's own overhangs may need supports in your slicer.`, '  '));
+    ? `The base plate, with a ridge that fits the groove in the cover and a shallow pocket that your model is glued into.${holes} Print it as it is saved, flat underside on the bed.`
+    : `The base plate with your model built onto it, and a ridge that fits the groove in the cover.${holes} Print it as it is saved, flat underside on the bed. The model's own overhangs may need supports in your slicer.`, '  '));
   if (has('model_oriented.stl')) {
     out.push('', 'model_oriented.stl');
     const quantity = copies === 1 ? '' : ` Print ${copies} copies of it, one for each of the ${copies} pockets in the base.`;
@@ -155,6 +163,19 @@ export function exportReadme(input: ReadmeInput): string {
   out.push('', 'report.json and project.json');
   out.push(...wrap(`Every number of this export, and the settings it was made with. To make the same mold again, open ${input.model} in the app, then open this ZIP or its project.json there: the settings, the base face and the openings come back as they were. project.json records the STL's SHA-256, so the app can tell whether the model is the same.`, '  '));
 
+  if (bolts) {
+    const { layout } = bolts;
+    const f = layout.fastener;
+    out.push(...heading('Hardware'));
+    out.push(...wrap('To buy, for the bolts that hold the base to the cover:'));
+    // A length the warnings reject would be bought for nothing, as the holes are cut for the length set.
+    const misfit = bolts.advice.lengthFits ? '' : ` Not yet: this length does not fit this mold (see Warnings below), so set Bolt length in the app to the length the warning gives and export again before you buy.`;
+    item(`${layout.spots.length} x ${layout.size} x ${layout.length} mm countersunk screws with a 90 degree head, ${f.screw === 'ISO 10642' ? 'ISO 10642 (hex socket) or DIN 7991' : `${f.screw} (hexalobular socket) or ISO 7046`}. The length is measured over the head.${misfit}`);
+    item(`${layout.spots.length} x ${layout.size} hex nuts, ISO 4032: ${mm(f.nutFlats)} across the flats, ${mm(f.nutHeight)} high.`);
+    // The slot is the nut's flats wide and ends in a point, so the nut goes in turned with a corner leading.
+    para(`Fit the nuts before you assemble the mold: push one into the slot in each corner of the cover, from the side wall, corner first, with two of its flats against the sides of the slot, until its leading corner stops at the end of the slot, over the hole. The bolts go in from under the base. The first time, each one pushes through a thin layer of plastic between its hole and the nut slot, under the nut, before it reaches the nut. That layer is meant: it lets the slot's ceiling print as a whole bridge.`);
+  }
+
   out.push(...heading('Printing'));
   item('The parts are saved the way up they print best, so do not flip them over or lay them on another side in your slicer. Turning one about the vertical axis to fit your bed is fine.');
   item(`About ${Math.round(params.print.infill * 100)} percent infill is enough. Use at least 3 walls (perimeters) and 4 top and bottom layers, so the surfaces that touch silicone are solid and nothing seeps through.`);
@@ -163,15 +184,32 @@ export function exportReadme(input: ReadmeInput): string {
 
   out.push(...heading('Before the first pour'));
   step(1, 'Cure-inhibition test: some resins, glues, paints and plastics stop silicone from curing where they touch it, and platinum-cure silicone is the sensitive kind. Pour a small test patch of your silicone onto a scrap printed in the same resin, with the same glue you will use, and let it cure fully. If it stays sticky where it touches, seal the model first, for example with a clear coat, and test again.');
-  step(2, 'Leak test: assemble and tape the mold as below, and fill it with water through the pour opening until water shows at the vents. Let it stand for several minutes: the joint should stay dry. Pour the water out and let the mold dry fully before you use silicone.');
+  step(2, `Leak test: assemble and ${bolts ? 'bolt' : 'tape'} the mold as below, and fill it with water through the pour opening until water shows at the vents. Let it stand for several minutes: the joint should stay dry. Pour the water out and let the mold dry fully before you use silicone.`);
 
   out.push(...heading('Pouring'));
   let n = 0;
   if (glue) step(++n, copies === 1 ? 'Glue the model into the pocket of the base, flat face down, and let the glue cure.' : `Glue a model into each of the ${copies} pockets of the base, flat face down, and let the glue cure.`);
-  step(++n, `Fit the base into the cover: the ridge on the base goes into the groove of the cover. Press until the base rests on the cover's shelf all round. It then stands ${mm(params.joint.baseProud, 2)} proud of the cover's bottom edge, which is meant: the tape pulls the base against the shelf.`);
+  step(++n, `Fit the base into the cover: the ridge on the base goes into the groove of the cover. Press until the base rests on the cover's shelf all round. It then stands ${mm(params.joint.baseProud, 2)} proud of the cover's bottom edge, which is meant: the ${bolts ? 'bolts pull' : 'tape pulls'} the base against the shelf.`);
   const { clamp, lift } = input.tape;
   const head = lift.level > input.box[2] - params.base.thickness ? 'up to the rim of a full funnel' : 'up to the flat top';
-  step(++n, `Tape the joint with at least ${plural(clamp.strips, 'strip')} of tape at ${figure(clamp.stripN)} N each, each running from a side wall of the cover across the base to the opposite wall: at least ${clamp.across[0]} from front to back and ${clamp.across[1]} from left to right, spread evenly, no more than about ${SEAL_SPACING_MM} mm apart along any wall, so the tape presses the seal all round. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the tape should hold twice that, and never less than 10 N: here ${clamp.holdN.toFixed(1)} N, which ${clamp.liftStrips === 1 ? 'one strip holds' : `${clamp.liftStrips} of the strips hold`}. A thin film of Vaseline in the groove, before you fit the base, makes the seal better.`);
+  const vaseline = 'A thin film of Vaseline in the groove, before you fit the base, makes the seal better.';
+  if (bolts) {
+    const { layout, advice } = bolts;
+    const holds = !advice.lengthFits
+      ? `which the ${layout.spots.length} bolts hold only at a length that fits this mold: see Warnings`
+      : advice.boltsHoldN >= advice.holdN ? `which the ${layout.spots.length} bolts hold, at about ${advice.boltsHoldN} N together when snug, an estimate for printed plastic` : `more than the ${layout.spots.length} bolts hold, at about ${advice.boltsHoldN} N together when snug, so the tape below makes up the rest`;
+    step(++n, `Put an ${layout.size} x ${layout.length} mm countersunk screw up through each corner hole of the base and turn it into its nut until it is snug and its head sits flush in the countersink. Tighten them in turn, a little at a time, and no more than snug: a printed plate bends if the screws are forced, and the seal then opens between the corners. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the joint should hold twice that, and never less than 10 N: here ${advice.holdN.toFixed(1)} N, ${holds}. ${vaseline}`);
+    const middle = advice.middle;
+    if (advice.strips > 0) {
+      const where = [middle[0] > 0 ? `${middle[0]} from front to back` : '', middle[1] > 0 ? `${middle[1]} from left to right` : ''].filter(Boolean).join(' and ');
+      const why = advice.liftStrips > advice.middle[0] + advice.middle[1]
+        ? `the bolts hold about ${advice.boltsHoldN} N together, under the ${advice.holdN.toFixed(1)} N twice the lift asks for`
+        : `the bolts stand ${advice.spans.map((v) => v.toFixed(0)).join(' and ')} mm apart, and a printed plate bends between bolts more than about ${SEAL_SPACING_MM} mm apart`;
+      step(++n, `Tape the middle of the joint too, as ${why}: at least ${plural(advice.strips, 'strip')} of tape at ${figure(advice.stripN)} N each${where ? `, ${where}` : ''}, each from a side wall of the cover across the base to the opposite wall, spread evenly between the bolts.`);
+    }
+  } else {
+    step(++n, `Tape the joint with at least ${plural(clamp.strips, 'strip')} of tape at ${figure(clamp.stripN)} N each, each running from a side wall of the cover across the base to the opposite wall: at least ${clamp.across[0]} from front to back and ${clamp.across[1]} from left to right, spread evenly, no more than about ${SEAL_SPACING_MM} mm apart along any wall, so the tape presses the seal all round. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the tape should hold twice that, and never less than 10 N: here ${clamp.holdN.toFixed(1)} N, which ${clamp.liftStrips === 1 ? 'one strip holds' : `${clamp.liftStrips} of the strips hold`}. ${vaseline}`);
+  }
   const collide = input.diagnostics.some((d) => d.code === 'funnel-collision');
   const funnels = !has('funnel.stl')
     ? ''

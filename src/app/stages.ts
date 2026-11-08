@@ -56,6 +56,9 @@ const DOMAIN: ParamPath[] = ['silicone.wallDraftDeg', 'silicone.closeWidth', 'pr
 /** The radius of G4. */
 const RADIUS: ParamPath[] = ['silicone.t', 'silicone.printMargin', 'print.layerHeight', 'quality.cellFinal'];
 
+/** M10: the bolts live in the rim, as they grow its outer land and set their holes from the cover's top. */
+const BOLTS: ParamPath[] = ['bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall'];
+
 /** What the funnel is made of, and what the seat it sits in is. */
 const FUNNEL: ParamPath[] = ['funnel.generate', 'funnel.topDiameter', 'funnel.height', 'funnel.neckHeight', 'funnel.wall', 'funnel.tipWall', 'funnel.seatClearance'];
 
@@ -104,7 +107,7 @@ export const STAGES: readonly StageDef[] = [
     deps: ['S2'],
     params: [
       ...RADIUS, ...DOMAIN, 'grid.nx', 'grid.ny', 'grid.spacing', 'grid.edge',
-      'base.thickness', 'base.cornerRadius', 'base.bedReliefHeight', 'base.bedReliefRun', 'cover.wall', 'cover.topCap', 'cover.topChamfer', ...JOINT,
+      'base.thickness', 'base.cornerRadius', 'base.bedReliefHeight', 'base.bedReliefRun', 'cover.wall', 'cover.topCap', 'cover.topChamfer', ...JOINT, ...BOLTS,
     ],
     inputs: [],
   },

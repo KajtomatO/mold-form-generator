@@ -143,9 +143,15 @@ test.describe('the app on index.html', () => {
   test('@smoke every parameter has exactly one control, double-click resets it, and the wheel steps it', async ({ page }) => {
     await dropAndWait(page, EXAMPLE_FILES.jersey);
     await page.locator('.advanced > summary').click();
-    const counts = await page.evaluate((paths) => paths.map((path) => document.querySelectorAll(`[data-param="${path}"]`).length), PATHS);
-    expect(Object.fromEntries(PATHS.map((path, k) => [path, counts[k]])).valueOf()).toEqual(Object.fromEntries(PATHS.map((path) => [path, 1])));
+    const counts = (): Promise<Record<string, number>> => page.evaluate((paths) => Object.fromEntries(paths.map((path) => [path, document.querySelectorAll(`[data-param="${path}"]`).length])), PATHS);
+    // M10: with the bolts off, their group shows its toggle alone; turned on, every row is there once.
+    const hidden = (path: string): boolean => path.startsWith('bolts.') && path !== 'bolts.enabled';
+    expect(await counts()).toEqual(Object.fromEntries(PATHS.map((path) => [path, hidden(path) ? 0 : 1])));
+    await row(page, 'bolts.enabled').locator('input').check();
+    expect(await counts()).toEqual(Object.fromEntries(PATHS.map((path) => [path, 1])));
     expect(await page.locator('[data-param]').count()).toBe(PATHS.length);
+    await row(page, 'bolts.enabled').locator('input').uncheck();
+    await idle(page);
 
     const t = numberBox(page, 'silicone.t');
     const value = (): Promise<number> => hooks(page, (h) => h.params().silicone.t);

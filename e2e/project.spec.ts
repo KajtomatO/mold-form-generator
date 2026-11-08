@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { strToU8, unzipSync, zipSync } from 'fflate';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type FileChooser, type Page } from '@playwright/test';
 import { MODEL_ENTRY, PROJECT_ENTRY } from '../src/app/projectArchive';
 import { projectJson, type ProjectFile } from '../src/app/project';
 import { exampleBytes, EXAMPLE_FILES } from '../test/fixtures/loadExamples';
@@ -80,7 +80,7 @@ async function roundTrip(page: Page, model: string, stl: Uint8Array): Promise<Pr
   expect(Object.keys(inside).sort()).toEqual([MODEL_ENTRY, PROJECT_ENTRY].sort());
   expect(Buffer.compare(Buffer.from(inside[MODEL_ENTRY]), Buffer.from(stl))).toBe(0);
   const json = JSON.parse(text(inside[PROJECT_ENTRY])) as ProjectFile;
-  expect(json).toMatchObject({ schemaVersion: 2, model, modelSha256: sha(stl), ...before.project });
+  expect(json).toMatchObject({ schemaVersion: 3, model, modelSha256: sha(stl), ...before.project });
   expect(json.basePlane).not.toBeNull();
   const after = await shown(page);
   expect(after.sha).toBe(sha(stl));
@@ -129,6 +129,13 @@ test.describe('project files on index.html', () => {
 
   test('@smoke Save project and Open: jersey with an edited pocket, a pin and a removed vent comes back whole, by the button and by a drop, and undo after the load keeps the edited flag', async ({ page }) => {
     test.setTimeout(240_000);
+    // Playwright intercepts file choosers only while a listener asks for them, and switches that on beside
+    // the next action rather than before it. With the listener added just before Ctrl+O, as M9 had it, the
+    // chooser was lost about once in 50 presses in Chromium, after the app's handler had clicked the input
+    // with user activation: 10 of 546 on a bare page, and this test once in the M10 --full run and once in
+    // 25 repeats. Added 200 ms or more before the press, 0 of 870 were lost. So it listens from the start.
+    const choosers: FileChooser[] = [];
+    page.on('filechooser', (chooser) => choosers.push(chooser));
     await expect(page.getByTestId('save-project')).toBeDisabled();
     await expect(page.getByTestId('open-file').first()).toHaveText('Open STL or project…');
     await dropAndWait(page, EXAMPLE_FILES.jersey);
@@ -184,10 +191,11 @@ test.describe('project files on index.html', () => {
     expect(await leaving()).toBe(false);
     await expect(notice).toHaveText('Saved jersey-barrier.moldproj.');
 
-    // Ctrl+O opens the app's own chooser.
-    const chooser = page.waitForEvent('filechooser');
+    // Ctrl+O opens the app's own chooser, and only it.
+    expect(choosers).toHaveLength(0);
     await page.keyboard.press('Control+o');
-    expect((await chooser).isMultiple()).toBe(false);
+    await expect.poll(() => choosers.length, { timeout: 10_000 }).toBe(1);
+    expect(choosers[0].isMultiple()).toBe(false);
 
     // The whole view is the drop target for a project too: the same project, as a new load.
     await dropAndWait(page, EXAMPLE_FILES.barrel);
@@ -219,7 +227,7 @@ test.describe('project files on index.html', () => {
     await idle(page);
     const before = await shown(page);
     expect(before.depth).toEqual({ undo: 1, redo: 0 });
-    const good = JSON.parse(projectJson({ schemaVersion: 2, appVersion: '0.2.0', model: EXAMPLE_FILES.jersey, modelSha256: sha(jersey), basePlane: null, ...before.project })) as Record<string, unknown> & { params: { silicone: Record<string, unknown> } };
+    const good = JSON.parse(projectJson({ schemaVersion: 3, appVersion: '0.3.0', model: EXAMPLE_FILES.jersey, modelSha256: sha(jersey), basePlane: null, ...before.project })) as Record<string, unknown> & { params: { silicone: Record<string, unknown> } };
     const typed = structuredClone(good);
     typed.params.silicone.t = 'thick';
     const moldproj = handMade(JSON.stringify(good), jersey);
@@ -236,7 +244,7 @@ test.describe('project files on index.html', () => {
       ['broken.json', strToU8('{"schemaVersion": 2, "params": {'), `broken.json is damaged: its settings cannot be read. ${again}`],
       ['typed.json', strToU8(JSON.stringify(typed)), `typed.json cannot be used: its Silicone thickness must be a number, not "thick". ${again}`],
       ['bomb.moldproj', declaredSize(moldproj, MODEL_ENTRY, 0xf0000000), 'bomb.moldproj is damaged or too large: the model inside it says it unpacks to 3840 MB, past the 1024 MB this app takes.'],
-      ['newer.json', strToU8(JSON.stringify({ ...good, schemaVersion: 3 })), 'newer.json was saved by a newer version of the app (app version 0.2.0), in project format 3; this one reads formats up to 2.'],
+      ['newer.json', strToU8(JSON.stringify({ ...good, schemaVersion: 4 })), 'newer.json was saved by a newer version of the app (app version 0.3.0), in project format 4; this one reads formats up to 3.'],
       ['photo.png', Uint8Array.from([0x89, 0x50, 0x4e, 0x47, ...new Uint8Array(100)]), `photo.png is not an STL or a project file, so it was not opened. ${instead}`],
     ];
     let by: 'choose' | 'drop' = 'choose';
@@ -309,10 +317,11 @@ test.describe('project files on index.html', () => {
     await choose(page, 'project.json', v1Fixture);
     const notice = page.getByTestId('file-notice');
     await expect(notice).toContainText('Applied the settings of project.json to jersey-barrier.stl.');
-    await expect(notice).toContainText('Saved in project format 1 by an earlier version of the app, and brought up to format 2.');
+    await expect(notice).toContainText('Saved in project format 1 by an earlier version of the app, and brought up to format 3.');
     await expect(notice).toContainText('matched to jersey-barrier.stl by the file name alone');
     const v1 = JSON.parse(v1Fixture.toString('utf8')) as ProjectFile;
-    expect((await shown(page)).project).toEqual({ params: v1.params, plane: v1.plane, pins: v1.pins, removed: v1.removed });
+    // Migrated to format 3, so with the bolts off, as every version 1 mold was taped.
+    expect((await shown(page)).project).toEqual({ params: { ...v1.params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 } }, plane: v1.plane, pins: v1.pins, removed: v1.removed });
     await idle(page);
     expect(await hooks(page, (h) => h.openings().find((o) => o.pinned))).toMatchObject({ id: v1.pins[0].id, x: v1.pins[0].x, y: v1.pins[0].y });
     // Settings applied in full open again to just this, so nothing is unsaved.
@@ -462,7 +471,7 @@ test.describe('saving a large project', () => {
         __gap: { worst: number; last: number; id: number };
         __app: { store: { files: { pack(f: unknown, b: Uint8Array): Promise<{ zip: Uint8Array; sha256: string }> } }; saveBytes(name: string, bytes: Uint8Array, mime: string): void };
       };
-      const file = { schemaVersion: 2, appVersion: '0.2.0', model: 'sheet.stl', modelSha256: null, basePlane: null, ...(window as unknown as { __pipeline: { project(): object } }).__pipeline.project() };
+      const file = { schemaVersion: 3, appVersion: '0.3.0', model: 'sheet.stl', modelSha256: null, basePlane: null, ...(window as unknown as { __pipeline: { project(): object } }).__pipeline.project() };
       w.__gap = { worst: 0, last: performance.now(), id: 0 };
       w.__gap.id = window.setInterval(() => {
         const now = performance.now();

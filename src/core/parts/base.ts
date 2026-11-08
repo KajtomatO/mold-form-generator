@@ -7,6 +7,7 @@ import type { Diagnostic } from '../report/diagnostics';
 import { auditOverhang } from '../report/overhang';
 import { checked, type Arena } from '../solid/arena';
 import { outset } from '../solid/rect';
+import { baseBoltCutters } from './bolts';
 import { ridgeSolid, ringHull } from './joint';
 import type { Rim } from './rim';
 
@@ -26,7 +27,7 @@ export interface BaseBodyOptions {
   plateTop?: number;
 }
 
-/** G10, S14: plate and ridge. Flat underside, with the relief around it against first-layer squish. */
+/** G10, S14: plate and ridge. Flat underside, with the relief around it against first-layer squish. With bolts, their countersunk holes. */
 export function buildBaseBody(arena: Arena, rim: Rim, options: BaseBodyOptions = {}): Manifold {
   const { B, Tb, tanTaper, cornerRadius, reliefHeight, reliefRun } = rim;
   const plateTop = options.plateTop ?? 0;
@@ -37,7 +38,9 @@ export function buildBaseBody(arena: Arena, rim: Rim, options: BaseBodyOptions =
     { rect: outset(B, spread), radius: cornerRadius + spread, z: reliefHeight - Tb },
     { rect: outset(B, spread - reliefRun), radius: Math.max(0, cornerRadius + spread - reliefRun), z: -Tb },
   ]);
-  return checked(arena.track(plate.add(ridgeSolid(arena, rim))), 'The base body');
+  const body = arena.track(plate.add(ridgeSolid(arena, rim)));
+  if (!rim.bolts) return checked(body, 'The base body');
+  return checked(arena.track(arena.api.Manifold.difference([body, ...baseBoltCutters(arena, rim.bolts)])), 'The base body');
 }
 
 function sectionOf(arena: Arena, components: FootprintComponent[]): CrossSection {

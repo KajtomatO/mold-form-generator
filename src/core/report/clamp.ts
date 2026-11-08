@@ -1,5 +1,7 @@
 import type { Field } from '../field/grid';
 import type { Params } from '../params/schema';
+import { lengthFits, type BoltLayout } from '../parts/bolts';
+import { BOLT_HOLD_N } from '../parts/fasteners';
 import type { Rim } from '../parts/rim';
 
 /** Standard gravity, in m/s2. */
@@ -75,4 +77,47 @@ export function clampAdvice(liftN: number, stripN: number, box: [number, number]
   // A strip from front to back presses the front and back walls at one place along them.
   const across: [number, number] = [Math.max(1, Math.ceil(box[0] / SEAL_SPACING_MM - 1e-9)), Math.max(1, Math.ceil(box[1] / SEAL_SPACING_MM - 1e-9))];
   return { holdN, liftStrips, across, strips: Math.max(liftStrips, across[0] + across[1]), stripN };
+}
+
+/** M10: the bolts in place of the tape count, and the tape they still need. */
+export interface BoltAdvice {
+  count: number;
+  size: BoltLayout['size'];
+  length: number;
+  /** What the tape would have to hold, max(2 x lift, 10 N), and what the bolts hold together, at BOLT_HOLD_N each. */
+  holdN: number;
+  boltsHoldN: number;
+  /** From one bolt's axis to the next along x and along y, in mm. */
+  spans: [number, number];
+  /**
+   * Strips of tape across the middle, front to back and left to right, where bolts at the corners stand
+   * further apart than SEAL_SPACING_MM, as a printed plate bends between them.
+   */
+  middle: [number, number];
+  /** Strips the lift needs past what the bolts hold. */
+  liftStrips: number;
+  /** Strips in all: the middle's, or the lift's if that is more. */
+  strips: number;
+  stripN: number;
+  /** The screw length in use passes its nut and stops under the flat top; a screw that does not fit holds nothing to count on. */
+  lengthFits: boolean;
+  /** Four bolts do it alone: they fit, they hold the lift, and no wall is longer than the spacing between them. */
+  enough: boolean;
+}
+
+/**
+ * Bolts at the corners press the seal where they stand, as a strip of tape does where it crosses the joint,
+ * so between them the same spacing holds as for tape: past it, the plate bends and the seal opens.
+ */
+export function boltAdvice(liftN: number, stripN: number, bolts: BoltLayout): BoltAdvice {
+  const holdN = Math.max(HOLD_FACTOR * liftN, MIN_HOLD_N);
+  const xs = bolts.spots.map((s) => s.x), ys = bolts.spots.map((s) => s.y);
+  const spans: [number, number] = [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+  // A strip from front to back presses the front and back walls, which run along x.
+  const middle: [number, number] = [Math.max(0, Math.ceil(spans[0] / SEAL_SPACING_MM - 1e-9) - 1), Math.max(0, Math.ceil(spans[1] / SEAL_SPACING_MM - 1e-9) - 1)];
+  const boltsHoldN = bolts.spots.length * BOLT_HOLD_N;
+  const liftStrips = holdN > boltsHoldN && stripN > 0 ? Math.ceil((holdN - boltsHoldN) / stripN - 1e-9) : 0;
+  const strips = Math.max(middle[0] + middle[1], liftStrips);
+  const fits = lengthFits(bolts);
+  return { count: bolts.spots.length, size: bolts.size, length: bolts.length, holdN, boltsHoldN, spans, middle, liftStrips, strips, stripN, lengthFits: fits, enough: fits && strips === 0 };
 }

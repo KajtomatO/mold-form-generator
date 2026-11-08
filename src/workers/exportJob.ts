@@ -21,12 +21,14 @@ import { resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import { buildBaseBody, buildGlueBase, buildMergedBase, layerDiagnostics, orientedSolid, pocketOutline, triangleContour } from '../core/parts/base';
+import { boltCavityDiagnostics, boltCavityWallAnywhere, type BoltClearance } from '../core/parts/bolts';
 import { buildCoverBody, buildCoverFinal, toolDiagnostics } from '../core/parts/cover';
 import { fitTestFiles } from '../core/parts/fitTest';
 import { buildFunnel, funnelFile, funnelPose } from '../core/parts/funnel';
 import type { CutOpening } from '../core/parts/openings';
 import { basePose, coverPose, modelOrientedStl, poseToStl } from '../core/parts/poses';
-import { deriveRim, moldBounds, type Rim } from '../core/parts/rim';
+import { boltWalls, deriveRim, moldBounds, type Rim } from '../core/parts/rim';
+import { boltAdvice, type BoltAdvice } from '../core/report/clamp';
 import type { Diagnostic } from '../core/report/diagnostics';
 import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
 import { exportReadme } from '../core/report/readme';
@@ -124,11 +126,30 @@ export interface ExportReport {
   reportsError: string | null;
   /** In g, for every part the mold needs, a funnel per pour. */
   plastic: PlasticEstimate;
+  /** M10: the bolts as cut, the walls they leave and the advice on them, or null with the bolts off. */
+  bolts: ExportBolts | null;
   clearance: { asked: number; measured: number | null; minGap: number | null; decimationError: number | null; marginRaisedBy: number; searchMm: number | null };
   parts: Record<string, { triangles: number; volumeMm3: number | null }>;
   diagnostics: Diagnostic[];
   /** In ms, per step of this export, and the total until the ZIP is packed, which is the one step left out. */
   timings: Record<string, number>;
+}
+
+/** report.json's bolts, in mm, mold coordinates. */
+export interface ExportBolts {
+  size: string;
+  length: number;
+  autoLength: number;
+  screw: string;
+  nut: string;
+  holeDiameter: number;
+  countersink: { diameter: number; depth: number };
+  slot: { width: number; floor: number; top: number; membrane: number };
+  holeTop: number;
+  axes: { x: number; y: number; slotOpensAt: string }[];
+  /** The least wall each kind of neighbour gets, the cavity's from the export field; null where there is none, as with the pry notches off. */
+  walls: { groove: number; outside: number; plate: number; notches: number | null; cavity: number | null };
+  advice: BoltAdvice;
 }
 
 export interface ExportOutputs {
@@ -241,7 +262,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     const model = orientedSolid(arena, imported, { transform: inputs.transform, needsTrim: inputs.needsTrim });
     const cap = inputs.needsTrim && model ? arena.track(model.slice(0.02)) : undefined;
     const footprint = buildFootprint(arena, mesh, inputs.candidate, scaled.base.minIsland, cap);
-    const { pocketDepth, printMargin, ventPersistence } = resolveAuto(scaled, bounds);
+    const { pocketDepth, printMargin, ventPersistence, boltLength } = resolveAuto(scaled, bounds);
     const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...imported.report.diagnostics, ...footprint.diagnostics];
     // The coarser cell widens the margin of G4, and with it the cavity and the box, past what the preview showed.
     if (cellScale !== 1) diagnostics.push({ code: 'export-coarser', severity: 'warning', message: `The geometry engine failed at full detail, so the export was built again at half the detail, on a ${scaled.quality.cellFinal} mm grid instead of ${params.quality.cellFinal} mm, with a wider safety margin and a larger box than the preview shows.` });
@@ -257,7 +278,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         const mold = moldBounds(mesh, bounds, settings);
         const rim = deriveRim(mold, raised);
         const space = placementSpace(built.field, rim, mold.offsets, openingSizes(raised));
-        own.push(...built.diagnostics, ...rim.diagnostics);
+        own.push(...built.diagnostics, ...rim.diagnostics, ...boltCavityDiagnostics(rim.bolts, built.field, raised.quality.tinTolFinal, rim.D));
         for (const spot of inputs.openings) {
           const check = checkOpening(space, spot, inputs.openings);
           if (!check.valid) own.push({ code: 'export-opening-invalid', severity: 'error', message: `The ${spot.kind} at (${spot.x.toFixed(1)}, ${spot.y.toFixed(1)}) is not valid on the export field (${check.problems.join(', ')}), so please move it.` });
@@ -354,6 +375,8 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       const boresMl = boreSilicone(built.copies, built.field, built.rim.Zt) / 1000;
       const ml = silicone.ml + boresMl;
       const tape = reports ? { lift: reports.lift, clamp: reports.clamp } : tapeAdvice(scaled, built.field, scaled.quality.tinTolFinal, built.rim);
+      const layout = built.rim.bolts;
+      const bolts = layout ? { layout, advice: boltAdvice(tape.lift.forceN, scaled.print.tapeStrip, layout) } : null;
       // Part of the zip step, as the README needs them, and recorded apart for the plan's timing note.
       timings.reports = now() - r0;
       const pours = built.copies.filter((c) => c.kind === 'pour').length;
@@ -369,7 +392,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         'model_oriented.stl': model ? model.volume() : null,
       };
       const found = reports ? (({ diagnostics: _shown, ...rest }) => rest)(reports) : null;
-      const report = buildReport(params, inputs, meta, { imported, model, built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
+      const report = buildReport(params, inputs, meta, { imported, model, built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, bolts: bolts ? exportBolts(built, bolts.advice, scaled.quality.tinTolFinal) : null, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
       const { requested, minimum } = built.rim.edge;
       const readme = exportReadme({
         app: APP_NAME,
@@ -384,6 +407,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
           'vents.persistence': ventPersistence,
           'grid.spacing': built.plan.spacing,
           'grid.edge': Math.max(requested ?? minimum, minimum),
+          'bolts.length': boltLength,
         },
         files: Object.keys(files),
         pours,
@@ -396,6 +420,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         reports,
         reportsError,
         tape,
+        bolts,
         plastic,
         diagnostics: inForce,
       });
@@ -419,6 +444,7 @@ interface Measured {
   reports: Omit<GeometryReports, 'diagnostics'> | null;
   reportsError: string | null;
   plastic: PlasticEstimate;
+  bolts: ExportBolts | null;
   files: Record<string, Uint8Array>;
   volumes: Record<string, number | null>;
   diagnostics: Diagnostic[];
@@ -445,6 +471,7 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
     reports: m.reports,
     reportsError: m.reportsError,
     plastic: m.plastic,
+    bolts: m.bolts,
     clearance: {
       asked: params.silicone.t,
       measured: m.clearance?.measured ?? null,
@@ -456,6 +483,29 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
     parts: Object.fromEntries(Object.entries(m.files).filter(([name]) => name.endsWith('.stl')).map(([name, bytes]) => [name, { triangles: triangles(bytes), volumeMm3: m.volumes[name] ?? null }])),
     diagnostics: m.diagnostics,
     timings: m.timings,
+  };
+}
+
+/** A wall to nothing, as with no notches, is no number: JSON would write its Infinity as null anyway. */
+const wallOrNull = (wall: BoltClearance): number | null => (wall.by === null ? null : wall.wall);
+
+/** report.json's bolts: as cut, with the walls they leave, the cavity's read off the export field. */
+function exportBolts(built: Built, advice: BoltAdvice, raise: number): ExportBolts {
+  const bolts = built.rim.bolts!;
+  const walls = boltWalls(built.rim)!;
+  return {
+    size: bolts.size,
+    length: bolts.length,
+    autoLength: bolts.autoLength,
+    screw: bolts.fastener.screw,
+    nut: 'ISO 4032',
+    holeDiameter: 2 * bolts.holeRadius,
+    countersink: { diameter: 2 * bolts.sinkRadius, depth: bolts.sinkDepth },
+    slot: { width: bolts.slotWidth, floor: bolts.slotFloor, top: bolts.slotTop, membrane: bolts.layer },
+    holeTop: bolts.holeTop,
+    axes: bolts.spots.map((s) => ({ x: s.x, y: s.y, slotOpensAt: s.exit })),
+    walls: { groove: walls.groove.wall, outside: walls.outside.wall, plate: walls.plate.wall, notches: wallOrNull(walls.notches), cavity: wallOrNull(boltCavityWallAnywhere(bolts, built.field, raise, built.rim.D)) },
+    advice,
   };
 }
 

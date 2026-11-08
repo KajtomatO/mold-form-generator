@@ -16,13 +16,21 @@ import type { GeometryReports } from '../../src/core/analysis/reports';
 import type { Diagnostic } from '../../src/core/report/diagnostics';
 import { exportReadme, type ReadmeInput } from '../../src/core/report/readme';
 import { parseStl } from '../../src/core/stl/parse';
-import { exportSteps, type ExportOutputs, type ExportReport } from '../../src/workers/exportJob';
+import { exportSteps, type ExportOutputs, type ExportReport, type ExportRequest } from '../../src/workers/exportJob';
 import type { WorkerLike } from '../../src/workers/protocol';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { asciiStl, box, toSoup, withoutTriangles } from '../fixtures/synthetic';
 import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
-import { readPart } from '../fixtures/solidChecks';
-import { OPENING_GOLDEN } from '../regression/golden';
+import { holeCentres, readPart, unpose } from '../fixtures/solidChecks';
+import { orientedExample } from '../fixtures/fieldRuns';
+import { fieldSettings } from '../../src/core/field/grid';
+import type { Params } from '../../src/core/params/schema';
+import { basePose, coverPose } from '../../src/core/parts/poses';
+import { deriveRim, moldBounds } from '../../src/core/parts/rim';
+import { boltAdvice } from '../../src/core/report/clamp';
+import { withArena } from '../../src/core/solid/arena';
+import { loadManifold } from '../fixtures/loadExamples';
+import { BOLT_GOLDEN, OPENING_GOLDEN } from '../regression/golden';
 
 const root = join(import.meta.dirname, '..', '..');
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
@@ -71,7 +79,7 @@ describe('names and versions', () => {
     const file = projectFile(project, 'x.stl', { modelSha256: 'ab'.repeat(32), basePlane });
     expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: APP_VERSION, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
     expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
   });
 
   it('each request counts its own steps, and only the ZIP packs README, report and project', () => {
@@ -107,42 +115,44 @@ function sampleReports(): GeometryReports {
   };
 }
 
+/** A README's input as Benchy's export gives it at defaults, for the README's own tests. */
+const warning: Diagnostic = { code: 'long-vent', severity: 'warning', message: 'A vent at (28.5, 80.5) runs 147 mm, 59 times its 2.5 mm diameter, so it may need clearing after printing and could be slow to fill.' };
+const note: Diagnostic = { code: 'silicone-tall', severity: 'info', message: 'This cavity is 162 mm tall, so 4 to 5 mm of silicone keeps a mold that size from sagging.' };
+function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
+  const i: ReadmeInput = {
+    app: 'Casting Form Generator',
+    version: APP_VERSION,
+    model: '3dbenchy.stl',
+    params: defaultParams(),
+    resolved: { 'base.pocketDepth': 0.2, 'base.planeTol': 0.05, 'silicone.printMargin': 0.1, 'vents.persistence': 1.5, 'grid.spacing': 9.77, 'grid.edge': 6.4, 'bolts.length': 12 },
+    files: ['cover.stl', 'base.stl', 'funnel.stl', 'model_oriented.stl', 'report.json', 'project.json'],
+    pours: 1,
+    vents: 2,
+    tiles: 1,
+    pitch: null,
+    box: [70.31, 41.2, 61.44],
+    clearance: { measured: 3.2136, error: 0.0066, raisedBy: 0 },
+    silicone: { ml: 43.2, grams: 47.3 },
+    reports: sampleReports(),
+    reportsError: null,
+    tape: { lift: sampleReports().lift, clamp: sampleReports().clamp },
+    bolts: null,
+    plastic: { solid: 312, printed: 160 },
+    diagnostics: [warning, note],
+  };
+  change(i);
+  return i;
+}
+
+/** Notepad's rules: plain ASCII, CRLF line endings and lines of at most 76 characters. */
+function notepad(readme: string): void {
+  expect([...readme].filter((c) => c.charCodeAt(0) > 126 || (c.charCodeAt(0) < 32 && c !== '\r' && c !== '\n'))).toEqual([]);
+  expect(readme.endsWith('\r\n')).toBe(true);
+  expect(/[^\r]\n|\r[^\n]/.test(readme)).toBe(false);
+  for (const line of readme.split('\r\n')) expect(line.length, line).toBeLessThanOrEqual(76);
+}
+
 describe('README.txt', () => {
-  const warning: Diagnostic = { code: 'long-vent', severity: 'warning', message: 'A vent at (28.5, 80.5) runs 147 mm, 59 times its 2.5 mm diameter, so it may need clearing after printing and could be slow to fill.' };
-  const note: Diagnostic = { code: 'silicone-tall', severity: 'info', message: 'This cavity is 162 mm tall, so 4 to 5 mm of silicone keeps a mold that size from sagging.' };
-  function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
-    const i: ReadmeInput = {
-      app: 'Casting Form Generator',
-      version: APP_VERSION,
-      model: '3dbenchy.stl',
-      params: defaultParams(),
-      resolved: { 'base.pocketDepth': 0.2, 'base.planeTol': 0.05, 'silicone.printMargin': 0.1, 'vents.persistence': 1.5, 'grid.spacing': 9.77, 'grid.edge': 6.4 },
-      files: ['cover.stl', 'base.stl', 'funnel.stl', 'model_oriented.stl', 'report.json', 'project.json'],
-      pours: 1,
-      vents: 2,
-      tiles: 1,
-      pitch: null,
-      box: [70.31, 41.2, 61.44],
-      clearance: { measured: 3.2136, error: 0.0066, raisedBy: 0 },
-      silicone: { ml: 43.2, grams: 47.3 },
-      reports: sampleReports(),
-      reportsError: null,
-      tape: { lift: sampleReports().lift, clamp: sampleReports().clamp },
-      plastic: { solid: 312, printed: 160 },
-      diagnostics: [warning, note],
-    };
-    change(i);
-    return i;
-  }
-
-  /** Notepad's rules: plain ASCII, CRLF line endings and lines of at most 76 characters. */
-  function notepad(readme: string): void {
-    expect([...readme].filter((c) => c.charCodeAt(0) > 126 || (c.charCodeAt(0) < 32 && c !== '\r' && c !== '\n'))).toEqual([]);
-    expect(readme.endsWith('\r\n')).toBe(true);
-    expect(/[^\r]\n|\r[^\n]/.test(readme)).toBe(false);
-    for (const line of readme.split('\r\n')) expect(line.length, line).toBeLessThanOrEqual(76);
-  }
-
   it('reads well in Windows Notepad: plain ASCII, CRLF line endings, short lines', () => {
     notepad(exportReadme(input()));
   });
@@ -176,7 +186,7 @@ describe('README.txt', () => {
       expect(settings, group).toContain(` ${GROUP_TITLES[group]} -`);
       for (const def of Object.values(defs)) expect(settings, def.label).toContain(`- ${def.label}: `);
     }
-    for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.35 (35 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only']) {
+    for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.35 (35 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only', '- Nuts and bolts: off', '- Bolt size: M3', '- Bolt length: auto, 12 mm', '- Nut clearance per side: 0.15 mm']) {
       expect(settings).toContain(line);
     }
     // Every auto setting but the preview's own cell gets a figure from the export.
@@ -734,4 +744,153 @@ describe('the export of jersey in Node', () => {
     const pours = outputs.report!.openings.filter((o) => o.kind === 'pour').length * 6;
     expect(readme).toContain(`Print ${pours}, one for each pour opening.`);
   }, 120_000);
+});
+
+/** M10: the bolts through the real export path, and the bolts off giving M9's own bytes. */
+describe('the export with bolts, in Node', () => {
+  const M9 = JSON.parse(readFileSync(join(root, 'test', 'fixtures', 'm9-parts.json'), 'utf8')) as { parts: Record<string, Record<string, string>>; fitTest: Record<string, string> };
+  const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+  const pipelines: Pipeline[] = [];
+  afterEach(() => {
+    pipelines.splice(0).forEach((p) => p.dispose());
+  });
+  async function exported(id: 'jersey' | 'barrel', change: (params: Params) => void, request: ExportRequest = { want: 'zip', fitTest: true }): Promise<{ p: Pipeline; outputs: ExportResult; files: Record<string, Uint8Array> }> {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    p.load(exampleBytes(id), EXAMPLE_FILES[id]);
+    await p.idle();
+    p.setParams(change);
+    await p.idle();
+    const outputs = await p.exportParts(() => {}, undefined, request);
+    return { p, outputs, files: unzipSync(outputs.zip) };
+  }
+
+  // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off, must give the same bytes.
+  it.each([
+    ['jersey', 'jersey', () => {}],
+    ['jersey-merged', 'jersey', (p: Params) => (p.base.mode = 'merged')],
+    ['jersey-2x1', 'jersey', (p: Params) => (p.grid.nx = 2)],
+    ['barrel', 'barrel', () => {}],
+  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, and its fit test unchanged', async (name, id, change) => {
+    const { files } = await exported(id, change);
+    expect(sha(files['cover.stl']), 'cover.stl').toBe(M9.parts[name]['cover.stl']);
+    expect(sha(files['base.stl']), 'base.stl').toBe(M9.parts[name]['base.stl']);
+    const fit = Object.fromEntries(Object.entries(files).filter(([f]) => f.startsWith('fit_test/') && f.endsWith('.stl')).map(([f, b]) => [f, sha(b)]));
+    expect(fit).toEqual(M9.fitTest);
+    const readme = text(files['README.txt']);
+    expect(readme).not.toContain('HARDWARE');
+    expect(readme).toContain('Take off the tape and lever the base out');
+    expect(JSON.parse(text(files['report.json'])).bolts).toBeNull();
+  }, 60_000);
+
+  it('with the bolts on: the parts list, when to fit the nuts, how tight, unscrew to demold, report.json, and the fit test\'s coupon', async () => {
+    const { p, outputs, files } = await exported('jersey', (params) => (params.bolts.enabled = true));
+    const readme = text(files['README.txt']).replace(/\r\n\s*/g, ' ');
+    // The parts list, as bought.
+    expect(readme).toContain('HARDWARE');
+    expect(readme).toContain('- 4 x M3 x 12 mm countersunk screws with a 90 degree head, ISO 10642 (hex socket) or DIN 7991. The length is measured over the head.');
+    expect(readme).toContain('- 4 x M3 hex nuts, ISO 4032: 5.5 mm across the flats, 2.4 mm high.');
+    // The slot is the nut's flats wide and ends in a corner, so the nut goes in corner first.
+    expect(readme).toContain('Fit the nuts before you assemble the mold: push one into the slot in each corner of the cover, from the side wall, corner first, with two of its flats against the sides of the slot, until its leading corner stops at the end of the slot, over the hole.');
+    // The membrane is under the nut as the screw comes up from below.
+    expect(readme).toContain('pushes through a thin layer of plastic between its hole and the nut slot, under the nut, before it reaches the nut. That layer is meant');
+    expect(readme).not.toContain('flat side first');
+    expect(readme).not.toContain('Not yet: this length does not fit');
+    // How tight, and the bolts in place of the tape step; jersey's box is small enough for the bolts alone.
+    expect(readme).toContain('turn it into its nut until it is snug and its head sits flush in the countersink');
+    expect(readme).toContain('no more than snug: a printed plate bends if the screws are forced');
+    expect(readme).toContain('which the 4 bolts hold, at about 200 N together when snug');
+    expect(readme).not.toContain('Tape the joint with at least');
+    expect(readme).not.toContain('Tape the middle of the joint');
+    expect(readme).toContain('the bolts pull the base against the shelf');
+    expect(readme).toContain('assemble and bolt the mold as below');
+    // Demolding: unscrew, not untape.
+    expect(readme).toContain('Unscrew the 4 bolts from under the base, leaving the nuts in their slots, take off any tape, and lever the base out at the pry notches');
+    expect(readme).not.toContain('Take off the tape and lever');
+    // The prints: the bridges named as the cover's only other overhang, the base's holes.
+    expect(readme).toContain('the ceiling of each nut slot in its corners, a 5.8 mm bridge your slicer prints straight across the slot');
+    expect(readme).toContain('A countersunk hole in each corner takes a bolt from below.');
+    // Settings: all six, the auto length with what it came to.
+    expect(readme).toContain('- Nuts and bolts: on');
+    expect(readme).toContain('- Bolt length: auto, 12 mm');
+    expect(readme).toContain('- Least wall round bolts: 1.2 mm');
+    // The land's note.
+    expect(readme).toContain('The outer land grows from 2.0 to 6.1 mm to hold the M3 bolts');
+
+    const report = JSON.parse(text(files['report.json'])) as ExportReport;
+    const rim = outputs.rim!;
+    expect(report.bolts).toMatchObject({ size: 'M3', length: 12, autoLength: 12, screw: 'ISO 10642', nut: 'ISO 4032', countersink: { depth: 1.86 }, slot: { membrane: 0.2 } });
+    expect(report.bolts!.holeDiameter).toBeCloseTo(3.4, 9);
+    expect(report.bolts!.slot.width).toBeCloseTo(5.8, 9);
+    expect(report.bolts!.axes).toEqual(rim.bolts!.spots.map((s) => ({ x: s.x, y: s.y, slotOpensAt: s.exit })));
+    for (const [what, wall] of Object.entries(report.bolts!.walls)) expect(wall, what).toBeGreaterThanOrEqual(1.2 - 1e-9);
+    // The cavity's wall as the solid test reads it off the same export field, not capped by the search.
+    expect(Math.abs(report.bolts!.walls.cavity! - BOLT_GOLDEN.jersey.cavity)).toBeLessThanOrEqual(BOLT_GOLDEN.jersey.cavity * 0.01);
+    expect(Math.abs(report.bolts!.walls.notches! - BOLT_GOLDEN.jersey.notches)).toBeLessThanOrEqual(BOLT_GOLDEN.jersey.notches * 0.01);
+    expect(report.bolts!.advice).toMatchObject({ count: 4, enough: true, strips: 0 });
+    expect(report.box.x).toBeCloseTo(86.038, 3);
+    // The project carries the bolts, so the mold opens again as it was.
+    expect(JSON.parse(text(files['project.json'])).params.bolts).toEqual(p.params.bolts);
+
+    // Reassembled from the ZIP's own STLs, both print poses undone, the axes coincide.
+    const api = await loadManifold();
+    withArena(api, (arena) => {
+      const b = rim.bolts!;
+      const cover = unpose(arena, files['cover.stl'], coverPose(rim));
+      const base = unpose(arena, files['base.stl'], basePose(rim));
+      const inCover = holeCentres(arena, cover, (b.slotFloor - b.layer) / 2, b.spots, b.holeRadius);
+      const inBase = holeCentres(arena, base, (b.bed + b.sinkDepth) / 2, b.spots, b.holeRadius);
+      b.spots.forEach((spot, k) => {
+        expect(Math.hypot(inCover[k]![0] - inBase[k]![0], inCover[k]![1] - inBase[k]![1])).toBeLessThan(1e-3);
+        expect(Math.hypot(inCover[k]![0] - spot.x, inCover[k]![1] - spot.y)).toBeLessThan(1e-3);
+      });
+      expect(arena.track(cover.intersect(base)).volume()).toBeLessThan(0.1);
+    });
+
+    // The fit test with the bolts on: the joint pieces as before, and the coupon.
+    const fit = Object.keys(files).filter((f) => f.startsWith('fit_test/')).sort();
+    expect(fit).toEqual([...Object.keys(M9.fitTest), 'fit_test/README.txt', 'fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl'].sort());
+    for (const name of Object.keys(M9.fitTest)) expect(sha(files[name]), name).toBe(M9.fitTest[name]);
+    for (const name of ['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']) expect(readPart(files[name]).audit, name).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
+    const fitReadme = text(files['fit_test/README.txt']);
+    expect(fitReadme).toContain('Bolt coupon:');
+    expect(fitReadme).toContain('an M3 x 12 mm countersunk screw and an M3 hex nut');
+    expect(fitReadme).toContain('raise Nut clearance per side under Cover & joint, Bolts, by 0.05 mm');
+    expect(fitReadme).toContain('Push the nut into the slot from the +x side, corner first, with two of its flats against the sides of the slot');
+    expect(fitReadme).toContain('the thin layer of plastic between the hole and the nut slot, under the nut');
+    expect(fitReadme).toContain('in the mold the same screw passes its nut by up to 0.2 mm less than here');
+  }, 120_000);
+
+  it('the fit-test button holds the coupon with the bolts on and nothing new with them off', async () => {
+    const off = await exported('jersey', () => {}, { want: 'fit-test', fitTest: false });
+    expect(Object.keys(off.files).filter((f) => f.includes('bolt'))).toEqual([]);
+    expect(text(off.files['fit_test/README.txt'])).not.toContain('Bolt coupon');
+    const on = await exported('jersey', (params) => (params.bolts.enabled = true), { want: 'fit-test', fitTest: false });
+    expect(Object.keys(on.files).filter((f) => f.includes('bolt')).sort()).toEqual(['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']);
+  }, 60_000);
+
+  it('VIS-35-sized advice: the bolts stand over 100 mm apart, so the README asks for tape across the middle', () => {
+    const params = defaultParams();
+    params.bolts.enabled = true;
+    const { mesh, bounds } = orientedExample('vis35');
+    const rim = deriveRim(moldBounds(mesh, bounds, fieldSettings(params, bounds)), params);
+    const advice = boltAdvice(4.26, 10, rim.bolts!);
+    const readme = exportReadme({ ...input(), params, bolts: { layout: rim.bolts!, advice } }).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('Tape the middle of the joint too, as the bolts stand 55 and 222 mm apart, and a printed plate bends between bolts more than about 100 mm apart: at least 2 strips of tape at 10 N each, 2 from left to right');
+    notepad(exportReadme({ ...input(), params, bolts: { layout: rim.bolts!, advice } }));
+  });
+
+  it('a screw length that does not fit is not to be bought, and holds nothing the README counts on', () => {
+    const params = defaultParams();
+    params.bolts.enabled = true;
+    params.bolts.length = 10;
+    const { mesh, bounds } = orientedExample('jersey');
+    const rim = deriveRim(moldBounds(mesh, bounds, fieldSettings(params, bounds)), params);
+    const advice = boltAdvice(0.55, 10, rim.bolts!);
+    const readme = exportReadme({ ...input(), params, bolts: { layout: rim.bolts!, advice }, diagnostics: rim.diagnostics }).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('- 4 x M3 x 10 mm countersunk screws with a 90 degree head, ISO 10642 (hex socket) or DIN 7991. The length is measured over the head. Not yet: this length does not fit this mold (see Warnings below), so set Bolt length in the app to the length the warning gives and export again before you buy.');
+    expect(readme).toContain('which the 4 bolts hold only at a length that fits this mold: see Warnings');
+    expect(readme).not.toContain('together when snug');
+    expect(readme).toContain('Warning: An M3 x 10 mm screw does not reach through the nut');
+  });
 });
