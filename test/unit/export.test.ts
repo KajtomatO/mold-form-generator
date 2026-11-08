@@ -11,6 +11,7 @@ import { APP_VERSION } from '../../src/app/version';
 import { defaultParams } from '../../src/core/params/defaults';
 import { GROUP_TITLES, PARAM_SCHEMA, SCHEMA_VERSION } from '../../src/core/params/schema';
 import { fitVariants } from '../../src/core/parts/fitTest';
+import type { GeometryReports } from '../../src/core/analysis/reports';
 import type { Diagnostic } from '../../src/core/report/diagnostics';
 import { exportReadme, type ReadmeInput } from '../../src/core/report/readme';
 import { parseStl } from '../../src/core/stl/parse';
@@ -78,6 +79,29 @@ describe('names and versions', () => {
   });
 });
 
+/**
+ * S9 as Benchy gives it at defaults, by hand: cut-required for the silicone in its cabin, which runs round
+ * the cabin's posts, then the under-plug at its bow, its one underside pocket, and the tape at its 10 N floor.
+ */
+function sampleReports(): GeometryReports {
+  return {
+    demold: {
+      verdict: 'cut-required',
+      bodies: [{ verdict: 'cut-required', volume: 15550, footprints: 1, loopLock: false, underPlug: 6942, sandwiched: 8479 }],
+      hints: [
+        { id: 'sandwiched-0', reason: 'sandwiched', body: 0, volume: 8402, mouths: 1, walls: 6, footprints: 0, cuts: true, at: [2.4, 0.1, 23.4], seam: [[2.4, -14.6, 23.4], [2.4, 0.1, 23.4]] },
+        { id: 'under-plug-1', reason: 'under-plug', body: 0, volume: 6942, mouths: 0, walls: 0, footprints: 0, cuts: false, at: [12.2, 3.6, 0.5], seam: [[12.2, -14.6, 0.5], [12.2, 3.6, 0.5]] },
+      ],
+    },
+    air: { ceilingLeaves: 2, uncovered: [], underside: [{ x: 9.4, y: -6.6, z: 36.6, saddle: 34.1, persistence: 2.5, volume: 523, shell: 0 }], sealed: [], sealedAir: 0, filtered: { underside: 1, sealed: 8 } },
+    lift: { forceN: 1.6, level: 87.6, area: 2600 },
+    clamp: { holdN: 10, liftStrips: 1, across: [1, 1], strips: 2, stripN: 10 },
+    tiles: 1,
+    centre: [0, 0],
+    diagnostics: [],
+  };
+}
+
 describe('README.txt', () => {
   const warning: Diagnostic = { code: 'long-vent', severity: 'warning', message: 'A vent at (28.5, 80.5) runs 147 mm, 59 times its 2.5 mm diameter, so it may need clearing after printing and could be slow to fill.' };
   const note: Diagnostic = { code: 'silicone-tall', severity: 'info', message: 'This cavity is 162 mm tall, so 4 to 5 mm of silicone keeps a mold that size from sagging.' };
@@ -96,6 +120,10 @@ describe('README.txt', () => {
       box: [70.31, 41.2, 61.44],
       clearance: { measured: 3.2136, error: 0.0066, raisedBy: 0 },
       silicone: { ml: 43.2, grams: 47.3 },
+      reports: sampleReports(),
+      reportsError: null,
+      tape: { lift: sampleReports().lift, clamp: sampleReports().clamp },
+      plastic: { solid: 312, printed: 160 },
       diagnostics: [warning, note],
     };
     change(i);
@@ -183,7 +211,7 @@ describe('README.txt', () => {
       'POURING',
       'Glue the model into the pocket of the base',
       'Fit the base into the cover',
-      'Tape the joint all round',
+      'Tape the joint with at least 2 strips',
       'Vaseline in the groove',
       'until silicone shows at every vent',
       'Let it cure',
@@ -191,8 +219,8 @@ describe('README.txt', () => {
       'Cut that sprue at the floor of the seat',
       'DEMOLDING',
       'Cut the sprues',
-      'slide the silicone out of the cover with the model still inside it',
-      'Flex the silicone to free the model, or cut it',
+      'slide the silicone out of the cover with the model still in it',
+      'Cut the silicone with a sharp blade at the places to cut',
       'Take out the model.',
       'Put the silicone back into the cover',
     ];
@@ -202,6 +230,92 @@ describe('README.txt', () => {
       expect(next, phrase).toBeGreaterThan(at);
       at = next;
     }
+  });
+
+  it('says the demold estimate and where the silicone holds, the air, the tape to hold the cover and the plastic, all as estimates', () => {
+    const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
+    const order = [
+      'Plastic: about 160 g at that infill, or 312 g printed solid. This is an estimate',
+      // One strip holds the lift, and one each way presses the seal all round.
+      'Tape the joint with at least 2 strips of tape at 10 N each, each running from a side wall of the cover across the base to the opposite wall: at least 1 from front to back and 1 from left to right',
+      'no more than about 100 mm apart along any wall',
+      'pushes the cover up with about 1.6 N, and the tape should hold twice that, and never less than 10 N: here 10.0 N, which one strip holds.',
+      'DEMOLDING',
+      'Estimate: cutting needed. Expect to cut the silicone to free the model where it holds the model in a loop',
+      "This is worked out from the model's shape alone",
+      'Cut the silicone at this place, where it holds the model in a loop, measured from the middle of the model',
+      '- 8.4 ml of silicone between parts of the model that are joined round it in 6 places, 23 mm up, 2 mm right of the middle: it holds the model in a loop there, so cut in from the front of the silicone to there.',
+      'It also holds the model here, but can stretch off:',
+      '- 6.9 ml of silicone under an overhang, 1 mm up, 12 mm right of the middle, 4 mm to the back: stretch the silicone off the model there, or cut in from the front of the silicone to there if it would tear.',
+      'Cut the sprues',
+      'AIR',
+      "All 2 peaks of the cover's ceiling have an opening",
+      'Air stays in a pocket under an overhang of the model, 37 mm up, 9 mm right of the middle, 7 mm to the front, about 0.52 ml. No vent in the top reaches it: brush a first coat',
+      'This assumes the silicone rises slowly and evenly',
+      'THIS MOLD',
+    ];
+    let at = -1;
+    for (const phrase of order) {
+      const next = readme.indexOf(phrase, at + 1);
+      expect(next, phrase).toBeGreaterThan(at);
+      at = next;
+    }
+    // A grid says the estimate holds for every copy alike.
+    expect(exportReadme(input((i) => (i.reports = { ...sampleReports(), tiles: 6 }))).replace(/\r\n\s*/g, ' ')).toContain('holds for each of the 6 copies alike');
+    // A plausible model has no list of places, and a sealed void says it is harmless.
+    const plain = sampleReports();
+    plain.demold = { verdict: 'plausible', bodies: [], hints: [] };
+    plain.air.sealed = [{ volume: 3432, area: 120, min: [-5, -5, 3], max: [5, 5, 30], onPlane: false, inModel: true }];
+    const quiet = exportReadme(input((i) => (i.reports = plain))).replace(/\r\n\s*/g, ' ');
+    expect(quiet).toContain('Estimate: pull out in the cover. The model should pull out of the silicone while the silicone stays in the cover.');
+    expect(quiet).not.toContain('Where the silicone holds the model');
+    expect(quiet).toContain('3.43 ml is a sealed hollow inside the model, which no silicone reaches.');
+    // Its steps take the model out with the base, and slide the silicone out only if it holds.
+    expect(quiet).toContain('pulling the model out of the silicone with it, while the silicone stays in the cover. 3. If the model holds, slide the silicone out of the cover');
+    expect(quiet).not.toContain('places to cut');
+    notepad(exportReadme(input((i) => (i.reports = plain))));
+    // A plausible model with a little silicone that holds is told to flex it there, never to cut.
+    const flex = sampleReports();
+    flex.demold = { verdict: 'plausible', bodies: [], hints: [{ ...sampleReports().demold.hints[1], volume: 950 }] };
+    const flexed = exportReadme(input((i) => (i.reports = flex))).replace(/\r\n\s*/g, ' ');
+    expect(flexed).toContain('- 0.95 ml of silicone under an overhang, 1 mm up, 12 mm right of the middle, 4 mm to the back: flex the silicone there if the model holds.');
+    expect(flexed).not.toContain('cut in from');
+    // A model that holds but has no loop is told to stretch the silicone off, and to cut only where it would tear.
+    const stretch = sampleReports();
+    stretch.demold = { verdict: 'jacket-out', bodies: [], hints: [sampleReports().demold.hints[1]] };
+    const stretched = exportReadme(input((i) => (i.reports = stretch))).replace(/\r\n\s*/g, ' ');
+    expect(stretched).toContain('Where the silicone holds the model, measured from the middle of the model');
+    expect(stretched).toContain('Stretch the silicone off the model where it holds. Cut it with a sharp blade, in a wavy line so the cut faces line up again, only where it would tear.');
+    expect(stretched).not.toContain('Cut the silicone at');
+  });
+
+  it('when the reports failed, says so and gives the steps that work for any model, with the tape still counted', () => {
+    const readme = exportReadme(input((i) => {
+      i.reports = null;
+      i.reportsError = 'the analysis found no solid in the model';
+    })).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('The demold estimate could not be worked out for this export (the analysis found no solid in the model)');
+    expect(readme).not.toContain('Estimate:');
+    expect(readme).toContain('Stretch the silicone off the model where it holds.');
+    expect(readme).toContain('The air report could not be worked out for this export.');
+    expect(readme).toContain('Tape the joint with at least 2 strips');
+  });
+
+  it('without funnel seats the sprues are cut flush with the top, and no seat is named', () => {
+    const readme = exportReadme(input((i) => (i.params.seat.enabled = false))).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('The pour openings have no funnel seat, so cut the silicone in each of them flush with the top.');
+    expect(readme).toContain('1. Cut the silicone in each pour opening and each vent flush with the top.');
+    expect(readme).not.toContain('floor of its seat');
+  });
+
+  it('when funnels collide, the pour step says to print the smaller funnel or pour through one at a time, not to fill every seat', () => {
+    const collide: Diagnostic = { code: 'funnel-collision', severity: 'warning', message: 'Funnels of 40 mm collide, as two pours are only 22.0 mm apart. A top diameter of 21 mm would fit.' };
+    const apart = exportReadme(input()).replace(/\r\n\s*/g, ' ');
+    expect(apart).toContain('Push a funnel into the seat of each pour opening.');
+    const close = exportReadme(input((i) => (i.diagnostics = [collide, ...i.diagnostics]))).replace(/\r\n\s*/g, ' ');
+    expect(close).not.toContain('Push a funnel into the seat of each pour opening.');
+    expect(close).toContain('The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.');
+    expect(close).toContain('A top diameter of 21 mm would fit.');
   });
 
   it('gives the thickness, the measured clearance, the silicone, the box, every warning, and that only a test pour confirms the estimates', () => {
@@ -318,7 +432,8 @@ describe('the export of jersey in Node', () => {
     expect(Math.abs(report.silicone.boresMl / OPENING_GOLDEN.jersey.boreMl - 1)).toBeLessThan(0.01);
     expect(report.silicone.sealedAirMl).toBe(0);
     expect(report.silicone.grams).toBeCloseTo(report.silicone.ml * 1.1, 9);
-    expect(Object.keys(report.timings)).toEqual(['import', 'field', 'tool', 'cover', 'base', 'clearance', 'files', 'fit-test', 'total']);
+    // The reports are part of the zip step, which is the one the timings leave out, so they have a line of their own.
+    expect(Object.keys(report.timings)).toEqual(['import', 'field', 'tool', 'cover', 'base', 'clearance', 'files', 'fit-test', 'reports', 'total']);
     expect(JSON.parse(text(files['project.json']))).toEqual(JSON.parse(JSON.stringify(projectFile(p.project(), EXAMPLE_FILES.jersey))));
     const readme = text(files['README.txt']);
     expect(readme).toContain('The sprue rule');

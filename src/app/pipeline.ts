@@ -1,4 +1,5 @@
 import { replicateOpenings, type OpeningPin } from '../core/analysis/placement';
+import { withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
 import type { SolidReport } from '../core/mesh/shells';
 import type { WeldedMesh } from '../core/mesh/weld';
@@ -10,7 +11,8 @@ import type { Diagnostic } from '../core/report/diagnostics';
 import type { ExportInputs, ExportMeta, ExportOutputs, ExportRequest } from '../workers/exportJob';
 import type { FieldWire, OrientedWire } from '../workers/fieldHost';
 import { DEFAULT_PLANE, PLAIN_IMPORT, samePlane, type FieldOutput, type FieldWanted, type ImportInput, type ParsedModel, type PlacementOutput, type PlaneChoice } from '../workers/fieldStages';
-import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type SolidJobMessage, type WallsJobMessage, type WorkerLike } from '../workers/protocol';
+import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type ReportsJobMessage, type SolidJobMessage, type WallsJobMessage, type WorkerLike } from '../workers/protocol';
+import type { ReportsOutputs } from '../workers/reportStages';
 import type { FootprintOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
 import type { WallCheck } from '../workers/wallCheck';
 import { Budgets } from './budgets';
@@ -42,6 +44,12 @@ interface FieldTarget extends Target {
   want: FieldWanted[];
 }
 
+/** S8 and S9 for the field and placement on screen. */
+interface ReportsTarget extends Target {
+  field: FieldOutput;
+  placement: PlacementOutput;
+}
+
 interface SolidTarget extends Target {
   want: SolidWanted[];
   /** The opening being dragged, with its copies where it is now and the copies of all the others. */
@@ -64,7 +72,7 @@ export interface PlacementShown extends PlacementOutput {
 
 export interface PipelineEvent {
   kind: 'applied' | 'rejected';
-  slot: 'parsed' | 'oriented' | 'import' | 'footprint' | 'field' | 'placement' | 'cover' | 'base' | 'funnel';
+  slot: 'parsed' | 'oriented' | 'import' | 'footprint' | 'field' | 'placement' | 'cover' | 'base' | 'funnel' | 'reports';
   rev: number;
   /** The result was older than the latest request when it arrived, so it shows with the badge. */
   stale: boolean;
@@ -87,6 +95,17 @@ export interface PipelineOptions {
    * field.worker of its own that any newer change terminates. G6 keeps that check off the coarse preview.
    */
   checkWalls?: boolean;
+  /**
+   * S8 and S9, the analyses and reports, in a field.worker of their own once the preview's field and
+   * placement are on screen, so they never hold up T1 or T2, and the export never waits for them.
+   */
+  reports?: boolean;
+}
+
+/** A 3D marker of the Show toggle: a pin at a point, and the line of a cut to it where there is one. */
+export interface Marker {
+  at: [number, number, number];
+  seam?: [[number, number, number], [number, number, number]];
 }
 
 /**
@@ -96,6 +115,8 @@ export interface PipelineOptions {
 export interface ShownDiagnostic extends Diagnostic {
   exportCell?: boolean;
   byExport?: boolean;
+  /** Places to mark beyond its own `at`, such as every cut hint of the demold verdict. */
+  markers?: Marker[];
 }
 
 /** The wall check: running for the current state, done for it, or neither. */
@@ -158,6 +179,9 @@ function cancelledError(): Error {
   return Object.assign(new Error('Export cancelled.'), { name: 'Cancelled' });
 }
 
+/** Rows main works out itself for the state on screen, from the parameters, the rim and the parts. */
+const MAIN_CODES = new Set(['bed-turn', 'bed-too-small', 'ridge-narrow', 'plastic-mass']);
+
 /** A diagnostic as core has it, without the card's marks, for the files of an export. */
 const plain = ({ code, severity, message }: Diagnostic): Diagnostic => ({ code, severity, message });
 
@@ -201,6 +225,8 @@ export class Pipeline {
   cover: Shown<NonNullable<SolidOutputs['S13']>> & { mold: string } | null = null;
   base: Shown<NonNullable<SolidOutputs['S15']>> & { mold: string } | null = null;
   funnel: Shown<PartMesh | null> | null = null;
+  /** S9 on screen, under its own key, which may lag what shows by a job. */
+  reports: Shown<GeometryReports> | null = null;
   diagnostics: ShownDiagnostic[] = [];
   /** What the pipeline itself has to say, such as a coarser cell after a crash. Kept until the next file. */
   private notes: Diagnostic[] = [];
@@ -215,10 +241,15 @@ export class Pipeline {
 
   private readonly fieldGate: JobGate<FieldTarget>;
   private readonly solidGate: JobGate<SolidTarget>;
+  private readonly reportsGate: JobGate<ReportsTarget> | null;
+  /** Why S9 could not be built for the state on screen, under its key. */
+  private reportsFailure: { key: string; message: string } | null = null;
+  /** In ms, per reports job, for the record: S8 only when it ran, S9 every time. */
+  readonly reportTimes = { S8: [] as number[], S9: [] as number[] };
   private readonly now: () => number;
   private readonly timers: Timers;
   private readonly listeners = new Set<() => void>();
-  private idleWaiters: (() => void)[] = [];
+  private idleWaiters: { resolve: () => void; reports: boolean }[] = [];
   private debounce: { handle: unknown; signature: string } | null = null;
   private heavySignature = '';
   private heavyChangedAt = 0;
@@ -236,6 +267,9 @@ export class Pipeline {
     const common = { budgets: this.budgets, now: this.now, timers: this.timers, log: (entry: LogEntry) => keep(this.log, entry) };
     this.fieldGate = new JobGate<FieldTarget>({ ...common, name: 'field', spawn: options.spawnField, derive: (t, c) => this.deriveField(t, c), onEvent: (e) => this.onField(e) });
     this.solidGate = new JobGate<SolidTarget>({ ...common, name: 'solid', spawn: options.spawnSolid, derive: (t, c) => this.deriveSolid(t, c), onEvent: (e) => this.onSolid(e) });
+    this.reportsGate = options.reports
+      ? new JobGate<ReportsTarget>({ ...common, name: 'reports', spawn: options.spawnField, derive: (t, c) => this.deriveReports(t, c), onEvent: (e) => this.onReports(e) })
+      : null;
   }
 
   // ----- what the user does -----
@@ -253,6 +287,8 @@ export class Pipeline {
     this.budgets.restartT1();
     this.notes = [];
     this.parsed = this.oriented = this.imported = this.footprint = this.field = this.placement = this.cover = this.base = this.funnel = null;
+    this.reports = null;
+    this.reportsFailure = null;
     this.displayProxy = null;
     this.walls = null;
     // Timings belong to the model they were taken on.
@@ -344,12 +380,21 @@ export class Pipeline {
     return () => this.listeners.delete(listener);
   }
 
-  /** Resolves once no job runs or waits and what shows is current, or has failed. */
+  /** Resolves once no job runs or waits and what shows is current, or has failed: the reports too. */
   idle(): Promise<void> {
+    return this.waitIdle(true);
+  }
+
+  private waitIdle(reports: boolean): Promise<void> {
     return new Promise((resolve) => {
-      this.idleWaiters.push(resolve);
+      this.idleWaiters.push({ resolve, reports });
       this.checkIdle();
     });
+  }
+
+  /** Why S9 failed for the state on screen, or null. */
+  reportsError(): string | null {
+    return this.reportsFailure !== null && this.reportsFailure.key === this.keys().S9 ? this.reportsFailure.message : null;
   }
 
   /** The keys of what the screen should show now. */
@@ -370,8 +415,9 @@ export class Pipeline {
   }
 
   /** Test hooks: a fault on the next job of a worker, or on the next export, and a recycle on demand. */
-  armFault(gate: 'field' | 'solid' | 'export', fault: Fault): void {
+  armFault(gate: 'field' | 'solid' | 'export' | 'reports', fault: Fault): void {
     if (gate === 'export') this.exportFault = fault;
+    else if (gate === 'reports') this.reportsGate?.armFault(fault);
     else (gate === 'field' ? this.fieldGate : this.solidGate).armFault(fault);
   }
 
@@ -412,6 +458,7 @@ export class Pipeline {
   dispose(): void {
     this.fieldGate.dispose();
     this.solidGate.dispose();
+    this.reportsGate?.dispose();
     this.endExportWorker();
     this.cancelWalls();
     if (this.debounce) this.timers.clear(this.debounce.handle);
@@ -471,7 +518,8 @@ export class Pipeline {
         const asked = this.file?.name;
         this.exportWait = () => stop(Object.assign(new Error(`A new model was loaded while the export of ${asked} waited for the preview, so nothing was saved. Export again for the model now loaded.`), { name: 'Replaced' }));
         try {
-          await Promise.race([this.idle(), ended]);
+          // The export builds its own reports, so it waits for the preview and not for them.
+          await Promise.race([this.waitIdle(false), ended]);
         } finally {
           this.exportWait = null;
         }
@@ -546,7 +594,8 @@ export class Pipeline {
     const outputs = this.currentExport();
     if (!outputs) return [];
     const shown = new Set(this.diagnostics.map((d) => d.code));
-    return outputs.diagnostics.filter((d) => d.severity !== 'info' && !shown.has(d.code)).map((d) => ({ ...d, exportCell: true, byExport: true }));
+    // Main works these out for the state on screen whatever the export said, so an old one would only mislead.
+    return outputs.diagnostics.filter((d) => d.severity !== 'info' && !shown.has(d.code) && !MAIN_CODES.has(d.code)).map((d) => ({ ...d, exportCell: true, byExport: true }));
   }
 
   /**
@@ -694,6 +743,7 @@ export class Pipeline {
       const keys = this.keys();
       this.requestField(keys);
       this.requestSolid(keys);
+      this.requestReports(keys);
     }
     this.notify();
     this.checkIdle();
@@ -775,6 +825,77 @@ export class Pipeline {
     }
     const target = this.target<SolidTarget>(keys, { want, drag, copies: ready && placement ? placement.copies : [], field: ready ? field : null }, ['solid', keys, want]);
     if (!this.failed.has(target.id)) this.solidGate.request(target);
+  }
+
+  /**
+   * S8 and S9 go only once the whole preview for these keys is on screen and the solid worker is idle:
+   * run beside the first T2 of a model, S8 slowed it by 60 to 100 ms in Chromium on this server. So a
+   * drag or a burst of changes asks for them once, at its end, and the newest request is all that runs.
+   */
+  private requestReports(keys: Record<StageId, string>): void {
+    const gate = this.reportsGate;
+    if (!gate) return;
+    const field = this.field?.key === keys.S6 && this.field.mold === keys.S10 ? this.field.value : null;
+    const placement = this.placement?.key === keys.S7 ? this.placement.value : null;
+    const previewDone = !this.isStale() && !this.solidGate.busy && this.debounce === null;
+    if (this.reports?.key === keys.S9 || !previewDone || !field || !placement || this.oriented?.key !== keys.S2 || !this.modelMesh()) {
+      gate.cancelPending();
+      return;
+    }
+    const target = this.target<ReportsTarget>(keys, { field, placement }, ['reports', keys.S8, keys.S9]);
+    if (!this.failed.has(target.id)) gate.request(target);
+  }
+
+  private deriveReports(target: ReportsTarget, cached: Partial<Record<StageId, string>>): { message: ReportsJobMessage; transfer: Transferable[] } {
+    const { keys, params } = target;
+    const { importInput, parsed, oriented } = target.source;
+    const source = importInput.mesh ?? parsed?.welded ?? null;
+    // The mesh only while the worker lacks S8, which is once per model and plane.
+    const mesh = cached.S8 !== keys.S8 && source ? { positions: source.positions.slice(), indices: source.indices.slice() } : null;
+    const values = target.field.field.values.slice();
+    const transfer: Transferable[] = [values.buffer];
+    if (mesh) transfer.push(mesh.positions.buffer, mesh.indices.buffer);
+    const { placement } = target.placement;
+    return {
+      message: {
+        t: 'reports',
+        id: 0,
+        keys,
+        params,
+        inputs: {
+          mesh,
+          transform: oriented!.oriented.transform,
+          field: { ...target.field.field, values },
+          raise: params.quality.tinTolPreview,
+          rim: target.field.rim,
+          tiles: target.field.mold.offsets.length,
+          ceiling: { leaves: placement.ceilingLeaves, uncovered: placement.uncovered },
+        },
+      },
+      transfer,
+    };
+  }
+
+  private onReports(event: GateEvent<ReportsTarget>): void {
+    const { target } = event;
+    if (event.kind === 'result') {
+      const outputs = event.message.outputs as ReportsOutputs;
+      const { timings } = event.message;
+      if (timings.S8 !== undefined) keep(this.reportTimes.S8, timings.S8);
+      if (timings.S9 !== undefined) keep(this.reportTimes.S9, timings.S9);
+      if (this.accept('reports', target, this.reports)) {
+        this.reports = { key: target.keys.S9, rev: target.rev, value: outputs.S9 };
+        if (this.reportsFailure?.key === target.keys.S9) this.reportsFailure = null;
+      }
+    } else if (event.kind === 'failed' || event.kind === 'crashed') {
+      // The reports say nothing the mold needs, so their failure is a note and never blocks an export.
+      if (target.modelKey === this.modelKey()) {
+        this.failed.add(target.id);
+        this.reportsFailure = { key: target.keys.S9, message: event.error.message };
+      }
+    }
+    if (event.kind !== 'stage') this.collectDiagnostics();
+    this.update();
   }
 
   private deriveField(target: FieldTarget, cached: Partial<Record<StageId, string>>): { message: FieldJobMessage; transfer: Transferable[] } {
@@ -963,8 +1084,15 @@ export class Pipeline {
     if (this.placement) all.push(...this.placement.value.placement.diagnostics);
     if (this.cover) all.push(...this.cover.value.diagnostics);
     if (this.base) all.push(...this.base.value.diagnostics);
+    if (this.reports) {
+      // The verdict's Show marks every place to cut, with the line of the cut.
+      const hints: Marker[] = this.reports.value.demold.hints.map((h) => ({ at: h.at, seam: h.seam }));
+      all.push(...this.reports.value.diagnostics.map((d) => (d.code === 'demold-verdict' && hints.length > 0 ? { ...d, markers: hints } : d)));
+    }
+    const reportsError = this.reportsError();
+    if (reportsError) all.push({ code: 'reports-failed', severity: 'warning', message: `The demold and air reports could not be worked out: ${reportsError}` });
     const seen = new Set<string>();
-    this.diagnostics = all.filter((d) => {
+    this.diagnostics = withoutDoubledVoids(all, this.reports?.value ?? null).filter((d) => {
       const key = `${d.code}|${d.message}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -1001,9 +1129,12 @@ export class Pipeline {
     if (this.idleWaiters.length === 0) return;
     const quiet = !this.fieldGate.busy && !this.solidGate.busy && this.debounce === null;
     if (!quiet || (this.isStale() && this.error === null && this.file !== null)) return;
-    const waiters = this.idleWaiters;
-    this.idleWaiters = [];
-    waiters.forEach((resolve) => resolve());
+    // The reports come after the preview: done, failed, or not wanted at all.
+    const reportsDone = !this.reportsGate || !this.file || this.error !== null || (!this.reportsGate.busy && (this.reports?.key === this.keys().S9 || this.reportsError() !== null));
+    const ready = this.idleWaiters.filter((w) => !w.reports || reportsDone);
+    if (ready.length === 0) return;
+    this.idleWaiters = this.idleWaiters.filter((w) => !ready.includes(w));
+    ready.forEach((w) => w.resolve());
   }
 
   private notify(): void {

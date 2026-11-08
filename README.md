@@ -24,6 +24,8 @@ Port 5173 serves the last build, so a server started before you updated has an o
 
 Export ZIP, at the foot of the sidebar, builds the mold at full detail, measures the silicone clearance on the finished parts, and saves a ZIP named after the model: the cover, the base, the funnel, your model turned onto its base face (in glue mode), a README.txt on printing, pouring and demolding, and report.json and project.json with every number and setting. The buttons under it save the cover, the base or the funnel alone, or the fit-test pieces with your clearances; an option puts those pieces in the ZIP as well. A bar shows each step, with Cancel. After an export the status strip shows the clearance it measured, for as long as nothing changes the mold.
 
+The Demold report, after Grid, estimates from the model's shape how the silicone comes off it: pulled out while the silicone stays in the cover, out of the cover first so it can stretch, or cut, with the places it holds and where to cut each one, which Show marks in the view. It lists where air may stay, such as a pocket under the model that no vent in the top reaches. Cover & joint says how much tape holds the cover down against the liquid silicone, and Diagnostics warns of a part larger than the bed and estimates the plastic. README.txt in the ZIP carries all of it.
+
 `pipeline.html`, `diag.html` and `bench.html` are linked from the Advanced section: a bare page for the worker pipeline, the browser check with the fit-test download, and the benchmark.
 
 ## Test it

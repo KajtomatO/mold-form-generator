@@ -104,7 +104,7 @@ export const PARAM_SCHEMA = {
   vents: {
     enabled: flag('Vents', true),
     diameter: num('Vent diameter', 2.5, { min: 2, max: 6 }),
-    persistence: auto('Vent persistence', 't / 2'),
+    persistence: auto('Smallest peak to vent', 't / 2'),
   },
   seat: {
     enabled: flag('Funnel seat', true),
@@ -145,7 +145,7 @@ export const PARAM_SCHEMA = {
   },
   reports: {
     minVolumeMl: num('Smallest reported volume', 0.05, { unit: 'ml' }),
-    undersidePersistence: num('Underside persistence', 0.3),
+    undersidePersistence: num('Smallest air pocket depth', 0.3),
   },
 } as const satisfies Record<string, Record<string, ParamDef>>;
 

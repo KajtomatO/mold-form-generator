@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Field } from '../core/field/grid';
 import { HeightPreview, type HeightMode } from './heightPreview';
 import { applyStyle, DEFAULT_LAYERS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
-import { boxMesh, DiagnosticMarkers, OpeningMarkers, placeBox, type BoxSpan, type OpeningMarker } from './overlays';
+import { boxMesh, DiagnosticMarkers, OpeningMarkers, placeBox, type BoxSpan, type MarkerSpec, type OpeningMarker } from './overlays';
 import { Picker } from './picking';
 
 /** A part as the workers send it: positions, 3 per vertex, and triangles. */
@@ -273,8 +273,8 @@ export class PreviewScene {
     this.requestRender();
   }
 
-  setDiagnosticMarkers(points: [number, number, number][], size: number): void {
-    this.diagnosticMarkers.set(points, size);
+  setDiagnosticMarkers(marks: MarkerSpec[], size: number): void {
+    this.diagnosticMarkers.set(marks, size);
     this.requestRender();
   }
 

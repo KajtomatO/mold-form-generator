@@ -1,8 +1,9 @@
+import { analyseIntervals, type IntervalReport } from '../analysis/intervals';
 import type { SolidReport } from '../mesh/shells';
 import type { WeldedMesh } from '../mesh/weld';
 import type { Field, FieldPlan, FieldSettings } from './grid';
 import { clipToPlane } from './raster';
-import { exteriorMesh, sealedDomains, type SealedDomain } from './sealed';
+import { exteriorMesh, type SealedDomain } from './sealed';
 
 export interface SiliconeInputs {
   /** Enclosed by the model's outer surface above the plane, voids included, so a void is never silicone. */
@@ -82,13 +83,16 @@ export interface MoldSilicone extends SiliconeVolume {
 /**
  * The silicone of a built field, as the plan defines it. Everything that makes it up is chosen here,
  * so the tests and the pipeline measure the same thing: the exterior mesh, so a void is not air, the
- * model above the plane only, because the raster clips the rest, and the sealed air above the filter.
- * M1's overlap is for the whole model, so bodies overlapping below the plane would take off too much.
+ * model above the plane only, because the raster clips the rest, and S8's sealed air above the filter,
+ * leaving out a void inside the model, which its volume already holds. M1's overlap is for the whole
+ * model, so bodies overlapping below the plane would take off too much. Pass S8's report of the whole
+ * mesh if there is one already, as the export has.
  */
-export function moldSilicone(mesh: WeldedMesh, plan: FieldPlan, field: Field, report: Pick<SolidReport, 'overlapVolume'>, settings: Pick<FieldSettings, 'analysisCell' | 'minVolumeMl'>): MoldSilicone {
+export function moldSilicone(mesh: WeldedMesh, plan: FieldPlan, field: Field, report: Pick<SolidReport, 'overlapVolume'>, settings: Pick<FieldSettings, 'analysisCell' | 'minVolumeMl'>, s8?: Pick<IntervalReport, 'sealed'>): MoldSilicone {
   const exterior = exteriorMesh(mesh);
   const modelVolume = volumeAbovePlane(exterior) - report.overlapVolume;
-  const domains = sealedDomains(exterior, settings.analysisCell, settings.minVolumeMl * 1000);
+  const intervals = s8 ?? analyseIntervals(mesh, settings.analysisCell);
+  const domains = intervals.sealed.filter((domain) => !domain.inModel && domain.volume >= settings.minVolumeMl * 1000);
   const sealedAir = domains.reduce((sum, domain) => sum + domain.volume, 0);
   const volume = siliconeVolume(field, { exteriorVolume: modelVolume, tiles: plan.nx * plan.ny, sealedAir, raise: plan.raise });
   return { ...volume, modelVolume, sealedAir, domains };

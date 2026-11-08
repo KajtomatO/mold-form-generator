@@ -12,7 +12,7 @@ import { coplanarTriangles } from '../src/view/picking';
 import { orientedExample } from '../test/fixtures/fieldRuns';
 import { exampleBytes, EXAMPLE_FILES, type ExampleId } from '../test/fixtures/loadExamples';
 import { SOLID_GOLDEN } from '../test/regression/golden';
-import { app, canDraw, canvasColour, canvasPixels, checkLayout, dropAndWait, dropExample, hideParts, hooks, idle, openApp, tealPixels, type PageWatch } from './appHarness';
+import { app, canDraw, canvasColour, canvasPatch, canvasPixels, checkLayout, dropAndWait, dropExample, hideParts, hooks, idle, openApp, tealPixels, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
 import { inNode, nodeHash } from './nodeRuns';
 
@@ -83,7 +83,9 @@ test.describe('the app on index.html', () => {
     test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
     watch = await openApp(page);
   });
-  test.afterEach(() => {
+  test.afterEach(({}, info) => {
+    // A test that beforeEach skipped, as Firefox without a display does, never opened the app.
+    if (info.status === 'skipped') return;
     expect(watch.errors).toEqual([]);
     expect(watch.foreign).toEqual([]);
   });
@@ -532,6 +534,108 @@ test.describe('the app on index.html', () => {
     expect(await app(page, (a) => a.store.pipeline.oriented!.value.chosen.offset)).toBe(offered.offset);
     expect(await hooks(page, (h) => h.diagnostics().map((d) => d.code))).not.toContain('upper-level');
     expect(await hooks(page, (h) => h.geometryHash())).toEqual(await nodeHash('vis35', (p) => p.setPlane({ rank: 0, upper: offered.offset })));
+    // M7: its cover, about 230 mm long, and its base do not fit the default 220 mm bed straight, only turned,
+    // and Bed X says so in Advanced. On the upper level the box is 0.41 mm lower, and no shorter.
+    const bed = page.locator('.diagnostic[data-code="bed-turn"]');
+    await expect(bed).toHaveCount(2);
+    await expect(bed.first()).toContainText('The cover is 63.6 x 230.6 x 142.7 mm as it prints, which fits the 220.0 x 220.0 x 250.0 mm bed set under Advanced, Printer, only turned about 45 degrees on it');
+    await page.locator('.advanced > summary').click();
+    await expect(row(page, 'print.bedX').locator('.note.warning')).toHaveCount(2);
+    await expect(page.getByTestId('group-note-print')).toContainText('checked against the cover and base');
+  });
+
+  test('@smoke the reports run in a worker of their own: T1 and T2 land while they are held up', async ({ page }) => {
+    await dropAndWait(page, EXAMPLE_FILES.jersey);
+    // The next reports job spins for 6 s in its worker, as a slow S8 would.
+    const dispatched = (): Promise<number> => hooks(page, (h) => h.jobLog().filter((e) => e.gate === 'reports' && e.event === 'dispatch').length);
+    const before = await dispatched();
+    await hooks(page, (h) => {
+      h.armFault('reports', { kind: 'delay', ms: 6000 });
+      h.setParam('silicone.t', 3.5);
+    });
+    await expect.poll(dispatched).toBe(before + 1);
+    // With that job running, another change: its field and solids arrive while the reports are still held.
+    await hooks(page, (h) => h.setParam('silicone.t', 4));
+    await expect.poll(() => hooks(page, (h) => h.status().stale), { timeout: 5000 }).toBe(false);
+    expect((await hooks(page, (h) => h.reports()))!.current).toBe(false);
+    const t1 = await hooks(page, (h) => h.timing().t1.at(-1)!);
+    expect(t1).toBeLessThan(150);
+    // Then the reports catch up.
+    await idle(page);
+    expect((await hooks(page, (h) => h.reports()))!.current).toBe(true);
+  });
+
+  test('@smoke demold: wolf reads cut-required as an estimate, a hint\'s Show marks it in the view, the tape is counted in strips, and the layout holds', async ({ page }) => {
+    await dropAndWait(page, EXAMPLE_FILES.wolf);
+    // idle() waits for the reports too, which follow the preview in a worker of their own.
+    const reports = (await hooks(page, (h) => h.reports()))!;
+    expect(reports.current).toBe(true);
+    const node = await inNode('wolf', () => {}, (p) => p.reports!.value, { reports: true });
+    expect(reports.value).toEqual(node);
+    const verdict = page.getByTestId('demold-verdict');
+    await expect(verdict).toHaveAttribute('data-verdict', 'cut-required');
+    await expect(verdict).toContainText('Cutting needed');
+    await expect(verdict.locator('.estimate')).toHaveText('estimate');
+    await expect(page.locator('[data-section="demold"]')).toContainText('Expect to cut the silicone to free the model');
+    // The steps follow the verdict: out of the cover with the model in it, and cut at the places marked Cut.
+    await expect(page.getByTestId('demold-steps')).toContainText('slide the silicone out of the cover with the model still in it');
+    await expect(page.getByTestId('demold-steps')).toContainText('Cut the silicone with a sharp blade at the places to cut');
+    await expect(page.getByTestId('air-traps')).toContainText('All 2 peaks of the cover’s ceiling have an opening.');
+    await expect(page.locator('[data-section="demold"]')).toContainText('This assumes the silicone rises slowly and evenly');
+    // The Demold report is the 7th section, after Grid and before Advanced.
+    expect(await page.locator('[data-testid="sections"] > [data-section]').evaluateAll((all) => all.map((el) => el.getAttribute('data-section')))).toEqual(['model', 'base', 'silicone', 'cover', 'pour', 'grid', 'demold', 'advanced']);
+    // The verdict row in Diagnostics, and its Show marks every hint: a pin's head and stem and a seam's bar each.
+    const verdictRow = page.locator('.diagnostic[data-code="demold-verdict"]');
+    await expect(verdictRow).toContainText('Demold estimate: the silicone will need cutting');
+    expect(reports.value.demold.hints).toHaveLength(16);
+    await verdictRow.getByRole('button', { name: 'Show' }).click();
+    await expect.poll(() => app(page, (a) => a.scene.diagnosticMarkers.group.children.length)).toBe(3 * 16);
+    await verdictRow.getByRole('button', { name: 'Show' }).click();
+    await expect.poll(() => app(page, (a) => a.scene.diagnosticMarkers.group.children.length)).toBe(0);
+
+    // The loop lock is the first hint, marked Cut. Its Show puts a pin and the cut's line where the view drew nothing of them.
+    const lock = page.locator('.cut-hint[data-reason="loop-lock"]');
+    await expect(lock).toHaveCount(1);
+    await expect(page.locator('.cut-hint').first()).toHaveAttribute('data-reason', 'loop-lock');
+    await expect(lock.locator('.tag.cut')).toHaveText('Cut');
+    await expect(lock).toContainText('in 3 separate places joined above them');
+    const hint = reports.value.demold.hints.find((h) => h.reason === 'loop-lock')!;
+    const spot = await hooks(page, (h, at: number[]) => h.worldToScreen(at as [number, number, number]), hint.at);
+    expect(spot.visible).toBe(true);
+    const before = await canvasPatch(page, spot, 3);
+    await lock.getByRole('button', { name: 'Show' }).click();
+    await expect(lock.getByRole('button', { name: 'Show' })).toHaveAttribute('aria-pressed', 'true');
+    // A pin's head and stem, and the seam's bar.
+    await expect.poll(() => app(page, (a) => a.scene.diagnosticMarkers.group.children.length)).toBe(3);
+    const head = await app(page, (a) => a.scene.diagnosticMarkers.group.children[0].position.toArray());
+    expect([head[0], head[1]]).toEqual([hint.at[0], hint.at[1]]);
+    expect(head[2]).toBeGreaterThan(hint.at[2]);
+    const after = await canvasPatch(page, spot, 3);
+    expect(after).not.toEqual(before);
+    // In the marker's orange, at the hint itself.
+    const [r, g, b] = await canvasColour(page, spot);
+    expect(r).toBeGreaterThan(200);
+    expect(g).toBeLessThan(160);
+    expect(b).toBeLessThan(90);
+    await lock.getByRole('button', { name: 'Show' }).click();
+    await expect.poll(() => app(page, (a) => a.scene.diagnosticMarkers.group.children.length)).toBe(0);
+    await expect.poll(async () => canvasPatch(page, spot, 3)).toEqual(before);
+
+    // Cover & joint: twice wolf's lift of 11 N, which 3 strips of the Tape strip setting hold, and 2 each way
+    // across its 121 x 142 mm box, so the tape presses the seal all round.
+    await expect(page.getByTestId('clamp-advice')).toContainText('Tape: hold 22 N with at least 4 strips at 10 N each, 2 front to back and 2 left to right, spread round the joint.');
+    await hooks(page, async (h) => {
+      h.setParam('print.tapeStrip', 5);
+      await h.idle();
+    });
+    await expect(page.getByTestId('clamp-advice')).toContainText('at least 5 strips at 5 N each');
+
+    // The M6 layout rules still hold with the report in the sidebar, at both sizes, scrolled to it.
+    for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
+      await page.setViewportSize(size);
+      await page.locator('[data-section="demold"]').scrollIntoViewIfNeeded();
+      await checkLayout(page, watch);
+    }
   });
 
   test('@smoke wolf: the footprint islands it drops are listed in Diagnostics, and its long vent has a place to show', async ({ page }) => {
@@ -757,8 +861,13 @@ test.describe('all seven examples, dropped into the app', () => {
       test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
       const watch = await openApp(page);
       await dropAndWait(page, EXAMPLE_FILES[id]);
-      const node = await inNode(id, () => {}, (p) => ({ hash: p.geometryHash(), ml: previewSilicone(p)!.ml }));
+      const node = await inNode(id, () => {}, (p) => ({ hash: p.geometryHash(), ml: previewSilicone(p)!.ml, reports: p.reports!.value }), { reports: true });
       await checkStatus(page, id, node.ml);
+      // M7: the reports are Node's, and their times go in the record.
+      expect((await hooks(page, (h) => h.reports()))!.value).toEqual(node.reports);
+      await expect(page.getByTestId('demold-verdict')).toHaveAttribute('data-verdict', node.reports.demold.verdict);
+      const times = await hooks(page, (h) => h.reportTimes());
+      console.log(`${info.project.name} ${id} reports: S8 ${Math.round(times.S8.at(-1)!)} ms, S9 ${Math.round(times.S9.at(-1)!)} ms, verdict ${node.reports.demold.verdict}`);
       await expect(page.locator('.candidate').first()).toHaveAttribute('aria-selected', 'true');
       expect(await app(page, (a) => a.store.pipeline.oriented!.value.chosen.normal)).toEqual([0, 0, -1]);
       expect(await hooks(page, (h) => h.geometryHash())).toEqual(node.hash);
@@ -788,6 +897,15 @@ test.describe('all seven examples, dropped into the app', () => {
     expect(result.minWall!).toBeCloseTo(2.5, 2);
     await expect(page.locator('.diagnostic[data-code="tile-walls"]')).toContainText('The thinnest wall between models is 2.50 mm');
     expect(times).toHaveLength(1);
+    // M7: the reports on the grid, timed, and the box over the bed at 393.2 x 290.9 mm.
+    const reported = await hooks(page, (h) => h.reportTimes());
+    console.log(`${info.project.name} x8 3 x 3 reports: S8 ${Math.round(reported.S8.at(-1)!)} ms, S9 ${Math.round(reported.S9.at(-1)!)} ms`);
+    await expect(page.getByTestId('demold-verdict')).toHaveAttribute('data-verdict', 'plausible');
+    await expect(page.locator('[data-section="demold"]')).toContainText('Each of the 9 copies is the same.');
+    await expect(page.locator('.diagnostic[data-code="bed-too-small"]').first()).toContainText('The cover is 393.2 x 290.9');
+    // The grid is what makes it too big, so Columns and Rows say so too.
+    await expect(row(page, 'grid.nx').locator('.note.warning')).toHaveCount(2);
+    await expect(row(page, 'grid.nx').locator('.note.warning').first()).toContainText('One copy alone would fit, so use fewer copies under Grid');
     expect(watch.errors).toEqual([]);
   });
 });

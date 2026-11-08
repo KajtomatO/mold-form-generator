@@ -11,6 +11,7 @@ import { weld } from '../core/mesh/weld';
 import { setParamValue as setPath, type ParamPath } from './stages';
 import type { Project, WallStatus } from './pipeline';
 import type { ExportReport, ExportRequest } from '../workers/exportJob';
+import type { GeometryReports } from '../core/analysis/reports';
 
 export interface ExportSummary {
   files: Record<string, { bytes: number; hash: string; meshHash: string }>;
@@ -46,7 +47,7 @@ export interface TestHooks {
   drag(id: string, x: number, y: number): void;
   drop(id: string, x: number, y: number): DropResult | null;
   /** A fault on the next job of a worker, or on the next export, which a delay `at` a step holds there. */
-  armFault(gate: 'field' | 'solid' | 'export', fault: Fault): void;
+  armFault(gate: 'field' | 'solid' | 'export' | 'reports', fault: Fault): void;
   recycleSolid(): void;
   solidCached(): Record<string, string>;
   heap(): Promise<{ capacity: number | null; used: number | null; held: number }>;
@@ -69,6 +70,9 @@ export interface TestHooks {
   exporting(): { active: boolean; worker: boolean };
   /** Every solid worker the page spawned, in order: whether it was terminated, and what it said after. */
   solidWorkers(): WorkerRecord[];
+  /** S9 on screen, with whether it is for the state on screen, and how long S8 and S9 took. */
+  reports(): { current: boolean; value: GeometryReports } | null;
+  reportTimes(): Pipeline['reportTimes'];
 }
 
 /** One worker as a test sees it from outside the pipeline, which only a real terminate() can end. */
@@ -119,7 +123,7 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     async freshHash() {
       const snapshot = pipeline.snapshot();
       if (!snapshot) throw new Error('Nothing is loaded.');
-      const fresh = new Pipeline({ ...options, frozen: true, checkWalls: false });
+      const fresh = new Pipeline({ ...options, frozen: true, checkWalls: false, reports: false });
       try {
         fresh.restore(snapshot);
         await fresh.idle();
@@ -181,6 +185,8 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     },
     exporting: () => ({ active: pipeline.exporting, worker: pipeline.exportWorkerAlive }),
     solidWorkers: () => solidWorkers.map((record) => ({ ...record })),
+    reports: () => (pipeline.reports ? { current: pipeline.reports.key === pipeline.keys().S9, value: pipeline.reports.value } : null),
+    reportTimes: () => pipeline.reportTimes,
   };
   (window as unknown as { __pipeline: TestHooks }).__pipeline = hooks;
   return hooks;

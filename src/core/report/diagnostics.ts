@@ -6,4 +6,8 @@ export interface Diagnostic {
   severity: Severity;
   /** One sentence, shown to the user as written. */
   message: string;
+  /** Where it is in mold coordinates, on the first tile, for the Show toggle's marker. Most name no place. */
+  at?: [number, number, number];
+  /** Parameter paths of other controls it shows under, besides the one its code belongs to. */
+  also?: string[];
 }

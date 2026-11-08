@@ -7,7 +7,8 @@ import { deriveRim, moldBounds, type Rim } from '../../src/core/parts/rim';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, type ExampleId } from '../fixtures/loadExamples';
-import { OPENING_GOLDEN, SOLID_GOLDEN } from '../regression/golden';
+import type { GeometryReports } from '../../src/core/analysis/reports';
+import { OPENING_GOLDEN, REPORT_GOLDEN, SOLID_GOLDEN } from '../regression/golden';
 
 /**
  * What the sidebar and status strip show, read off the pipeline. These are the M6 figures: the preview's
@@ -46,14 +47,15 @@ describe('the box and the model size', () => {
 
 describe('the preview\'s silicone figure', () => {
   // One pipeline at a time, each freed once read: seven Manifold heaps at once would not be kind to the server.
-  const read = new Map<ExampleId, { silicone: ReturnType<typeof previewSilicone>; rim: Rim }>();
+  // With the reports on, as the app runs, so the figure takes off S8's sealed air.
+  const read = new Map<ExampleId, { silicone: ReturnType<typeof previewSilicone>; rim: Rim; sealedAir: number; reports: GeometryReports; current: boolean }>();
   beforeAll(async () => {
     for (const id of EXAMPLE_IDS) {
-      const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+      const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true, reports: true });
       try {
         p.load(exampleBytes(id), EXAMPLE_FILES[id]);
         await p.idle();
-        read.set(id, { silicone: previewSilicone(p), rim: p.field!.value.rim });
+        read.set(id, { silicone: previewSilicone(p), rim: p.field!.value.rim, sealedAir: p.reports!.value.air.sealedAir, reports: p.reports!.value, current: p.reports!.key === p.keys().S9 });
       } finally {
         p.dispose();
       }
@@ -62,11 +64,36 @@ describe('the preview\'s silicone figure', () => {
 
   it.each(EXAMPLE_IDS)('%s reads as recorded at M6, and near M3\'s solids with the bores', (id) => {
     const { ml, grams } = read.get(id)!.silicone!;
+    // M7 takes off sealed air, and none of the seven seals any past the filter: the barrel's void is in
+    // the model's volume already. So the M6 figures stand.
+    expect(read.get(id)!.sealedAir).toBe(0);
     within(ml, PREVIEW_ML[id], 0.001);
     // 3%: the preview runs at its own cell (0.5 mm here, against 0.125) and TIN raise (0.1 against 0.05).
     // The barrel reads 2.5% over, the most of the seven; at the export's cell and raise it is 0.13% over.
     within(ml, solidMl(id), 0.03);
     expect(grams).toBeCloseTo(ml * defaultParams().silicone.density, 9);
+  });
+
+  // M7's goldens through the app's own path, S9 in its worker on the preview, as the Demold report shows them.
+  it.each(EXAMPLE_IDS)('%s: the reports on screen are M7\'s goldens', (id) => {
+    const { reports, current } = read.get(id)!;
+    const golden = REPORT_GOLDEN[id];
+    const ml = (mm3: number): number => mm3 / 1000;
+    const near = (value: number, expected: number, what: string): void => {
+      if (expected === 0) expect(value, what).toBe(0);
+      else expect(Math.abs(value / expected - 1), `${what}: ${value} against ${expected}`).toBeLessThanOrEqual(0.05);
+    };
+    expect(current).toBe(true);
+    expect(reports.demold.verdict).toBe(golden.verdict);
+    expect(reports.demold.hints).toHaveLength(golden.hints);
+    expect(reports.demold.bodies.map((b) => b.footprints)).toEqual(golden.footprints);
+    near(ml(reports.demold.bodies.reduce((sum, b) => sum + b.underPlug, 0)), golden.underPlugMl, 'under-plug');
+    near(ml(reports.demold.bodies.reduce((sum, b) => sum + b.sandwiched, 0)), golden.sandwichedMl, 'sandwiched');
+    expect(reports.air.underside.map((p) => Number(ml(p.volume).toFixed(2)))).toEqual(golden.undersideMl.map((v) => Number(v.toFixed(2))));
+    expect(reports.air.sealed.map((d) => d.inModel)).toEqual(golden.sealed.map((d) => d.inModel));
+    reports.air.sealed.forEach((d, k) => near(ml(d.volume), golden.sealed[k].ml, 'sealed'));
+    // Every hint the app shows has the seam the view draws, from the cavity's edge.
+    for (const hint of reports.demold.hints) expect(Math.hypot(hint.seam[0][0] - hint.at[0], hint.seam[0][1] - hint.at[1]), hint.id).toBeGreaterThan(0);
   });
 
   it('at the export\'s cell and raise, the same sum matches M3\'s solids within 0.5%', async () => {

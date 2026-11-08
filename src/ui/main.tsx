@@ -17,6 +17,8 @@ const options: PipelineOptions = {
   spawnSolid: test ? solidWorkers.spawn : spawnSolid,
   frozen: test,
   checkWalls: true,
+  // ?reports=0 leaves them out, so a measurement can tell what they cost T1 and T2.
+  reports: query.get('reports') !== '0',
 };
 const pipeline = new Pipeline(options);
 const store = new Store(pipeline);

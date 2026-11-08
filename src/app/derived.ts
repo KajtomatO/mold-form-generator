@@ -5,8 +5,10 @@ import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
 import type { Params } from '../core/params/schema';
 import type { Rim } from '../core/parts/rim';
+import { GRAVITY, type ClampAdvice } from '../core/report/clamp';
 import type { Diagnostic } from '../core/report/diagnostics';
-import type { Pipeline, ShownDiagnostic } from './pipeline';
+import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
+import type { Marker, Pipeline, ShownDiagnostic } from './pipeline';
 import { paramValue, type ParamPath } from './stages';
 
 /** Values the sidebar and status strip show, read off what the pipeline has on screen. Pure: no DOM. */
@@ -22,15 +24,16 @@ export function modelSize(bounds: Bounds): [number, number, number] {
 
 /**
  * The plan's silicone volume on the preview field: the integral of H with the preview's TIN raise,
- * less the model above the plane per tile, plus the silicone in the bores. Sealed air comes with
- * M7's reports, so a model that traps air under it reads a little high here.
+ * less the model above the plane per tile, less the sealed air S8 finds, plus the silicone in the
+ * bores. The sealed air comes with the reports, which follow the preview by a job.
  */
 export function previewSilicone(pipeline: Pipeline): { ml: number; grams: number } | null {
   const field = pipeline.field?.value, oriented = pipeline.oriented?.value;
   if (!field || !oriented) return null;
   const overlap = pipeline.imported?.value.overlapVolume ?? 0;
   const raise = pipeline.params.quality.tinTolPreview;
-  const volume = siliconeVolume(field.field, { exteriorVolume: oriented.modelVolume - overlap, tiles: field.mold.offsets.length, sealedAir: 0, raise });
+  const sealedAir = pipeline.reports?.value.air.sealedAir ?? 0;
+  const volume = siliconeVolume(field.field, { exteriorVolume: oriented.modelVolume - overlap, tiles: field.mold.offsets.length, sealedAir, raise });
   const bores = pipeline.placement ? boreSilicone(pipeline.placement.value.copies, field.field, field.rim.Zt) : 0;
   const ml = volume.ml + bores / 1000;
   return { ml, grams: ml * pipeline.params.silicone.density };
@@ -105,6 +108,11 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'thin-tile-wall': 'grid.spacing',
   'pour-shortfall': 'pour.perModel',
   'funnel-collision': 'funnel.topDiameter',
+  // printabilityDiagnostics, worked out on main
+  'bed-turn': 'print.bedX',
+  'bed-too-small': 'print.bedX',
+  'ridge-narrow': 'joint.ridgeWidth',
+  'reports-failed': 'quality.analysisCell',
   // siliconeAdvice below
   'silicone-thin': 'silicone.t',
   'silicone-tall': 'silicone.t',
@@ -122,13 +130,24 @@ export function siliconeAdvice(params: Params, rim: Rim | null): Diagnostic[] {
 const RANK = { error: 0, warning: 1, info: 2 } as const;
 
 /**
- * Everything the Diagnostics card lists: the pipeline's, its error, the advice on t, and what the last
- * export found while its geometry is current, problems first.
+ * The plan's printability checks for the state on screen, from S10's rim alone: the parts against the
+ * bed and the ridge against the nozzle. Arithmetic, so they show with the first field and need no report.
+ */
+export function printabilityOnScreen(pipeline: Pipeline): Diagnostic[] {
+  const field = pipeline.field?.value, oriented = pipeline.oriented?.value;
+  if (!field || !oriented) return [];
+  return printabilityDiagnostics(pipeline.params, field.rim, { offsets: field.mold.offsets, modelTop: oriented.bounds.max[2] });
+}
+
+/**
+ * Everything the Diagnostics card lists: the pipeline's, its error, the advice on t, the printability
+ * checks, and what the last export found while its geometry is current, problems first.
  */
 export function allDiagnostics(pipeline: Pipeline): ShownDiagnostic[] {
   const status = pipeline.status();
   const error: ShownDiagnostic[] = status.error ? [{ code: 'pipeline-error', severity: 'error', message: status.error }] : [];
-  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.params, pipeline.field?.value.rim ?? null), ...pipeline.exportNotes()];
+  const plastic = plasticOnScreen(pipeline);
+  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.params, pipeline.field?.value.rim ?? null), ...printabilityOnScreen(pipeline), ...(plastic ? [plasticDiagnostic(plastic, pipeline.params)] : []), ...pipeline.exportNotes()];
   return all.sort((a, b) => RANK[a.severity] - RANK[b.severity]);
 }
 
@@ -148,9 +167,67 @@ const AT = /\((-?\d+(?:\.\d+)?), (-?\d+(?:\.\d+)?)\)/;
 
 /** Where a diagnostic points, on the flat top of the first tile, or null if it names no place. */
 export function diagnosticPoint(diagnostic: Diagnostic, top: number): [number, number, number] | null {
+  if (diagnostic.at) return diagnostic.at;
   if (!LOCATED.has(diagnostic.code)) return null;
   const match = AT.exec(diagnostic.message);
   return match ? [Number(match[1]), Number(match[2]), top] : null;
+}
+
+/** What a diagnostic's Show toggle marks: its own place, or every place it stands for, such as the cut hints. */
+export function diagnosticMarkers(diagnostic: ShownDiagnostic, top: number): Marker[] {
+  if (diagnostic.markers && diagnostic.markers.length > 0) return diagnostic.markers;
+  const point = diagnosticPoint(diagnostic, top);
+  return point ? [{ at: point }] : [];
+}
+
+/** The volume and surface of a part's mesh, worked out once per mesh, as a rebuild sends a new one. */
+const amounts = new WeakMap<object, { volume: number; area: number }>();
+function meshAmount(mesh: { positions: Float32Array; indices: Uint32Array }): { volume: number; area: number } {
+  let known = amounts.get(mesh);
+  if (known) return known;
+  const { positions: p, indices } = mesh;
+  let volume = 0, area = 0;
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3;
+    const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    area += Math.hypot(nx, ny, nz) / 2;
+    volume += (p[a] * nx + p[a + 1] * ny + p[a + 2] * nz) / 6;
+  }
+  known = { volume, area };
+  amounts.set(mesh, known);
+  return known;
+}
+
+/**
+ * The plan's plastic estimate from the parts on screen: the cover, the base and a funnel per pour. Null
+ * until T2 has built the cover and base for the rim on screen, as their volumes are what it reads.
+ */
+export function plasticOnScreen(pipeline: Pipeline): PlasticEstimate | null {
+  const { cover, base, funnel, field, placement } = pipeline;
+  if (!cover || !base || !field || cover.mold !== field.mold || base.mold !== field.mold) return null;
+  const parts: PartAmount[] = [{ ...meshAmount(cover.value), count: 1 }, { ...meshAmount(base.value), count: 1 }];
+  const pours = placement ? placement.value.copies.filter((c) => c.kind === 'pour').length : 0;
+  if (funnel?.value && pours > 0) parts.push({ ...meshAmount(funnel.value), count: pours });
+  return plasticEstimate(parts, pipeline.params);
+}
+
+export interface ClampFigure extends ClampAdvice {
+  /** The silicone's push on the cover, in N, at the level it was worked out for. */
+  liftN: number;
+  level: number;
+  /** The cover's own weight as printed, in N, or null until its solid is built. */
+  coverWeightN: number | null;
+}
+
+/** The plan's clamp advice for Cover & joint, with the lift it answers and the cover's weight beside it. */
+export function clampFigure(pipeline: Pipeline): ClampFigure | null {
+  const reports = pipeline.reports?.value;
+  if (!reports) return null;
+  const { cover, field } = pipeline;
+  const own = cover && field && cover.mold === field.mold ? plasticEstimate([{ ...meshAmount(cover.value), count: 1 }], pipeline.params) : null;
+  return { ...reports.clamp, liftN: reports.lift.forceN, level: reports.lift.level, coverWeightN: own ? (own.printed / 1000) * GRAVITY : null };
 }
 
 /** The radius an opening shows at the top: its seat's for a pour, its mouth's for a vent. */

@@ -265,3 +265,37 @@ export const OPENING_GOLDEN: Record<ExampleId, OpeningGolden> = {
   barrel: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 5.8, boreMl: 0.206, cover: 74644 },
   wolf: { bodies: 1, cavities: 1, leaves: 2, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 147.3, boreMl: 1.049, cover: 2435148 },
 };
+
+/**
+ * M7: S8 and the demold report at defaults, analysis cell 0.25, smallest reported volume 0.05 ml,
+ * smallest island 5 mm2, underside persistence 0.3 mm. Volumes in ml. `footprints` counts the patches
+ * each body stands on past the island filter, so 2 or more is a loop lock; patches the plate's sealed
+ * air joins are one, as Benchy's lettering joins its hull's two. `looped` counts sandwiched bodies past
+ * the filter that hold the model in a loop: 2 or more mouths, or 2 or more walls, as round Benchy's cabin
+ * posts. `raw` is S8 before any filter, which shows the tiny hits the reports leave out. Frozen at M7; a
+ * change over 5% fails until reviewed.
+ */
+export interface ReportGolden {
+  verdict: 'plausible' | 'jacket-out' | 'cut-required';
+  bodies: number;
+  footprints: number[];
+  underPlugMl: number;
+  sandwichedMl: number;
+  hints: number;
+  looped: number;
+  /** Air pockets under the model past both filters. */
+  undersideMl: number[];
+  /** Sealed space past the volume filter, and whether it is a void of the model itself. */
+  sealed: { ml: number; inModel: boolean }[];
+  raw: { pockets: number; sealed: number };
+}
+
+export const REPORT_GOLDEN: Record<ExampleId, ReportGolden> = {
+  benchy: { verdict: 'cut-required', bodies: 1, footprints: [1], underPlugMl: 6.942, sandwichedMl: 8.48, hints: 3, looped: 1, undersideMl: [0.523], sealed: [], raw: { pockets: 2, sealed: 8 } },
+  goddess: { verdict: 'cut-required', bodies: 1, footprints: [1], underPlugMl: 24.879, sandwichedMl: 16.68, hints: 3, looped: 2, undersideMl: [], sealed: [], raw: { pockets: 20, sealed: 2 } },
+  vis35: { verdict: 'cut-required', bodies: 1, footprints: [1], underPlugMl: 262.361, sandwichedMl: 29.163, hints: 9, looped: 4, undersideMl: [], sealed: [], raw: { pockets: 0, sealed: 0 } },
+  jersey: { verdict: 'plausible', bodies: 1, footprints: [1], underPlugMl: 0, sandwichedMl: 0, hints: 0, looped: 0, undersideMl: [], sealed: [], raw: { pockets: 0, sealed: 0 } },
+  x8: { verdict: 'plausible', bodies: 8, footprints: [1, 1, 1, 1, 1, 1, 1, 1], underPlugMl: 0, sandwichedMl: 0, hints: 0, looped: 0, undersideMl: [], sealed: [], raw: { pockets: 0, sealed: 0 } },
+  barrel: { verdict: 'jacket-out', bodies: 1, footprints: [1], underPlugMl: 1.035, sandwichedMl: 0.218, hints: 2, looped: 0, undersideMl: [], sealed: [{ ml: 3.432, inModel: true }], raw: { pockets: 0, sealed: 1 } },
+  wolf: { verdict: 'cut-required', bodies: 1, footprints: [3], underPlugMl: 66.167, sandwichedMl: 14.727, hints: 16, looped: 2, undersideMl: [], sealed: [], raw: { pockets: 71, sealed: 18 } },
+};

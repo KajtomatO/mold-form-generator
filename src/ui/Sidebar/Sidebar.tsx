@@ -5,6 +5,7 @@ import { ProblemsContext, useStore } from '../context';
 import { ExportBox } from '../ExportBox';
 import { Chevron } from '../icons';
 import { ModelSection } from './ModelSection';
+import { DemoldSection } from './DemoldSection';
 import { AdvancedSection, BaseSection, CoverSection, GridSection, SiliconeSection } from './ParamSections';
 import { PourSection } from './PourSection';
 
@@ -15,8 +16,8 @@ export function Sidebar() {
   // Every problem that concerns a control shows under it, as well as in the Diagnostics card.
   const problems = new Map<ParamPath, ShownDiagnostic[]>();
   for (const diagnostic of allDiagnostics(store.pipeline)) {
-    const path = DIAGNOSTIC_PARAM[diagnostic.code];
-    if (path) problems.set(path, [...(problems.get(path) ?? []), diagnostic]);
+    const paths = [DIAGNOSTIC_PARAM[diagnostic.code], ...((diagnostic.also ?? []) as ParamPath[])].filter(Boolean);
+    for (const path of new Set(paths)) problems.set(path, [...(problems.get(path) ?? []), diagnostic]);
   }
   return (
     <aside class={`sidebar${collapsed ? ' collapsed' : ''}`} aria-label="Settings">
@@ -40,6 +41,7 @@ export function Sidebar() {
           <CoverSection />
           <PourSection />
           <GridSection />
+          <DemoldSection />
           <AdvancedSection />
         </div>
       </ProblemsContext.Provider>

@@ -4,6 +4,7 @@ import { applyDelay, buffersOf, injectedCrash, isInlineError, type FromWorker, t
 import type { BaseCandidate } from '../core/base/candidates';
 import type { Bounds } from '../core/mesh/weld';
 import type { Diagnostic } from '../core/report/diagnostics';
+import { ReportStages } from './reportStages';
 import { checkWalls } from './wallCheck';
 
 export type Post = (message: FromWorker, transfer?: Transferable[]) => void;
@@ -62,7 +63,25 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
 /** field.worker's message handler, apart from `self`, so a Node test can drive the very same code. */
 export function fieldHost(post: Post, now: () => number): (message: ToWorker) => void {
   const stages = new FieldStages(now);
+  const reports = new ReportStages(now);
   return (message) => {
+    if (message.t === 'reports') {
+      const timings: Record<string, number> = {};
+      try {
+        injectedCrash(message.fault);
+        applyDelay(message.fault, now);
+        const outputs = reports.run(message.keys, message.params, message.inputs, timings);
+        post({ t: 'result', id: message.id, outputs, cached: reports.cached(), heapBytes: null, timings });
+      } catch (error) {
+        if (error instanceof StageMiss) {
+          post({ t: 'miss', id: message.id, stage: error.stage, cached: reports.cached() });
+          return;
+        }
+        const e = error instanceof Error ? error : new Error(String(error));
+        post({ t: 'error', id: message.id, name: e.name, message: e.message, inline: isInlineError(e), cached: reports.cached() });
+      }
+      return;
+    }
     if (message.t === 'walls') {
       try {
         post({ t: 'walls-done', id: message.id, result: checkWalls(message.params, message.inputs, now) });

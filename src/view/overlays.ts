@@ -56,25 +56,47 @@ export class OpeningMarkers {
   }
 }
 
-/** The 3D marks the Diagnostics card's Show toggle adds: a pin from above down to the point. */
+/** A place to mark: a pin standing on it, and the line of a cut ending at it where there is one. */
+export interface MarkerSpec {
+  at: [number, number, number];
+  seam?: [[number, number, number], [number, number, number]];
+}
+
+/**
+ * The 3D marks the Show toggles add: a pin from above down to the point, and a cut hint's seam as a bar
+ * from the silicone's outside in to it. Drawn over everything, as most of them sit inside the mold.
+ */
 export class DiagnosticMarkers {
   readonly group = new THREE.Group();
   private readonly material = new THREE.MeshBasicMaterial({ color: SELECTED_COLOUR, depthTest: false, transparent: true, opacity: 0.95 });
 
-  set(points: [number, number, number][], size: number): void {
+  set(marks: MarkerSpec[], size: number): void {
     for (const child of [...this.group.children]) {
       (child as THREE.Mesh).geometry.dispose();
       this.group.remove(child);
     }
-    for (const [x, y, z] of points) {
+    const add = (part: THREE.Mesh): void => {
+      part.renderOrder = 20;
+      this.group.add(part);
+    };
+    for (const { at: [x, y, z], seam } of marks) {
       const head = new THREE.Mesh(new THREE.SphereGeometry(size, 16, 12), this.material);
       head.position.set(x, y, z + size * 3);
+      add(head);
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(size * 0.18, size * 0.18, size * 3, 8), this.material);
       stem.rotation.x = Math.PI / 2;
       stem.position.set(x, y, z + size * 1.5);
-      for (const part of [head, stem]) {
-        part.renderOrder = 20;
-        this.group.add(part);
+      add(stem);
+      if (seam) {
+        const from = new THREE.Vector3(...seam[0]), to = new THREE.Vector3(...seam[1]);
+        const length = from.distanceTo(to);
+        if (length > 1e-3) {
+          const bar = new THREE.Mesh(new THREE.CylinderGeometry(size * 0.3, size * 0.3, length, 8), this.material);
+          bar.position.copy(from).add(to).multiplyScalar(0.5);
+          // A cylinder stands along y; turn it onto the cut.
+          bar.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), to.clone().sub(from).normalize());
+          add(bar);
+        }
       }
     }
   }

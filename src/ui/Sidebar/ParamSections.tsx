@@ -1,5 +1,6 @@
-import { exportPitch, previewSilicone } from '../../app/derived';
+import { clampFigure, exportPitch, previewSilicone } from '../../app/derived';
 import { PARAM_SCHEMA } from '../../core/params/schema';
+import { SEAL_SPACING_MM } from '../../core/report/clamp';
 import { useContext } from 'preact/hooks';
 import { ProblemsContext, useStore } from '../context';
 import { formatNumber } from '../format';
@@ -32,7 +33,7 @@ export function SiliconeSection() {
   return (
     <Section id="silicone" title="Silicone">
       <Rows section="silicone" />
-      <p class="figure" data-testid="silicone-figure" title="From the preview field; sealed air under the model is taken off with the reports of the next milestone.">
+      <p class="figure" data-testid="silicone-figure" title="From the preview field, less the model and any air it seals off, with the silicone in the bores.">
         {silicone ? (
           <>
             About <strong>{silicone.ml.toFixed(1)} ml</strong>, {silicone.grams.toFixed(0)} g, from the preview
@@ -45,10 +46,30 @@ export function SiliconeSection() {
   );
 }
 
+/** Plan: tape that holds max(2 x lift, 10 N), in strips of Tape strip holds each, and enough of them to press the seal all round. */
 export function CoverSection() {
+  const store = useStore();
+  const clamp = clampFigure(store.pipeline);
+  const n = (value: number): string => value.toFixed(value < 10 ? 1 : 0);
   return (
     <Section id="cover" title="Cover & joint">
       <Rows section="cover" />
+      {store.pipeline.modelName ? (
+        <p
+          class="figure"
+          data-testid="clamp-advice"
+          title={clamp ? `With the silicone up to ${clamp.level.toFixed(0)} mm, ${clamp.level > (store.pipeline.field?.value.rim.Zt ?? Infinity) ? 'the rim of a full funnel' : 'the flat top'}, it pushes the cover up with about ${n(clamp.liftN)} N. The tape holds twice that, and never less than 10 N, which ${clamp.liftStrips} ${clamp.liftStrips === 1 ? 'strip does' : 'strips do'}; the strips go no more than ${SEAL_SPACING_MM} mm apart along any wall, so they press the seal all round.` : undefined}
+        >
+          {clamp ? (
+            <>
+              Tape: hold <strong>{n(clamp.holdN)} N</strong> with at least <strong>{clamp.strips} {clamp.strips === 1 ? 'strip' : 'strips'}</strong> at {clamp.stripN} N each, {clamp.across[0]} front to back and {clamp.across[1]} left to right, spread round the joint.
+              {' '}The silicone lifts the cover with {n(clamp.liftN)} N{clamp.coverWeightN !== null ? `, and the cover weighs about ${n(clamp.coverWeightN)} N` : ''}.
+            </>
+          ) : (
+            'Working out how much tape holds the cover down…'
+          )}
+        </p>
+      ) : null}
     </Section>
   );
 }

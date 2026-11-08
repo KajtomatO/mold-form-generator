@@ -197,6 +197,36 @@ export function arch(api: ManifoldToplevel): WeldedMesh {
   });
 }
 
+export const CABIN = { deck: [40, 30, 5] as V3, roofZ: 25, roof: 3, overhang: 3, post: 4, inset: 5 } as const;
+
+/**
+ * A deck 40 x 30 x 5 with a roof 3 mm thick over it at 25 mm, overhanging the deck by 3 mm all round, on
+ * posts 4 mm square: four inset 5 mm from the deck's corners, as a cabin's, or one in the middle, as a
+ * table's. Silicone fills the room between deck and roof and opens all round under the overhang.
+ */
+export function cabin(api: ManifoldToplevel, posts: 'corners' | 'middle'): WeldedMesh {
+  const { deck, roofZ, roof, overhang, post, inset } = CABIN;
+  return meshOf((keep) => {
+    const parts = [cuboid(api, keep, [0, 0, 0], deck), cuboid(api, keep, [-overhang, -overhang, roofZ], [deck[0] + overhang, deck[1] + overhang, roofZ + roof])];
+    const at: [number, number][] = posts === 'corners' ? [[inset, inset], [deck[0] - inset - post, inset], [inset, deck[1] - inset - post], [deck[0] - inset - post, deck[1] - inset - post]] : [[(deck[0] - post) / 2, (deck[1] - post) / 2]];
+    for (const [x, y] of at) parts.push(cuboid(api, keep, [x, y, deck[2] - 1], [x + post, y + post, roofZ + 1]));
+    return keep(api.Manifold.union(parts));
+  });
+}
+
+/**
+ * A block 30 x 20 x 10 whose underside has a square ring engraved 0.5 mm deep, 10 mm across, round an
+ * island 4 mm square that still stands on the plane, as the inside of a letter does. With `channel` a
+ * groove 1 mm wide runs from the ring out through the block's side, so silicone reaches the ring.
+ */
+export function engravedBlock(api: ManifoldToplevel, channel: boolean): WeldedMesh {
+  return meshOf((keep) => {
+    let block = keep(cuboid(api, keep, [0, 0, 0], [30, 20, 10]).subtract(cuboid(api, keep, [10, 5, -1], [20, 15, 0.5])));
+    if (channel) block = keep(block.subtract(cuboid(api, keep, [-1, 9.5, -1], [11, 10.5, 0.5])));
+    return keep(block.add(cuboid(api, keep, [13, 8, 0], [17, 12, 1])));
+  });
+}
+
 /** A block 40 x 40 x 10 standing on a pad `padHeight` tall and `padSize` square: the VIS-35 case. */
 export function twoLevelBlock(api: ManifoldToplevel, padHeight: number, padSize = 10): WeldedMesh {
   return meshOf((keep) => {
@@ -458,6 +488,32 @@ export function holedBlock(api: ManifoldToplevel): WeldedMesh {
     const block = cuboid(api, keep, [-side / 2, -side / 2, 0], [side / 2, side / 2, height]);
     const drill = keep(keep(keep(api.Manifold.cylinder(side + 2, holeRadius, holeRadius, ROUND, true)).rotate([90, 0, 0])).translate([0, 0, height / 2]));
     return keep(block.subtract(drill));
+  });
+}
+
+/** The same block with the hole drilled in from its back face only, to the middle: a pocket with one mouth. */
+export function blindHoledBlock(api: ManifoldToplevel): WeldedMesh {
+  const { side, height, holeRadius } = HOLED_BLOCK;
+  return meshOf((keep) => {
+    const block = cuboid(api, keep, [-side / 2, -side / 2, 0], [side / 2, side / 2, height]);
+    const drill = keep(keep(keep(api.Manifold.cylinder(side / 2 + 1, holeRadius, holeRadius, ROUND)).rotate([90, 0, 0])).translate([0, side / 2 + 1, height / 2]));
+    return keep(block.subtract(drill));
+  });
+}
+
+export const STANDING_RING = { outer: 20, inner: 10, depth: 10, flat: 3 };
+
+/**
+ * A ring standing on its edge, its axis along y, cut flat `flat` mm up its outside so it stands on a
+ * face. The hole runs through it sideways, so the silicone in it holds the ring in a loop.
+ */
+export function standingRing(api: ManifoldToplevel): WeldedMesh {
+  const { outer, inner, depth, flat } = STANDING_RING;
+  return meshOf((keep) => {
+    const disc = keep(api.Manifold.cylinder(depth, outer, outer, ROUND, true));
+    const hole = keep(api.Manifold.cylinder(depth + 2, inner, inner, ROUND, true));
+    const upright = keep(keep(keep(disc.subtract(hole)).rotate([90, 0, 0])).translate([0, 0, outer - flat]));
+    return keep(upright.trimByPlane([0, 0, 1], 0));
   });
 }
 

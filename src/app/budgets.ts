@@ -101,11 +101,12 @@ class RollingMedian {
   }
 }
 
-export type GateName = 'field' | 'solid';
+/** The preview's two workers, and the field.worker of S8 and S9. */
+export type GateName = 'field' | 'solid' | 'reports';
 
 export class Budgets {
   settings: BudgetSettings;
-  private readonly jobs: Record<GateName, RollingMedian> = { field: new RollingMedian(), solid: new RollingMedian() };
+  private readonly jobs: Record<GateName, RollingMedian> = { field: new RollingMedian(), solid: new RollingMedian(), reports: new RollingMedian() };
   /** T1 at the preview cell in use only: it starts again whenever that cell changes. */
   private readonly t1 = new RollingMedian();
   /** Set by the test flag: nothing below adapts any more. */
@@ -161,6 +162,6 @@ export class Budgets {
 
   /** The machine's speed as it changes the cell, for a test to read. */
   snapshot(): { frozen: boolean; settings: BudgetSettings; medians: Record<GateName | 't1', number | null> } {
-    return { frozen: this.frozen, settings: { ...this.settings }, medians: { field: this.jobs.field.median(), solid: this.jobs.solid.median(), t1: this.t1.median() } };
+    return { frozen: this.frozen, settings: { ...this.settings }, medians: { field: this.jobs.field.median(), solid: this.jobs.solid.median(), reports: this.jobs.reports.median(), t1: this.t1.median() } };
   }
 }

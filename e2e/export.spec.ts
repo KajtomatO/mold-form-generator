@@ -133,7 +133,8 @@ async function checkZip(id: ExampleId, files: Record<string, Uint8Array>, node: 
   expect([...readme].filter((c) => c.charCodeAt(0) > 126 || (c.charCodeAt(0) < 32 && c !== '\r' && c !== '\n'))).toEqual([]);
   expect(readme.split('\r\n').filter((line) => line.length > 76)).toEqual([]);
   const flat = readme.replace(/\r\n\s*/g, ' ');
-  for (const phrase of ['POURING', 'Fit the base into the cover', 'Tape the joint all round', 'until silicone shows at every vent', 'DEMOLDING', 'Cut the sprues', 'slide the silicone out of the cover with the model still inside it', 'Put the silicone back into the cover', 'The sprue rule', 'Cut that sprue at the floor of the seat', 'Cure-inhibition test', 'Leak test']) {
+  // The demold steps follow the verdict, so only what every verdict's steps say is checked here.
+  for (const phrase of ['POURING', 'Fit the base into the cover', 'Tape the joint with at least', 'until silicone shows at every vent', 'DEMOLDING', 'Cut the sprues', 'slide the silicone out of the cover with the model', 'silicone back into the cover', 'The sprue rule', 'Cut that sprue at the floor of the seat', 'Cure-inhibition test', 'Leak test']) {
     expect(flat, phrase).toContain(phrase);
   }
   expect(flat).toContain(`Measured clearance: ${report.clearance.measured!.toFixed(2)} mm`);
@@ -152,7 +153,9 @@ test.describe('the Export box on index.html', () => {
     });
     watch = await openApp(page);
   });
-  test.afterEach(() => {
+  test.afterEach(({}, info) => {
+    // A test that beforeEach skipped, as Firefox without a display does, never opened the app.
+    if (info.status === 'skipped') return;
     expect(watch.errors).toEqual([]);
     expect(watch.foreign).toEqual([]);
     expect(dialogs).toEqual([]);

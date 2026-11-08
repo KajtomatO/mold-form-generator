@@ -2,7 +2,9 @@ import { zipSync } from 'fflate';
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { projectFile, type Project } from '../app/project';
 import { APP_NAME, APP_VERSION } from '../app/version';
-import { boreSilicone, replicateOpenings } from '../core/analysis/placement';
+import { analyseIntervals, analysisCellProblem, type IntervalReport } from '../core/analysis/intervals';
+import { boreSilicone, placementSettings, replicateOpenings, uncoveredOnComposite } from '../core/analysis/placement';
+import { geometryReports, tapeAdvice, withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
 import { boreLength, checkOpening, openingSizes, placementSpace, type OpeningSpot, type PlacementSpace } from '../core/analysis/validate';
 import type { BaseCandidate } from '../core/base/candidates';
 import { buildFootprint } from '../core/base/footprint';
@@ -25,6 +27,7 @@ import type { CutOpening } from '../core/parts/openings';
 import { basePose, coverPose, modelOrientedStl, poseToStl } from '../core/parts/poses';
 import { deriveRim, moldBounds, type Rim } from '../core/parts/rim';
 import type { Diagnostic } from '../core/report/diagnostics';
+import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
 import { exportReadme } from '../core/report/readme';
 import { withArena, type Arena } from '../core/solid/arena';
 import { buildToolMesh, toolSolid } from '../core/solid/tool';
@@ -108,6 +111,12 @@ export interface ExportReport {
   /** Per opening of the first tile: zb is the lowest ceiling under any copy's disc, the bore the longest copy's. */
   openings: { id: string; kind: 'pour' | 'vent'; x: number; y: number; pinned: boolean; zb: number; boreLength: number; copies: number }[];
   silicone: { ml: number; grams: number; density: number; boresMl: number; sealedAirMl: number };
+  /** S9 as the export works it out on its own field: the demold estimate, the air, the lift and the tape. Null if it failed. */
+  reports: Omit<GeometryReports, 'diagnostics'> | null;
+  /** Why S8 or S9 failed, which never stops an export. */
+  reportsError: string | null;
+  /** In g, for every part the mold needs, a funnel per pour. */
+  plastic: PlasticEstimate;
   clearance: { asked: number; measured: number | null; minGap: number | null; decimationError: number | null; marginRaisedBy: number; searchMm: number | null };
   parts: Record<string, { triangles: number; volumeMm3: number | null }>;
   diagnostics: Diagnostic[];
@@ -312,18 +321,46 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
 
     if (job.fitTest) Object.assign(files, timed('fit-test', () => fitTestFiles(api, params)));
     return timed('zip', () => {
-      const silicone = moldSilicone(mesh, built.plan, built.field, imported.report, built.settings);
+      // S8 and S9 on the export's own field, as the preview's reports may still be on their way. They say
+      // nothing the mold needs, so a failure is a note in the README and never stops the export.
+      const r0 = now();
+      let s8: IntervalReport | null = null;
+      let reports: GeometryReports | null = null;
+      let reportsError: string | null = analysisCellProblem(scaled.quality.analysisCell);
+      if (reportsError === null) {
+        try {
+          s8 = analyseIntervals(mesh, scaled.quality.analysisCell);
+          // No shell from a mesh with triangles is no reading of the model, and no verdict comes from it.
+          if (s8.shells.length === 0 && mesh.indices.length > 0) throw new Error('the analysis found no solid in the model');
+          const ceiling = uncoveredOnComposite(inputs.openings, built.space, placementSettings(scaled, bounds));
+          reports = geometryReports(scaled, { s8, field: built.field, raise: scaled.quality.tinTolFinal, rim: built.rim, tiles: built.offsets.length, ceiling });
+        } catch (error) {
+          s8 = null;
+          reportsError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      if (reportsError !== null) diagnostics.push({ code: 'reports-failed', severity: 'warning', message: `The demold and air reports could not be worked out for this export, so README.txt has no demold estimate and the silicone figure keeps any sealed air: ${reportsError}` });
+      // Without S8 no sealed air is known, so none is taken off.
+      const silicone = moldSilicone(mesh, built.plan, built.field, imported.report, built.settings, s8 ?? { sealed: [] });
       const boresMl = boreSilicone(built.copies, built.field, built.rim.Zt) / 1000;
       const ml = silicone.ml + boresMl;
-      const inForce = unique([...diagnostics, ...meta.notes]);
+      const tape = reports ? { lift: reports.lift, clamp: reports.clamp } : tapeAdvice(scaled, built.field, scaled.quality.tinTolFinal, built.rim);
+      // Part of the zip step, as the README needs them, and recorded apart for the plan's timing note.
+      timings.reports = now() - r0;
+      const pours = built.copies.filter((c) => c.kind === 'pour').length;
+      const amount = (solid: Manifold, count: number): PartAmount => ({ volume: solid.volume(), area: solid.surfaceArea(), count });
+      const parts = [amount(built.cover, 1), amount(built.base!, 1), ...(funnel && pours > 0 ? [amount(funnel, pours)] : [])];
+      const plastic = plasticEstimate(parts, scaled);
+      const printable = printabilityDiagnostics(scaled, built.rim, { offsets: built.offsets, modelTop: bounds.max[2] });
+      const inForce = unique(withoutDoubledVoids([...diagnostics, ...(reports?.diagnostics ?? []), ...printable, plasticDiagnostic(plastic, scaled), ...meta.notes], reports));
       const volumes: Record<string, number | null> = {
         'cover.stl': built.cover.volume(),
         'base.stl': built.base!.volume(),
         'funnel.stl': funnel ? funnel.volume() : null,
         'model_oriented.stl': model ? model.volume() : null,
       };
-      const report = buildReport(params, inputs, meta, { imported, model, built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
-      const pours = built.copies.filter((c) => c.kind === 'pour').length;
+      const found = reports ? (({ diagnostics: _shown, ...rest }) => rest)(reports) : null;
+      const report = buildReport(params, inputs, meta, { imported, model, built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
       const { requested, minimum } = built.rim.edge;
       const readme = exportReadme({
         app: APP_NAME,
@@ -347,6 +384,10 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         box: [report.box.x, report.box.y, report.box.z],
         clearance,
         silicone: { ml, grams: ml * scaled.silicone.density },
+        reports,
+        reportsError,
+        tape,
+        plastic,
         diagnostics: inForce,
       });
       const text = new TextEncoder();
@@ -365,6 +406,9 @@ interface Measured {
   clearance: Clearance | null;
   search: number | null;
   silicone: { ml: number; boresMl: number; sealedAirMl: number };
+  reports: Omit<GeometryReports, 'diagnostics'> | null;
+  reportsError: string | null;
+  plastic: PlasticEstimate;
   files: Record<string, Uint8Array>;
   volumes: Record<string, number | null>;
   diagnostics: Diagnostic[];
@@ -388,6 +432,9 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
       return { id: opening.id, kind: opening.kind, x: opening.x, y: opening.y, pinned: opening.pinned, zb: Math.min(...own.map((c) => c.zb)), boreLength: boreLength(space, opening), copies: own.length };
     }),
     silicone: { ml: m.silicone.ml, grams: m.silicone.ml * params.silicone.density, density: params.silicone.density, boresMl: m.silicone.boresMl, sealedAirMl: m.silicone.sealedAirMl },
+    reports: m.reports,
+    reportsError: m.reportsError,
+    plastic: m.plastic,
     clearance: {
       asked: params.silicone.t,
       measured: m.clearance?.measured ?? null,

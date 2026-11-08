@@ -40,8 +40,6 @@ export interface StageDef {
   deps: StageId[];
   params: ParamPath[];
   inputs: InputName[];
-  /** The milestone whose code fills it, where that is not this one. */
-  from?: number;
 }
 
 const JOINT: ParamPath[] = [
@@ -82,15 +80,19 @@ export const STAGES: readonly StageDef[] = [
     ],
     inputs: ['pins', 'removed'],
   },
-  { id: 'S8', label: 'intervals', runs: 'field', deps: ['S2'], params: ['quality.analysisCell'], inputs: [], from: 7 },
+  // S8 and S9 run in a field.worker of their own, after the preview, so neither T1 nor T2 waits for them.
+  { id: 'S8', label: 'intervals', runs: 'field', deps: ['S2'], params: ['quality.analysisCell'], inputs: [] },
   {
     id: 'S9',
     label: 'geometry reports',
     runs: 'field',
     deps: ['S6', 'S7', 'S8', 'S10'],
-    params: ['silicone.density', 'print.bedX', 'print.bedY', 'print.bedZ', 'print.infill', 'print.density', 'print.tapeStrip', 'reports.minVolumeMl', 'reports.undersidePersistence'],
+    params: [
+      'silicone.density', 'print.tapeStrip', 'reports.minVolumeMl', 'reports.undersidePersistence',
+      // The demold filter on footprint crumbs, and the lift's level and raise.
+      'base.minIsland', 'funnel.generate', 'funnel.height', 'seat.enabled', 'quality.tinTolPreview',
+    ],
     inputs: [],
-    from: 7,
   },
   {
     id: 'S10',
@@ -113,6 +115,13 @@ export const STAGES: readonly StageDef[] = [
   { id: 'S15', label: 'base final', runs: 'solid', deps: ['S14', 'S2'], params: ['base.mode', 'base.pocketDepth', 'base.pocketEnlarge', 'print.layerHeight', 'base.planeTol'], inputs: [] },
   { id: 'S16', label: 'funnel', runs: 'solid', deps: [], params: [...FUNNEL, 'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'pour.diameter'], inputs: [] },
 ];
+
+/**
+ * Parameters no worker stage reads: main checks the parts against the bed, and works out the plastic
+ * from the parts on screen, whenever it draws. So they belong to no stage, and a change of one rebuilds
+ * nothing.
+ */
+export const MAIN_ONLY: readonly ParamPath[] = ['print.bedX', 'print.bedY', 'print.bedZ', 'print.infill', 'print.density'];
 
 export const STAGE_BY_ID = new Map(STAGES.map((stage) => [stage.id, stage]));
 

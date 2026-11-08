@@ -3,6 +3,7 @@ import type { StageId } from '../app/stages';
 import type { FieldInputs, FieldOutputs, FieldWanted } from './fieldStages';
 import type { SolidInputs, SolidOutputs, SolidWanted } from './solidStages';
 import type { ExportJob, ExportOutputs } from './exportJob';
+import type { ReportsInputs, ReportsOutputs } from './reportStages';
 import type { WallCheck, WallInputs } from './wallCheck';
 
 /**
@@ -60,7 +61,17 @@ export interface WallsJobMessage {
   inputs: WallInputs;
 }
 
-export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage | WallsJobMessage;
+/** S8 and S9, sent to a field.worker of their own, which keeps S8 between jobs. */
+export interface ReportsJobMessage {
+  t: 'reports';
+  id: number;
+  keys: Record<StageId, string>;
+  params: Params;
+  inputs: ReportsInputs;
+  fault?: Fault;
+}
+
+export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage | WallsJobMessage | ReportsJobMessage;
 
 export type Cached = Partial<Record<StageId, string>>;
 
@@ -78,7 +89,7 @@ export interface StageMessage {
   outputs: FieldOutputs;
 }
 
-export interface ResultMessage<O = FieldOutputs | SolidOutputs> {
+export interface ResultMessage<O = FieldOutputs | SolidOutputs | ReportsOutputs> {
   t: 'result';
   id: number;
   outputs: O;

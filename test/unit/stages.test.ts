@@ -5,11 +5,12 @@ import { openingSizes, placementSpace } from '../../src/core/analysis/validate';
 import { resolveAuto, defaultParams } from '../../src/core/params/defaults';
 import { PARAM_SCHEMA, type ParamDef, type Params } from '../../src/core/params/schema';
 import { hashFloats, hashMesh, hashString } from '../../src/app/hash';
-import { downstream, invalidatedBy, invalidatedByInput, STAGES, stageKeys, upstream, type InputName, type ParamPath, type StageId, type StageInputs } from '../../src/app/stages';
+import { downstream, invalidatedBy, invalidatedByInput, MAIN_ONLY, STAGES, stageKeys, upstream, type InputName, type ParamPath, type StageId, type StageInputs } from '../../src/app/stages';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, type PlaneChoice } from '../../src/workers/fieldStages';
 import type { OpeningPin } from '../../src/core/analysis/placement';
+import { ReportStages } from '../../src/workers/reportStages';
 import { SolidStages } from '../../src/workers/solidStages';
-import { exampleBytes, loadManifold } from '../fixtures/loadExamples';
+import { exampleBytes, loadManifold, type ExampleId } from '../fixtures/loadExamples';
 
 const PATHS = Object.entries(PARAM_SCHEMA).flatMap(([group, defs]) => Object.entries(defs as Record<string, ParamDef>).map(([key, def]) => ({ path: `${group}.${key}` as ParamPath, def })));
 
@@ -54,11 +55,13 @@ const changedKeys = (a: Record<StageId, string>, b: Record<StageId, string>): St
 const sorted = (ids: Iterable<StageId>): StageId[] => [...ids].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
 
 describe('the stage table', () => {
-  it('maps every schema parameter to at least one stage, and names no parameter the schema lacks', () => {
+  it('maps every schema parameter to at least one stage or to main alone, and names no parameter the schema lacks', () => {
     const declared = new Set(STAGES.flatMap((stage) => stage.params));
     const known = new Set(PATHS.map(({ path }) => path));
-    expect(PATHS.filter(({ path }) => !declared.has(path)).map(({ path }) => path)).toEqual([]);
+    expect(PATHS.filter(({ path }) => !declared.has(path) && !MAIN_ONLY.includes(path)).map(({ path }) => path)).toEqual([]);
     expect([...declared].filter((path) => !known.has(path))).toEqual([]);
+    // What main reads alone is in no stage, so a change of it rebuilds nothing.
+    expect(MAIN_ONLY.filter((path) => declared.has(path) || !known.has(path))).toEqual([]);
   });
 
   it('is in order and has no cycle: every dependency is a known stage', () => {
@@ -107,13 +110,13 @@ describe('the stage table', () => {
  */
 describe('the real stages read nothing the table does not name', () => {
   let api: ManifoldToplevel;
-  const bytes = exampleBytes('jersey');
   beforeAll(async () => {
     api = await loadManifold();
   });
 
   /** One run from nothing, with a hash of each output main can see. The inputs that are not parameters are read as the pipeline sends them. */
-  function outputsOf(params: Params, stageInputs: StageInputs = INPUTS): Partial<Record<StageId, string>> {
+  function outputsOf(params: Params, stageInputs: StageInputs = INPUTS, model: ExampleId = 'jersey'): Partial<Record<StageId, string>> {
+    const bytes = exampleBytes(model);
     const keys = stageKeys(params, stageInputs);
     const field = new FieldStages();
     const { cellScale, pins, removed, drag: dragged } = stageInputs;
@@ -138,8 +141,21 @@ describe('the real stages read nothing the table does not name', () => {
         copies,
         drag,
       });
-      if (stageInputs === INPUTS) baseOpenings = openings;
+      if (stageInputs === INPUTS && model === 'jersey') baseOpenings = openings;
+      // S8 and S9 as the pipeline sends them to their own worker.
+      const reports = new ReportStages();
+      const { S9 } = reports.run(keys, params, {
+        mesh: S1!.welded,
+        transform: S2!.oriented.transform,
+        field: S6!.field,
+        raise: params.quality.tinTolPreview,
+        rim: S6!.rim,
+        tiles: S6!.mold.offsets.length,
+        ceiling: { leaves: S7!.placement.ceilingLeaves, uncovered: S7!.placement.uncovered },
+      });
       return {
+        S8: hashString(JSON.stringify(reports.intervals)),
+        S9: hashString(JSON.stringify(S9)),
         S2: hashString(JSON.stringify([S2!.oriented.transform, S2!.chosen.normal, S2!.chosen.area, S2!.planeTol])),
         S6: hashFloats(S6!.field.values) + S6!.field.cell,
         S10: hashString(JSON.stringify([S6!.mold, S6!.rim])),
@@ -157,7 +173,7 @@ describe('the real stages read nothing the table does not name', () => {
   let baseOpenings: OpeningPin[] = [];
   it('builds at defaults', () => {
     base = outputsOf(defaultParams());
-    expect(Object.keys(base)).toHaveLength(7);
+    expect(Object.keys(base)).toHaveLength(9);
   }, 60_000);
 
   it.each(PATHS)('$path', ({ path, def }) => {
@@ -168,15 +184,48 @@ describe('the real stages read nothing the table does not name', () => {
   }, 60_000);
 
   it.each([
-    ['silicone.t', 3.5, ['S6', 'S7', 'S10', 'S13', 'S15']],
+    // The cover's lift and the seams of the cut hints follow the field.
+    ['silicone.t', 3.5, ['S6', 'S7', 'S9', 'S10', 'S13', 'S15']],
     ['base.mode', 'merged', ['S15']],
     ['pour.diameter', 8, ['S7', 'S13', 'S16']],
-    ['quality.tinTolPreview', 0.2, ['S13']],
+    // The lift reads the preview's raise too.
+    ['quality.tinTolPreview', 0.2, ['S9', 'S13']],
+    ['quality.analysisCell', 0.3, ['S8', 'S9']],
+    // Jersey's silicone under its chamfers is tiny: only a filter this low lets it show.
+    ['reports.minVolumeMl', 0.001, ['S9']],
+    // The lift's level: with no seat a funnel has nowhere to stand, so the silicone stops at the top.
+    ['seat.enabled', false, ['S7', 'S9', 'S13', 'S16']],
+    ['funnel.height', 40, ['S9', 'S16']],
   ] as [ParamPath, unknown, StageId[]][])('sees real changes: %s changes %j', (path, value, expected) => {
     const after = outputsOf(withChange(path, value));
     const changed = (Object.keys(base) as StageId[]).filter((id) => base[id] !== after[id]);
     expect(sorted(changed)).toEqual(sorted(expected));
+    // And the table says so, or a cached stage would keep its old result.
+    expect(changed.filter((id) => !invalidatedBy(path).has(id)), `${path} is missing from the rows of`).toEqual([]);
   }, 60_000);
+
+  // S9's filters on models they act on: wolf's two smaller feet, 160.5 and 152.6 mm2, which an island
+  // filter past them drops from its loop lock and from the base's pocket, and Benchy's one air pocket,
+  // 2.5 mm deep. Wolf's crumbs under 5 mm2 are no test of it: they lie in the recesses the plate seals.
+  const MODEL_CHANGES: [ExampleId, ParamPath, unknown, StageId[]][] = [
+    ['wolf', 'base.minIsland', 200, ['S9', 'S15']],
+    ['benchy', 'reports.undersidePersistence', 3, ['S9']],
+  ];
+  it.each(MODEL_CHANGES)('sees real changes on %s: %s set to %j changes %j', (model, path, value, expected) => {
+    const before = outputsOf(defaultParams(), INPUTS, model);
+    const after = outputsOf(withChange(path, value), INPUTS, model);
+    const changed = (Object.keys(before) as StageId[]).filter((id) => before[id] !== after[id]);
+    expect(sorted(changed)).toEqual(sorted(expected));
+    expect(changed.filter((id) => !invalidatedBy(path).has(id)), `${path} is missing from the rows of`).toEqual([]);
+  }, 120_000);
+
+  it('what main reads alone changes no stage\'s output', () => {
+    for (const path of MAIN_ONLY) {
+      const def = PATHS.find((p) => p.path === path)!.def;
+      const after = outputsOf(withChange(path, changedValue(path, def)));
+      expect((Object.keys(base) as StageId[]).filter((id) => base[id] !== after[id]), path).toEqual([]);
+    }
+  }, 120_000);
 
   // The inputs that are not parameters, varied as the pipeline varies them. The file and the import change
   // everything, and the tier is the pipeline's to pass on, so these are the ones a stage could misread.

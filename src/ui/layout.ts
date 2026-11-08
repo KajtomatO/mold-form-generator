@@ -31,13 +31,10 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
 /** Advanced's sub-headings, by schema group, which README.txt's list of settings uses too. */
 export { GROUP_TITLES } from '../core/params/schema';
 
-/**
- * Advanced groups holding settings that nothing reads yet but the stage keys: the print, clamp and air
- * reports that use them come with M7. Said on screen, so a set bed size is not taken for a check.
- */
+/** Advanced groups whose settings feed a report rather than a part, said where they sit so a maker knows where to look. */
 export const GROUP_NOTES: Partial<Record<string, string>> = {
-  print: 'Bed X, Y and Z, Plastic density and Tape strip holds are for the print and clamp reports of a later version, and change nothing yet. Infill, as a fraction, only sets the advice in README.txt.',
-  reports: 'Underside persistence is for the air report of a later version, and changes nothing yet.',
+  print: 'Bed X, Y and Z are checked against the cover and base as they print. Infill and Plastic density give the plastic estimate in Diagnostics, and Tape strip holds the tape advice under Cover & joint.',
+  reports: 'These filter the Demold report and its air traps: smaller silicone, air and sealed space is left out as noise.',
 };
 
 /**
@@ -135,6 +132,7 @@ const ENTRY_FLOORS: Partial<Record<ParamPath, number>> = {
   'quality.analysisCell': 0.05,
   'quality.tinTolFinal': 0.01,
   'quality.tinTolPreview': 0.01,
+  'print.tapeStrip': 0.1,
 };
 
 export function defOf(path: ParamPath): ParamDef {

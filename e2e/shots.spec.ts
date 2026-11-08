@@ -20,7 +20,9 @@ interface Shot {
   file: string | null;
   grid: readonly [number, number];
   /** The sidebar section scrolled to the top, Advanced opened first. */
-  scroll?: 'pour' | 'grid' | 'advanced';
+  scroll?: 'cover' | 'pour' | 'grid' | 'demold' | 'advanced';
+  /** A Show toggle pressed first: the Demold report's first hint, or the Diagnostics row of this code. */
+  show?: 'hint' | 'air-underside' | 'air-sealed';
   /** Which sets take this shot: every size and theme in Chromium, and 1366 x 768 in both themes in Firefox, unless narrowed. */
   only?: (browser: Browser, width: number, theme: Theme) => boolean;
   /** Export ZIP pressed: held at its clearance step with the stage bar showing, or done, with the clearance it measured. */
@@ -31,6 +33,8 @@ interface Shot {
 const SIDEBAR_SETS = (browser: Browser, width: number, theme: Theme): boolean => (browser === 'firefox' ? width === 1366 && theme === 'dark' : (width === 1366) === (theme === 'dark'));
 // The export: every size and theme in Chromium, and the user's browser at 1366 x 768 in the dark theme.
 const EXPORT_SETS = (browser: Browser, width: number, theme: Theme): boolean => browser === 'chromium' || (width === 1366 && theme === 'dark');
+// M7's reports take the same sets as the export.
+const REPORT_SETS = EXPORT_SETS;
 
 const CASES: Shot[] = [
   { name: 'benchy', file: EXAMPLE_FILES.benchy, grid: [1, 1] },
@@ -42,6 +46,13 @@ const CASES: Shot[] = [
   { name: 'empty', file: null, grid: [1, 1], only: SIDEBAR_SETS },
   { name: 'benchy-exporting', file: EXAMPLE_FILES.benchy, grid: [1, 1], only: EXPORT_SETS, exporting: 'mid' },
   { name: 'benchy-exported', file: EXAMPLE_FILES.benchy, grid: [1, 1], only: EXPORT_SETS, exporting: 'done' },
+  { name: 'wolf-demold-hint', file: EXAMPLE_FILES.wolf, grid: [1, 1], scroll: 'demold', show: 'hint', only: REPORT_SETS },
+  { name: 'benchy-underside-air', file: EXAMPLE_FILES.benchy, grid: [1, 1], scroll: 'demold', show: 'air-underside', only: REPORT_SETS },
+  { name: 'barrel-sealed-void', file: EXAMPLE_FILES.barrel, grid: [1, 1], scroll: 'demold', show: 'air-sealed', only: REPORT_SETS },
+  { name: 'vis35-bed', file: EXAMPLE_FILES.vis35, grid: [1, 1], only: REPORT_SETS },
+  { name: 'x8-plausible', file: EXAMPLE_FILES.x8, grid: [1, 1], scroll: 'demold', only: REPORT_SETS },
+  // The tape advice under Cover & joint.
+  { name: 'wolf-cover', file: EXAMPLE_FILES.wolf, grid: [1, 1], scroll: 'cover', only: REPORT_SETS },
 ];
 
 const SIZES = [
@@ -89,6 +100,8 @@ test.describe('review screenshots', () => {
           } else if ((await card.count()) > 0) {
             await card.getByRole('button', { name: 'Dismiss' }).click();
           }
+          if (shot.show === 'hint') await page.locator('.cut-hint').first().getByRole('button', { name: 'Show' }).click();
+          else if (shot.show) await page.locator(`.diagnostic[data-code="${shot.show}"]`).first().getByRole('button', { name: 'Show' }).click();
           if (shot.scroll === 'advanced') await page.locator('.advanced > summary').click();
           if (shot.scroll) {
             await page.locator(`[data-section="${shot.scroll}"]`).evaluate((section) => {

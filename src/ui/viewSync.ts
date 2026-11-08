@@ -1,5 +1,6 @@
 import { effect } from '@preact/signals';
-import { allDiagnostics, diagnosticPoint, markerRadius } from '../app/derived';
+import { allDiagnostics, diagnosticMarkers, markerRadius } from '../app/derived';
+import type { Marker } from '../app/pipeline';
 import type { Store } from '../app/store';
 import { toMat4 } from '../core/base/orient';
 import { coverBottom } from '../core/parts/cover';
@@ -8,6 +9,7 @@ import type { OpeningMarker } from '../view/overlays';
 import { coplanarTriangles } from '../view/picking';
 import { DARK_BACKGROUND, LIGHT_BACKGROUND, type Highlight, type PreviewScene } from '../view/scene';
 import { diagnosticKey } from './DiagnosticsCard';
+import { hintKey } from './Sidebar/DemoldSection';
 
 function isMember(members: Uint32Array, triangle: number): boolean {
   let low = 0, high = members.length - 1;
@@ -111,9 +113,11 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     const p = store.pipeline;
     const rim = p.field?.value.rim;
     const shown = store.shown.value;
-    const points = rim ? allDiagnostics(p).filter((d) => shown.includes(diagnosticKey(d))).map((d) => diagnosticPoint(d, rim.Zt)).filter((pt): pt is [number, number, number] => pt !== null) : [];
+    const marks: Marker[] = rim ? allDiagnostics(p).filter((d) => shown.includes(diagnosticKey(d))).flatMap((d) => diagnosticMarkers(d, rim.Zt)) : [];
+    // The Demold report's own Show toggles, one per cut hint.
+    for (const hint of p.reports?.value.demold.hints ?? []) if (shown.includes(hintKey(hint.id))) marks.push({ at: hint.at, seam: hint.seam });
     const size = rim ? Math.max(1.2, Math.hypot(rim.O.x1 - rim.O.x0, rim.O.y1 - rim.O.y0) * 0.012) : 1;
-    if (changed('diagnosticMarkers', JSON.stringify(points))) scene.setDiagnosticMarkers(points, size);
+    if (changed('diagnosticMarkers', JSON.stringify(marks))) scene.setDiagnosticMarkers(marks, size);
   });
 
   const look = effect(() => {

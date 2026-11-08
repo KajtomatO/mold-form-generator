@@ -84,6 +84,8 @@ export interface UncoveredLeaf {
   y: number;
   height: number;
   persistence: number;
+  /** Air under the ceiling above its saddle, in mm3. */
+  airVolume: number;
 }
 
 export interface Placement {
@@ -91,6 +93,8 @@ export interface Placement {
   bodies: BodyPlacement[];
   /** Peaks of the composite with no opening. Empty unless a vent was refused, removed or turned off. */
   uncovered: UncoveredLeaf[];
+  /** Peaks of the composite past the vent persistence, with an opening or not: the air report's ceiling leaves. */
+  ceilingLeaves: number;
   diagnostics: Diagnostic[];
 }
 
@@ -317,8 +321,11 @@ function openLeftoverCavities(work: Work): void {
   });
 }
 
-/** The check on the composite: any peak there with no copy of an opening at it, from a tree of its own. */
-function uncoveredOnComposite(openings: readonly PlacedOpening[], space: PlacementSpace, settings: PlacementSettings): UncoveredLeaf[] {
+/**
+ * The check on the composite: any peak there with no copy of an opening at it, from a tree of its own,
+ * and how many peaks there are. The export runs it again on its own field for the air report.
+ */
+export function uncoveredOnComposite(openings: readonly OpeningSpot[], space: PlacementSpace, settings: Pick<PlacementSettings, 'coverDrop' | 'ventPersistence'>): { uncovered: UncoveredLeaf[]; leaves: number } {
   const tree = mergeTree(space.field);
   const covered = new Set<number>();
   for (const opening of openings) {
@@ -327,9 +334,9 @@ function uncoveredOnComposite(openings: readonly PlacedOpening[], space: Placeme
       for (const leaf of leavesCovered(tree, space.field, opening.x + ox, opening.y + oy, r, settings.coverDrop)) covered.add(leaf);
     }
   }
-  return significantLeaves(tree, settings.ventPersistence)
-    .filter((leaf) => !covered.has(tree.leaves.indexOf(leaf)))
-    .map(({ x, y, height, persistence }) => ({ x, y, height, persistence }));
+  const significant = significantLeaves(tree, settings.ventPersistence);
+  const uncovered = significant.filter((leaf) => !covered.has(tree.leaves.indexOf(leaf))).map(({ x, y, height, persistence, airVolume }) => ({ x, y, height, persistence, airVolume }));
+  return { uncovered, leaves: significant.length };
 }
 
 /**
@@ -399,11 +406,11 @@ export function placeOpenings(input: PlacementInput): Placement {
   const collision = funnelCollision(space, work.openings.filter((opening) => opening.kind === 'pour'));
   if (collision) work.diagnostics.push(collision);
 
-  const uncovered = uncoveredOnComposite(work.openings, space, settings);
+  const { uncovered, leaves: ceilingLeaves } = uncoveredOnComposite(work.openings, space, settings);
   for (const leaf of uncovered) {
-    work.diagnostics.push({ code: 'peak-uncovered', severity: 'warning', message: `The peak at (${leaf.x.toFixed(1)}, ${leaf.y.toFixed(1)}), ${leaf.persistence.toFixed(1)} mm above its surroundings, has no opening, so air will stay trapped there.` });
+    work.diagnostics.push({ code: 'peak-uncovered', severity: 'warning', message: `The peak at (${leaf.x.toFixed(1)}, ${leaf.y.toFixed(1)}), ${leaf.persistence.toFixed(1)} mm above its surroundings, has no opening, so air will stay trapped there (assuming the silicone rises slowly).` });
   }
-  return { openings: work.openings, bodies: byBody, uncovered, diagnostics: work.diagnostics };
+  return { openings: work.openings, bodies: byBody, uncovered, ceilingLeaves, diagnostics: work.diagnostics };
 }
 
 function describeProblem(problem: HardProblem): string {

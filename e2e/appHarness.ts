@@ -152,6 +152,25 @@ export async function canvasColour(page: Page, at: { x: number; y: number }): Pr
   }, at);
 }
 
+/** The canvas's own pixels in a square of `radius` CSS pixels around a point, as RGB triples, to compare two moments. */
+export async function canvasPatch(page: Page, at: { x: number; y: number }, radius: number): Promise<number[]> {
+  return page.evaluate(async ({ x, y, radius }) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const canvas = document.querySelector('[data-testid="viewport"] canvas') as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / rect.width;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width;
+    copy.height = canvas.height;
+    const context = copy.getContext('2d')!;
+    context.drawImage(canvas, 0, 0);
+    const r = Math.max(1, Math.round(radius * scale));
+    const px = Math.round((x - rect.left) * scale), py = Math.round((y - rect.top) * scale);
+    const { data } = context.getImageData(px - r, py - r, 2 * r + 1, 2 * r + 1);
+    return Array.from(data).filter((_, i) => i % 4 !== 3);
+  }, { ...at, radius });
+}
+
 /** The layout rules of the plan's GUI section, measured on the page as it stands. */
 export async function checkLayout(page: Page, watch: PageWatch): Promise<void> {
   const m = await page.evaluate(() => {
@@ -174,7 +193,14 @@ export async function checkLayout(page: Page, watch: PageWatch): Promise<void> {
       .filter((el) => el.scrollWidth > el.clientWidth)
       .map((el) => `${el.tagName.toLowerCase()}.${el.className} (${el.scrollWidth} > ${el.clientWidth}): ${el.textContent?.slice(0, 40)}`);
     const status = box('[data-testid="status"]');
+    // A Diagnostics row cut off at the foot of its card must be counted by the line under it.
+    const rows = document.querySelector<HTMLElement>('[data-testid="diagnostics"] ul');
+    const cut = rows ? [...rows.children].filter((row) => row.getBoundingClientRect().bottom > rows.getBoundingClientRect().bottom + 1).length : 0;
+    const more = document.querySelector<HTMLElement>('[data-testid="diagnostics-more"]');
+    const moreBox = more?.getBoundingClientRect();
+    const card = document.querySelector('[data-testid="diagnostics"]')?.getBoundingClientRect();
     return {
+      diagnosticsBelow: { cut, said: more ? Number(/^\d+/.exec(more.textContent ?? '')?.[0]) : 0, inCard: !moreBox || !card ? true : moreBox.height > 0 && moreBox.bottom <= card.bottom + 1 },
       header: box('.header').height,
       sidebar: box('.sidebar').width,
       status: status.height,
@@ -197,6 +223,7 @@ export async function checkLayout(page: Page, watch: PageWatch): Promise<void> {
   expect(m.shell).toEqual([0, 0]);
   expect(m.statusInView).toBe(true);
   expect(m.exportInView).toBe(true);
+  expect(m.diagnosticsBelow).toEqual({ cut: m.diagnosticsBelow.cut, said: m.diagnosticsBelow.cut, inCard: true });
   expect(watch.errors).toEqual([]);
   expect(watch.foreign).toEqual([]);
 }

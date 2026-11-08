@@ -1,5 +1,9 @@
+import { RISING_LEVEL_NOTE } from '../analysis/air';
+import { demoldSteps, hintWords, placeWords, VERDICT_MEANING, VERDICT_WORDS, type GeometryReports } from '../analysis/reports';
 import { GROUP_TITLES, PARAM_SCHEMA, type ParamDef, type Params } from '../params/schema';
+import { SEAL_SPACING_MM, type ClampAdvice, type CoverLift } from './clamp';
 import type { Diagnostic } from './diagnostics';
+import type { PlasticEstimate } from './printability';
 
 /** Everything the README of an export ZIP says, as measured or chosen. */
 export interface ReadmeInput {
@@ -23,6 +27,13 @@ export interface ReadmeInput {
   /** Null for an open mesh, which has no solid to measure. */
   clearance: { measured: number; error: number; raisedBy: number } | null;
   silicone: { ml: number; grams: number };
+  /** S9: the demold estimate and the air, or null when the export could not work them out. */
+  reports: GeometryReports | null;
+  /** Why the reports could not be worked out, when they could not. */
+  reportsError: string | null;
+  /** The cover's lift and the tape that holds it, which need no S8. */
+  tape: { lift: CoverLift; clamp: ClampAdvice };
+  plastic: PlasticEstimate;
   /** Every diagnostic in force, the preview's and the export's. */
   diagnostics: Diagnostic[];
 }
@@ -89,6 +100,8 @@ function heading(title: string): string[] {
 
 const mm = (value: number, digits = 1): string => `${Number(value.toFixed(digits))} mm`;
 
+const grams = (g: number): string => (g >= 1000 ? `${(g / 1000).toFixed(2)} kg` : `${g.toFixed(0)} g`);
+
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
@@ -143,9 +156,10 @@ export function exportReadme(input: ReadmeInput): string {
   out.push(...wrap('Every number of this export, and the settings it was made with, so the same mold can be made again.', '  '));
 
   out.push(...heading('Printing'));
-  item('The parts are already turned to how they print best, so do not rotate them in your slicer.');
+  item('The parts are saved the way up they print best, so do not flip them over or lay them on another side in your slicer. Turning one about the vertical axis to fit your bed is fine.');
   item(`About ${Math.round(params.print.infill * 100)} percent infill is enough. Use at least 3 walls (perimeters) and 4 top and bottom layers, so the surfaces that touch silicone are solid and nothing seeps through.`);
   item(`Use the layer height of ${mm(params.print.layerHeight, 2)} this mold was made for: the base and its pocket are sized in whole layers of it.`);
+  item(`Plastic: about ${grams(input.plastic.printed)} at that infill, or ${grams(input.plastic.solid)} printed solid. This is an estimate: slicers differ.`);
 
   out.push(...heading('Before the first pour'));
   step(1, 'Cure-inhibition test: some resins, glues, paints and plastics stop silicone from curing where they touch it, and platinum-cure silicone is the sensitive kind. Pour a small test patch of your silicone onto a scrap printed in the same resin, with the same glue you will use, and let it cure fully. If it stays sticky where it touches, seal the model first, for example with a clear coat, and test again.');
@@ -155,18 +169,55 @@ export function exportReadme(input: ReadmeInput): string {
   let n = 0;
   if (glue) step(++n, copies === 1 ? 'Glue the model into the pocket of the base, flat face down, and let the glue cure.' : `Glue a model into each of the ${copies} pockets of the base, flat face down, and let the glue cure.`);
   step(++n, `Fit the base into the cover: the ridge on the base goes into the groove of the cover. Press until the base rests on the cover's shelf all round. It then stands ${mm(params.joint.baseProud, 2)} proud of the cover's bottom edge, which is meant: the tape pulls the base against the shelf.`);
-  step(++n, 'Tape the joint all round, running each strip from the side walls of the cover across the base. A thin film of Vaseline in the groove, before you fit the base, makes the seal better.');
-  step(++n, `Stand the mold on its base on a level surface.${has('funnel.stl') ? ' Push a funnel into the seat of each pour opening.' : ''}`);
+  const { clamp, lift } = input.tape;
+  const head = lift.level > input.box[2] - params.base.thickness ? 'up to the rim of a full funnel' : 'up to the flat top';
+  step(++n, `Tape the joint with at least ${plural(clamp.strips, 'strip')} of tape at ${figure(clamp.stripN)} N each, each running from a side wall of the cover across the base to the opposite wall: at least ${clamp.across[0]} from front to back and ${clamp.across[1]} from left to right, spread evenly, no more than about ${SEAL_SPACING_MM} mm apart along any wall, so the tape presses the seal all round. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the tape should hold twice that, and never less than 10 N: here ${clamp.holdN.toFixed(1)} N, which ${clamp.liftStrips === 1 ? 'one strip holds' : `${clamp.liftStrips} of the strips hold`}. A thin film of Vaseline in the groove, before you fit the base, makes the seal better.`);
+  const collide = input.diagnostics.some((d) => d.code === 'funnel-collision');
+  const funnels = !has('funnel.stl')
+    ? ''
+    : collide
+      ? ' The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.'
+      : ' Push a funnel into the seat of each pour opening.';
+  step(++n, `Stand the mold on its base on a level surface.${funnels}`);
   step(++n, `Mix and degas the silicone. Pour it slowly, in a thin stream, into the pour opening${input.pours === 1 ? '' : 's'}, until silicone shows at every vent. This mold has ${plural(input.pours, 'pour opening')} and ${plural(input.vents, 'vent')}.`);
   step(++n, 'Let it cure for the full time the maker of your silicone gives.');
-  para("The sprue rule: if you pour without a funnel, silicone fills the cone-shaped seat at the top of each pour opening. Cut that sprue at the floor of the seat, where the cone meets the straight bore, and not flush with the top. A cone of silicone left in the seat is wider than the bore under it, so it would lock the mold in the cover.");
+  if (params.seat.enabled) para("The sprue rule: if you pour without a funnel, silicone fills the cone-shaped seat at the top of each pour opening. Cut that sprue at the floor of the seat, where the cone meets the straight bore, and not flush with the top. A cone of silicone left in the seat is wider than the bore under it, so it would lock the mold in the cover.");
+  else para('The pour openings have no funnel seat, so cut the silicone in each of them flush with the top.');
 
   out.push(...heading('Demolding'));
-  step(1, `Cut the sprues: take out the funnels${has('funnel.stl') ? '' : ' if you used any'}, cut each pour sprue at the floor of its seat by the sprue rule, and cut the silicone in each vent flush with the top.`);
-  step(2, `Take off the tape. Lever the base out${params.joint.pryNotches ? ' at the pry notches on the bottom edge of the cover' : ''}, and slide the silicone out of the cover with the model still inside it. The cover widens towards the base, so the silicone can slide out that way.`);
-  step(3, 'Flex the silicone to free the model, or cut it with a sharp blade where it holds the model, in a wavy line so the cut faces line up again.');
-  step(4, 'Take out the model.');
-  step(5, "Put the silicone back into the cover, the way it came out. The cover holds it in shape. The cover's flat top is now the bottom of your mold: turn it over, and cast into the opening.");
+  const reports = input.reports;
+  if (reports) {
+    const { demold, centre, tiles } = reports;
+    out.push(...wrap(`Estimate: ${VERDICT_WORDS[demold.verdict].toLowerCase()}. ${VERDICT_MEANING[demold.verdict]} This is worked out from the model's shape alone${tiles > 1 ? `, and holds for each of the ${tiles} copies alike` : ''}, so treat it as a guide.`));
+    const measured = `measured from the middle of the model${tiles > 1 ? ' in the first copy' : ''}, with the front being the side you face in the app's first view`;
+    const cut = demold.hints.filter((h) => h.cuts), held = demold.hints.filter((h) => !h.cuts);
+    if (cut.length > 0) {
+      out.push('', ...wrap(`Cut the silicone at ${cut.length === 1 ? 'this place' : 'these places'}, where it holds the model in a loop, ${measured}:`));
+      for (const hint of cut) item(hintWords(hint, centre, demold.verdict));
+    }
+    if (held.length > 0) {
+      out.push('', ...wrap(`${cut.length > 0 ? 'It also holds the model here' : 'Where the silicone holds the model'}, ${cut.length > 0 ? 'but can stretch off' : measured}:`));
+      for (const hint of held) item(hintWords(hint, centre, demold.verdict));
+    }
+  } else {
+    out.push(...wrap(`The demold estimate could not be worked out for this export (${input.reportsError ?? 'no reason given'}), so look over the model for overhangs and holes yourself before you demold.`));
+  }
+  out.push('');
+  demoldSteps(reports?.demold.verdict ?? null, params).forEach((text, k) => step(k + 1, text));
+  para("The cover's flat top is now the bottom of your mold: turn it over, and cast into the opening.");
+
+  out.push(...heading('Air'));
+  if (reports) {
+    const { air, centre } = reports;
+    if (air.uncovered.length === 0) item(air.ceilingLeaves === 1 ? 'The one peak of the cover\'s ceiling has an opening, so its air gets out.' : `All ${air.ceilingLeaves} peaks of the cover's ceiling have an opening, so their air gets out.`);
+    else item(`${air.uncovered.length} of the ${air.ceilingLeaves} peaks of the cover's ceiling have no opening, so air stays there: see the warnings.`);
+    if (air.underside.length === 0) item('No pocket under the model traps air.');
+    for (const p of air.underside) item(`Air stays in a pocket under an overhang of the model, ${placeWords([p.x, p.y, p.z], centre)}, about ${(p.volume / 1000).toFixed(2)} ml. No vent in the top reaches it: brush a first coat of silicone onto the model there, tilt the mold as you pour, or degas the poured mold in a vacuum.`);
+    for (const d of air.sealed) item(d.inModel ? `${(d.volume / 1000).toFixed(2)} ml is a sealed hollow inside the model, which no silicone reaches.` : `${(d.volume / 1000).toFixed(2)} ml of space is closed off between the model and the base, so no silicone goes there. That is harmless.`);
+  } else {
+    item('The air report could not be worked out for this export.');
+  }
+  para(RISING_LEVEL_NOTE);
 
   out.push(...heading('This mold'));
   item(`Silicone thickness asked for: ${mm(t, 2)}.`);
