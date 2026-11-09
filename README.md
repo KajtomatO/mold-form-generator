@@ -1,14 +1,17 @@
-# Casting Form Generator
+# Mold Form Generator
 
 A browser app for making silicone casting molds with less silicone. You give it an STL of your model. It makes a two-part plastic mold box for your 3D printer: a base that carries the model, and a cover whose inside follows the model at a set distance, 3 mm by default. You print both, join them, and pour silicone into the space between the model and the cover. The cured silicone, back in the cover, is your casting mold, and it took far less silicone than a plain box would.
 
 Everything runs in your browser. The server only hands out the app's files; your models never leave your computer.
 
-Version 1.0.1.
+The version is in the header, after the name, such as `v0.1.0`. Hover over it to read whether it is a release, the beta or a local build, the date of its code, and its commit, which a bug report should name.
 
 ## Open it
 
-Browse to `http://192.168.0.153:5173` (or the address of the computer that serves it). To set up or update that server, see `docs/DEPLOY.md`.
+- **On the web:** https://kajtomato.github.io/mold-form-generator/ is the newest release. https://kajtomato.github.io/mold-form-generator/beta/ is the newest work, marked BETA in the header, for trying changes before they are released; its "Stable version" link goes back to the release. `docs/RELEASING.md` says how both are published.
+- **On the local network:** browse to `http://192.168.0.153:5173` (or the address of the computer that serves it). To set up or update that server, see `docs/DEPLOY.md`.
+
+A release shows just its version, such as `v0.1.0`. The beta site shows `v0.2.0-beta+a1b2c3d` and the LAN server `v0.1.0-local+a1b2c3d`: the version with where it was built and the commit it was built from. The same text goes into each export's `README.txt`, `report.json` and `project.json`, so you can always tell which build made a mold.
 
 ## The app, from top to bottom
 
@@ -40,6 +43,7 @@ The Diagnostics card in the view lists what the app found: warnings, notes and e
 
 - `docs/WORKFLOW.md`: the maker's whole workflow, from printing to recasting. Start here before your first mold.
 - `docs/DEPLOY.md`: running the server, updating it, and running the tests.
+- `docs/RELEASING.md`: the release and beta sites on GitHub Pages, and how a release is made.
 - `docs/THIRD_PARTY.md`: the open-source software the app is built with, and their licences.
 - `docs/REQUIREMENTS.md`: what was asked for, what was decided, and how each requirement is checked.
 - `docs/PLAN.md`: how the app was built, milestone by milestone, with what was measured.
@@ -60,11 +64,11 @@ The app measures the geometry: the silicone thickness, the closed cavity, the op
 
 - **A big file:** past 300,000 triangles the view draws a lighter copy, and Diagnostics says so. Past 2 million, merged mode and the glue-in pocket use a copy of 1 million triangles, with the error that costs said under Mode; the cover and `model_oriented.stl` still come from the whole mesh. A 150 MB STL of 3 million triangles works, but takes the browser to about 2.3 to 2.5 GB of memory in Chromium and 2.9 to 3.0 GB in Firefox, so leave about 3.5 GB free and close other heavy tabs first (`docs/DEPLOY.md` has the figures).
 - **A mesh with holes (an open mesh):** the app still makes a cover and a glue-in base from its surface. Merged mode is off, with the reason under Mode, and the silicone thickness cannot be measured, so the status strip and README.txt say "unverified". To use merged mode, repair the mesh, for example with your slicer's repair, and open it again.
-- **A model of several parts:** a file split into parts for multi-colour printing is fine. Parts that overlap or touch (within 0.05 mm) are one model, with one pour at its highest point, and Diagnostics says how many parts the file has and, for a closed mesh, by how much they overlap; the model's volume is that of the parts together, counted once where they overlap, also when the base face cuts through them. Parts that stand apart each get pours of their own. A project saved by version 1.0.0 of such a file opens with its moved openings and removed vents reset, as 1.0.0 gave each part pours of its own, and Diagnostics says so.
+- **A model of several parts:** a file split into parts for multi-colour printing is fine. Parts that overlap or touch (within 0.05 mm) are one model, with one pour at its highest point, and Diagnostics says how many parts the file has and, for a closed mesh, by how much they overlap; the model's volume is that of the parts together, counted once where they overlap, also when the base face cuts through them. Parts that stand apart each get pours of their own. A project of such a file saved by an internal build before 1.0.1 (public versions start at 0.1.0) opens with its moved openings and removed vents reset, as those builds gave each part pours of its own, and Diagnostics says so.
 - **A file that will not open:** an empty, cut-off or garbled STL, or a file that is no STL at all, says why under the file row, and the model on screen stays as it was. A file that looks cut off but still holds triangles opens with a warning. Export the STL again from the program that made it.
 - **A project that will not open:** a damaged `.moldproj`, one from a newer version of the app, or one whose STL was changed says why under the file row, with what to do.
-- **Chrome over plain http:** Firefox saves the STL and ZIP files without asking. Chrome has not been tried and may ask whether to keep or discard each file: choose Keep. Check with `diag.html` first (Advanced, Developer pages, Browser check). If Chrome blocks the files outright, `docs/DEPLOY.md` says what helps, or use Firefox.
-- **The page looks old after an update:** the server serves the build `scripts/serve.sh` made when it was last started. Restart it (see `docs/DEPLOY.md`), then reload the page.
+- **Chrome over plain http:** this is about the LAN server only; the web addresses above are HTTPS, where saving works as on any site. Firefox saves the STL and ZIP files without asking. Chrome has not been tried and may ask whether to keep or discard each file: choose Keep. Check with `diag.html` first (Advanced, Developer pages, Browser check). If Chrome blocks the files outright, `docs/DEPLOY.md` says what helps, or use Firefox.
+- **The page looks old after an update:** the version in the header says which build you have. The LAN server serves the build `scripts/serve.sh` made when it was last started: restart it (see `docs/DEPLOY.md`), then reload the page. On the web, a new release shows within a few minutes of its tag; reload the page.
 
 ## Licence
 

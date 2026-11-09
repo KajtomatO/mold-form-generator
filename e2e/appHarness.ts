@@ -42,7 +42,7 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
     await route.continue();
   });
   await page.goto(`/?test=1${query}`);
-  await expect(page).toHaveTitle('Casting Form Generator');
+  await expect(page).toHaveTitle('Mold Form Generator');
   await page.waitForFunction(() => '__pipeline' in window && '__app' in window);
   return watch;
 }

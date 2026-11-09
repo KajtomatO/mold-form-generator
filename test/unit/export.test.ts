@@ -8,7 +8,8 @@ import { downloadName, REVOKE_MS, saveBytes } from '../../src/app/download';
 import { INIT_TIMEOUT_MS, realTimers } from '../../src/app/jobGate';
 import { Pipeline, type ExportProgress, type ExportResult, type PipelineOptions } from '../../src/app/pipeline';
 import { projectFile } from '../../src/app/project';
-import { APP_VERSION } from '../../src/app/version';
+import { BUILD } from '../../src/app/buildInfo';
+import { APP_NAME } from '../../src/app/version';
 import { defaultParams } from '../../src/core/params/defaults';
 import { GROUP_TITLES, PARAM_SCHEMA, SCHEMA_VERSION } from '../../src/core/params/schema';
 import { fitVariants } from '../../src/core/parts/fitTest';
@@ -42,7 +43,7 @@ const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
 describe('names and versions', () => {
   it('the app version is the one package.json has', () => {
-    expect(APP_VERSION).toBe(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version);
+    expect(BUILD.version.split(/[-+]/)[0]).toBe(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version);
   });
 
   it('a saved file is named after the model, with what Windows refuses replaced', () => {
@@ -82,9 +83,9 @@ describe('names and versions', () => {
     const project = { params: defaultParams(), plane: { rank: 1, upper: 0.41 }, pins: [{ id: 'b0:pour:0', kind: 'pour' as const, x: 1, y: 2 }], removed: ['b0:vent:1'] };
     const basePlane = { normal: [0, 0, -1] as [number, number, number], offset: -0.41, upper: 0.41 };
     const file = projectFile(project, 'x.stl', { modelSha256: 'ab'.repeat(32), basePlane });
-    expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: APP_VERSION, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
+    expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
     expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
-    expect(SCHEMA_VERSION).toBe(3);
+    expect(SCHEMA_VERSION).toBe(4);
   });
 
   it('each request counts its own steps, and only the ZIP packs README, report and project', () => {
@@ -125,8 +126,8 @@ const warning: Diagnostic = { code: 'long-vent', severity: 'warning', message: '
 const note: Diagnostic = { code: 'silicone-tall', severity: 'info', message: 'This cavity is 162 mm tall, so 4 to 5 mm of silicone keeps a mold that size from sagging.' };
 function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
   const i: ReadmeInput = {
-    app: 'Casting Form Generator',
-    version: APP_VERSION,
+    app: APP_NAME,
+    version: BUILD.version,
     model: '3dbenchy.stl',
     params: defaultParams(),
     resolved: { 'base.pocketDepth': 0.2, 'base.planeTol': 0.05, 'silicone.printMargin': 0.1, 'vents.persistence': 1.5, 'grid.spacing': 9.77, 'grid.edge': 6.4, 'bolts.length': 12 },
@@ -461,7 +462,13 @@ describe('the export of jersey in Node', () => {
     expect(Math.min(...model.positions.filter((_, k) => k % 3 === 2))).toBe(0);
 
     const report = JSON.parse(text(files['report.json'])) as ExportReport;
-    expect(report).toMatchObject({ appVersion: APP_VERSION, schemaVersion: SCHEMA_VERSION, model: { file: EXAMPLE_FILES.jersey, triangles: model.rawTriangleCount }, plane: { choice: { rank: 0, upper: false }, normal: [0, 0, -1] } });
+    // R1: the build's version string, so a mold exported from beta names the commit that made it.
+    expect(report).toMatchObject({ app: 'Mold Form Generator', appVersion: BUILD.version, schemaVersion: SCHEMA_VERSION, model: { file: EXAMPLE_FILES.jersey, triangles: model.rawTriangleCount }, plane: { choice: { rank: 0, upper: false }, normal: [0, 0, -1] } });
+    // README.txt is wrapped at 76 columns, so its lines are joined first.
+    expect(text(files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain(`Made by Mold Form Generator ${BUILD.version} from ${EXAMPLE_FILES.jersey}.`);
+    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 4, appVersion: BUILD.version });
+    // STL headers name the app and carry no version, so every build gives the same bytes for the same mold.
+    for (const [name, bytes] of Object.entries(files).filter(([f]) => f.endsWith('.stl'))) expect(text(bytes.subarray(0, 80)).replace(/\0+$/, ''), name).toBe('binary STL, mold-form-generator');
     expect(report.params).toEqual(p.params);
     expect(report.clearance.measured).toBe(outputs.clearance!.measured);
     expect(report.clearance.measured!).toBeGreaterThanOrEqual(3);
@@ -869,6 +876,19 @@ describe('the export of jersey in Node', () => {
 describe('the export with bolts, in Node', () => {
   const M9 = JSON.parse(readFileSync(join(root, 'test', 'fixtures', 'm9-parts.json'), 'utf8')) as { parts: Record<string, Record<string, string>>; fitTest: Record<string, string> };
   const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+  /**
+   * The SHA-256 of an exported STL with M9's header put back. M9 wrote "binary STL, casting-form-generator"
+   * into the 80-byte header, and R1's rename changed only that text, so with it back every byte must be M9's:
+   * the hashes in m9-parts.json stay the ones M9 itself exported.
+   */
+  const M9_HEADER = 'binary STL, casting-form-generator';
+  const m9Sha = (stl: Uint8Array): string => {
+    expect(text(stl.subarray(0, 80)).replace(/\0+$/, '')).toBe(`binary STL, mold-form-generator`);
+    const copy = stl.slice();
+    copy.fill(0, 0, 80);
+    copy.set(new TextEncoder().encode(M9_HEADER));
+    return sha(copy);
+  };
   const pipelines: Pipeline[] = [];
   afterEach(() => {
     pipelines.splice(0).forEach((p) => p.dispose());
@@ -884,17 +904,18 @@ describe('the export with bolts, in Node', () => {
     return { p, outputs, files: unzipSync(outputs.zip) };
   }
 
-  // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off, must give the same bytes.
+  // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off, must give the same bytes,
+  // past the header's text, which names the app (m9Sha).
   it.each([
     ['jersey', 'jersey', () => {}],
     ['jersey-merged', 'jersey', (p: Params) => (p.base.mode = 'merged')],
     ['jersey-2x1', 'jersey', (p: Params) => (p.grid.nx = 2)],
     ['barrel', 'barrel', () => {}],
-  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, and its fit test unchanged', async (name, id, change) => {
+  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged', async (name, id, change) => {
     const { files } = await exported(id, change);
-    expect(sha(files['cover.stl']), 'cover.stl').toBe(M9.parts[name]['cover.stl']);
-    expect(sha(files['base.stl']), 'base.stl').toBe(M9.parts[name]['base.stl']);
-    const fit = Object.fromEntries(Object.entries(files).filter(([f]) => f.startsWith('fit_test/') && f.endsWith('.stl')).map(([f, b]) => [f, sha(b)]));
+    expect(m9Sha(files['cover.stl']), 'cover.stl').toBe(M9.parts[name]['cover.stl']);
+    expect(m9Sha(files['base.stl']), 'base.stl').toBe(M9.parts[name]['base.stl']);
+    const fit = Object.fromEntries(Object.entries(files).filter(([f]) => f.startsWith('fit_test/') && f.endsWith('.stl')).map(([f, b]) => [f, m9Sha(b)]));
     expect(fit).toEqual(M9.fitTest);
     const readme = text(files['README.txt']);
     expect(readme).not.toContain('HARDWARE');
@@ -971,7 +992,7 @@ describe('the export with bolts, in Node', () => {
     // The fit test with the bolts on: the joint pieces as before, and the coupon.
     const fit = Object.keys(files).filter((f) => f.startsWith('fit_test/')).sort();
     expect(fit).toEqual([...Object.keys(M9.fitTest), 'fit_test/README.txt', 'fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl'].sort());
-    for (const name of Object.keys(M9.fitTest)) expect(sha(files[name]), name).toBe(M9.fitTest[name]);
+    for (const name of Object.keys(M9.fitTest)) expect(m9Sha(files[name]), name).toBe(M9.fitTest[name]);
     for (const name of ['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']) expect(readPart(files[name]).audit, name).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
     expect(text(files['fit_test/README.txt']).split('\r\n').filter((line) => line.length > 76)).toEqual([]);
     const fitReadme = text(files['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');

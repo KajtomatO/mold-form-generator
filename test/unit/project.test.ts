@@ -11,7 +11,8 @@ import { fileKind, holdsModel, MAX_STL_BYTES, MODEL_ENTRY, packProject, PROJECT_
 import { migrate, MIGRATIONS, OPEN_AGAIN, OPEN_INSTEAD, ProjectError, readProjectJson, type Migration } from '../../src/app/projectFile';
 import { ProjectFiles } from '../../src/app/projectFiles';
 import { Store } from '../../src/app/store';
-import { APP_VERSION } from '../../src/app/version';
+import { BUILD } from '../../src/app/buildInfo';
+import { bodiesByPart } from '../../src/app/version';
 import type { BaseCandidate } from '../../src/core/base/candidates';
 import { findStoredPlane, nearestCandidate, PLANE_MATCH_MM, planeGap, planeOf, triangleOnPlane } from '../../src/core/base/storedPlane';
 import { defaultParams } from '../../src/core/params/defaults';
@@ -171,20 +172,20 @@ describe('pack and unpack', () => {
 });
 
 describe('migration', () => {
-  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 3 with the hash and plane unknown and the bolts off', () => {
+  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 4 with the hash and plane unknown and the bolts off', () => {
     const read = readProjectJson(fixture('v1-jersey-export.json'));
     const v1 = JSON.parse(fixture('v1-jersey-export.json'));
     expect(v1.schemaVersion).toBe(1);
     expect(read.from).toBe(1);
-    expect(SCHEMA_VERSION).toBe(3);
+    expect(SCHEMA_VERSION).toBe(4);
     expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS } });
     // The pocket's edited flag is its value, 0.4, where an unedited one is null.
     expect(read.file.params.base.pocketDepth).toBe(0.4);
     expect(read.file.params.silicone.printMargin).toBeNull();
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 3.' }]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 4.' }]);
   });
 
-  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 3 with the bolts off and nothing else changed', () => {
+  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 4 with the bolts off and nothing else changed', () => {
     const read = readProjectJson(fixture('v2-jersey-export.json'));
     const v2 = JSON.parse(fixture('v2-jersey-export.json'));
     expect(v2).toMatchObject({ schemaVersion: 2, appVersion: '0.2.0' });
@@ -195,7 +196,7 @@ describe('migration', () => {
     // The hash and the plane came with format 2, and stay as saved.
     expect(read.file.modelSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(read.file.basePlane).toEqual(v2.basePlane);
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 3.' }]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 4.' }]);
   });
 
   it('runs one step per version, in order, so a version 0 with renamed fields and no pins or removed vents reaches the current one, with its gaps filled', () => {
@@ -217,15 +218,19 @@ describe('migration', () => {
       seen.push(f.schemaVersion as number);
       return MIGRATIONS[2](f, notes);
     };
-    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3 });
-    expect(seen).toEqual([0, 1, 2]);
+    const v3ToV4: Migration = (f, notes) => {
+      seen.push(f.schemaVersion as number);
+      return MIGRATIONS[3](f, notes);
+    };
+    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3, 3: v3ToV4 });
+    expect(seen).toEqual([0, 1, 2, 3]);
     expect(read.file.params.bolts).toEqual(V3_BOLTS);
     expect(read.from).toBe(0);
     expect(read.file).toMatchObject({ schemaVersion: SCHEMA_VERSION, model: 'jersey-barrier.stl', appVersion: '0.0.1', pins: [], removed: [], modelSha256: null, basePlane: null });
     expect(read.file.params.grid.nx).toBe(2);
     expect(read.file.params.reports).toEqual(defaultParams().reports);
     expect(read.notes).toEqual([
-      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 3.' },
+      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 4.' },
       { severity: 'warning', message: 'Not in the file, so as for a new model: moved openings, so none; removed vents, so none.' },
       { severity: 'warning', message: 'Not in the file, so at their defaults: Smallest reported volume, Smallest air pocket depth.' },
     ]);
@@ -234,7 +239,10 @@ describe('migration', () => {
   });
 
   it('a version newer than the app knows, and a file with no version, say so plainly, naming the file', () => {
-    expect(reason(() => readProjectJson(edited('schemaVersion', 4), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${APP_VERSION}), in project format 4; this one reads formats up to ${SCHEMA_VERSION}. Open it in the newer version, or update this one.`);
+    expect(reason(() => readProjectJson(edited('schemaVersion', 5), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${BUILD.version}), in project format 5; this one reads formats up to 4. Open it in the version of the app that saved it.`);
+    // A visitor cannot update a web page, and a new format reaches the beta site first, so a file from beta says where to open it.
+    const fromBeta = JSON.stringify({ ...JSON.parse(edited('schemaVersion', 5)), appVersion: '0.2.0-beta+a1b2c3d' });
+    expect(reason(() => readProjectJson(fromBeta, MIGRATIONS, 'next.moldproj'))).toBe("next.moldproj was saved by a newer version of the app (app version 0.2.0-beta+a1b2c3d), in project format 5; this one reads formats up to 4. Open it on the beta site that saved it, at the app's web address with beta/ at the end.");
     expect(reason(() => readProjectJson(edited('schemaVersion', undefined)))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => readProjectJson(edited('schemaVersion', '2')))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => migrate([1, 2]))).toBe(`project.json holds no settings this app can read. ${OPEN_AGAIN}`);
@@ -791,7 +799,7 @@ describe('save and open with the real pipeline on jersey', () => {
       severity: 'info',
       message: 'Applied the settings of project.json to jersey-barrier.stl.',
       notes: [
-        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 3.' },
+        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 4.' },
         { severity: 'info', message: 'project.json does not record its model\'s contents, so it was matched to jersey-barrier.stl by the file name alone.' },
       ],
     });
@@ -821,53 +829,87 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(store.fileNotice.value?.message).toBe('cube-mold.zip was saved for cube.stl, not jersey-barrier.stl, so only its settings were applied: the model keeps its own base face, pinned openings and removed vents.');
   });
 
-  it('M11c: a project saved before 1.0.1, of a model whose parts are one body now, opens with its moved openings and removed vents reset and a warning; one saved since, or of a model of one part, keeps them', async () => {
+  it('bodiesByPart goes by the format, and by the app version only for format 3, where 1.0.1 alone had joined parts', () => {
+    const cases: [number, string, boolean][] = [
+      [1, '0.1.0', true],
+      [2, '0.2.0', true],
+      [3, '0.3.0', true],
+      [3, '1.0.0', true],
+      [3, '1.0.1', false],
+      // Only that exact build: a format 3 file never came from anything else that joined parts.
+      [3, '1.0.1-local+a1b2c3d', true],
+      [3, 'unknown', true],
+      [4, BUILD.version, false],
+      [4, '0.1.0', false],
+      // A format 4 file keeps its pins whatever version it names: no version number is compared.
+      [4, '1.0.0', false],
+      [5, '0.0.1', false],
+    ];
+    expect(cases.map(([format, appVersion]) => bodiesByPart({ format, appVersion }))).toEqual(cases.map(([, , reset]) => reset));
+  });
+
+  it('R1: a project of format 3 saved by 1.0.0, of a model whose parts are one body now, opens with its moved openings and removed vents reset and a warning; format 3 saved by 1.0.1, and format 4 whatever version it names, keep them, as does a model of one part', async () => {
     // A box with a part on top: two parts, one body since 1.0.1, where 1.0.0 numbered the top part body 1.
     const hat = asciiStl(toSoup(joinMeshes(box([0, 0, 0], [30, 30, 10]), box([10, 10, 10], [20, 20, 16]))), 'hat');
     const p = fresh();
     p.load(hat, 'hat.stl');
     await p.idle();
     const old: Project = { ...structuredClone(p.project()), pins: [{ id: 'b1:pour:0', kind: 'pour', x: 15, y: 15 }], removed: ['b0:vent:beside'] };
-    const store = new Store(fresh(), () => 0, files);
-    const saved = (appVersion: string, stl = hat, model = 'hat.stl'): File => new File([packProject(projectJson({ ...projectFile(old, model, { modelSha256: null, basePlane: null }), appVersion }), stl).slice()], 'hat.moldproj');
-    await store.openFile(saved('1.0.0'));
-    await store.pipeline.idle();
+    const json = (schemaVersion: number, appVersion: string): string => projectJson({ ...projectFile(old, 'hat.stl', { modelSha256: null, basePlane: null }), schemaVersion, appVersion });
+    const saved = (schemaVersion: number, appVersion: string): File => new File([packProject(json(schemaVersion, appVersion), hat).slice()], 'hat.moldproj');
+    const opened = async (file: File): Promise<Store> => {
+      const store = new Store(fresh(), () => 0, files);
+      await store.openFile(file);
+      await store.pipeline.idle();
+      return store;
+    };
+
+    const store = await opened(saved(3, '1.0.0'));
     expect(store.pipeline.project().pins).toEqual([]);
     expect(store.pipeline.project().removed).toEqual([]);
     expect(store.pipeline.diagnostics.find((d) => d.code === 'openings-reset')).toEqual({
       code: 'openings-reset',
       severity: 'warning',
-      message: 'This project was saved by version 1.0.0 of the app, which took each part of the file for a model of its own. Parts that overlap or touch are one model since version 1.0.1, so the openings it moved and the vents it removed were reset: move or remove them again.',
+      message: 'This project was saved by an early test build of the app (1.0.0), from before the public versions, which took each part of the file for a model of its own. Parts that overlap or touch are now one model, so the openings it moved and the vents it removed were reset: move or remove them again.',
     });
     // Its one body has its own pour and the vent beside it.
     expect(store.pipeline.placement!.value.placement.openings.map((o) => [o.id, o.pinned])).toEqual([['b0:pour:0', false], ['b0:vent:beside', false]]);
-
     // The project on screen is no longer the file's, so leaving asks first.
     expect(store.unsaved()).toBe(true);
 
-    // Saved by 1.0.1, its pins name this numbering, and they stay.
-    const since = new Store(fresh(), () => 0, files);
-    await since.openFile(saved(APP_VERSION));
-    await since.pipeline.idle();
-    expect(since.pipeline.project()).toMatchObject({ pins: old.pins, removed: old.removed });
-    expect(since.pipeline.diagnostics.some((d) => d.code === 'openings-reset')).toBe(false);
+    // Format 3 by 1.0.1, the one internal build with the rule, and format 4 by this build or naming any
+    // version: their pins name this numbering, and they stay.
+    for (const [format, version] of [[3, '1.0.1'], [4, BUILD.version], [4, '1.0.0']] as const) {
+      const kept = await opened(saved(format, version));
+      expect(kept.pipeline.project(), `${format} ${version}`).toMatchObject({ pins: old.pins, removed: old.removed });
+      expect(kept.pipeline.diagnostics.some((d) => d.code === 'openings-reset'), `${format} ${version}`).toBe(false);
+    }
+    // A format 3 file that names 0.1.0, which never wrote format 3, is reset as any other format 3 one.
+    expect((await opened(saved(3, '0.1.0'))).pipeline.project().pins).toEqual([]);
+
+    // What a save writes now is format 4 with this build's version, and it opens with its pins.
+    expect(JSON.parse(projectJson(projectFile(old, 'hat.stl', { modelSha256: null, basePlane: null })))).toMatchObject({ schemaVersion: 4, appVersion: BUILD.version });
 
     // A model of one part numbers its body the same in every version, so a 1.0.0 project of it keeps them.
     const jerseyPins: Project = { ...old, pins: [{ id: 'b0:pour:0', kind: 'pour', x: 3, y: 0 }], removed: [] };
     const q = fresh();
-    q.loadProject(jersey, EXAMPLE_FILES.jersey, jerseyPins, null, null, '1.0.0');
+    q.loadProject(jersey, EXAMPLE_FILES.jersey, jerseyPins, null, null, { format: 3, appVersion: '1.0.0' });
     await q.idle();
     expect(q.project().pins).toEqual(jerseyPins.pins);
     expect(q.diagnostics.some((d) => d.code === 'openings-reset')).toBe(false);
 
-    // Settings from a 1.0.0 project.json, applied to the model on screen, are reset the same way, in the same step.
-    const r = fresh();
-    r.load(hat, 'hat.stl');
-    await r.idle();
-    r.applyProject(old, null, '1.0.0');
-    expect(r.project()).toMatchObject({ pins: [], removed: [] });
-    await r.idle();
-    expect(r.diagnostics.find((d) => d.code === 'openings-reset')?.message).toContain('saved by version 1.0.0 of the app');
+    // Settings from a format 3 project.json by 1.0.0, applied to the model on screen, are reset the same way,
+    // in the same step; from a format 4 one they stay.
+    const r = new Store(fresh(), () => 0, files);
+    r.pipeline.load(hat, 'hat.stl');
+    await r.pipeline.idle();
+    await r.openFile(new File([json(3, '1.0.0')], 'project.json'));
+    expect(r.pipeline.project()).toMatchObject({ pins: [], removed: [] });
+    await r.pipeline.idle();
+    expect(r.pipeline.diagnostics.find((d) => d.code === 'openings-reset')?.message).toContain('saved by an early test build of the app (1.0.0), from before the public versions');
+    await r.openFile(new File([json(4, BUILD.version)], 'project.json'));
+    await r.pipeline.idle();
+    expect(r.pipeline.project()).toMatchObject({ pins: old.pins, removed: old.removed });
   });
 
   it('a saved plane its choice no longer finds is found under another choice, pins kept; one found nowhere warns and keeps the best guess', async () => {

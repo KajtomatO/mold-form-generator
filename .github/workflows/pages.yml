@@ -1,0 +1,83 @@
+# Publishes the site on GitHub Pages: the newest release tag vX.Y.Z on main at the root, and the newest
+# commit of the beta branch at /beta/. docs/RELEASING.md explains the branches and the one-time setup.
+# It builds only: the tests run on the server with scripts/ci.sh, not here, until the owner has decided
+# what happens to the example models the tests read.
+name: Pages
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - beta
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and none cut off halfway: a later push waits, then publishes both sites again.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out with every branch and tag
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install packages
+        run: npm ci --no-audit --no-fund
+
+      - name: Choose the release and the beta commit
+        id: refs
+        run: |
+          # The newest release is the highest vX.Y.Z tag that main holds, so a tag elsewhere is never published.
+          stable=$(git tag --merged origin/main --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+          if [ -z "$stable" ]; then
+            echo "::error::No release tag vX.Y.Z is on main yet. Tag a release on main first (docs/RELEASING.md)."
+            exit 1
+          fi
+          # A pushed tag that is not the one published turns the run red, with the reason, and deploys nothing.
+          if [ "${GITHUB_REF_TYPE:-}" = tag ] && [ "$GITHUB_REF_NAME" != "$stable" ]; then
+            if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then why="it is not of the form vX.Y.Z, such as v0.2.0"
+            elif ! git merge-base --is-ancestor "refs/tags/$GITHUB_REF_NAME" origin/main; then why="it is not on main: merge into main first, then push main with the tag"
+            else why="main holds a higher release, $stable"; fi
+            echo "::error::Tag $GITHUB_REF_NAME was not published, as $why. The release address still shows $stable."
+            exit 1
+          fi
+          if git rev-parse --verify --quiet refs/remotes/origin/beta >/dev/null; then beta=origin/beta; else beta=-; fi
+          echo "Release $stable, beta $beta"
+          echo "stable=$stable" >> "$GITHUB_OUTPUT"
+          echo "beta=$beta" >> "$GITHUB_OUTPUT"
+
+      - name: Build both sites
+        # Through the environment, so no ref name is ever read as shell code.
+        env:
+          STABLE: ${{ steps.refs.outputs.stable }}
+          BETA: ${{ steps.refs.outputs.beta }}
+        run: scripts/build-pages.sh "$STABLE" "$BETA" "$RUNNER_TEMP/site"
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/site
+          include-hidden-files: true
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

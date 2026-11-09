@@ -3,7 +3,8 @@ export function writeBinaryStl(positions: ArrayLike<number>, indices?: ArrayLike
   const triCount = (indices ? indices.length : positions.length / 3) / 3;
   const out = new Uint8Array(84 + 50 * triCount);
   const view = new DataView(out.buffer);
-  const header = 'binary STL, casting-form-generator';
+  // The app's name and no version, so the same mold gives the same bytes from every build.
+  const header = 'binary STL, mold-form-generator';
   for (let i = 0; i < header.length; i++) out[i] = header.charCodeAt(i);
   view.setUint32(80, triCount, true);
 

@@ -9,7 +9,7 @@ import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import { MANIFOLD_TRIANGLE_LIMIT } from '../core/mesh/simplify';
-import type { Params } from '../core/params/schema';
+import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import type { CutOpening } from '../core/parts/openings';
 import type { Diagnostic } from '../core/report/diagnostics';
 import type { ExportInputs, ExportMeta, ExportOutputs, ExportRequest } from '../workers/exportJob';
@@ -25,7 +25,8 @@ import { hashFloats, hashMesh, hashString } from './hash';
 import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
 import type { Project } from './project';
 import { stageKeys, type StageId, type StageInputs } from './stages';
-import { APP_VERSION, bodiesByPart } from './version';
+import { BUILD } from './buildInfo';
+import { bodiesByPart, type SavedBy } from './version';
 import { formatNormal } from '../ui/format';
 
 export type { Project } from './project';
@@ -196,6 +197,8 @@ export interface ExportResult extends ExportOutputs {
 
 const ZIP_REQUEST: ExportRequest = { want: 'zip', fitTest: false };
 
+/** A project this build writes, as the pins on screen are numbered. */
+const CURRENT_FORMAT: SavedBy = { format: SCHEMA_VERSION, appVersion: BUILD.version };
 
 /** Past this heap, the preview's solid worker is recycled before an export, so two heavy heaps never stand at once (M11). */
 export const EXPORT_RECYCLE_BYTES = 1e9;
@@ -229,11 +232,11 @@ export class Pipeline {
   private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null } | null = null;
   private planeCheck: PlaneCheck | null = null;
   /**
-   * M11c: the app version that saved the project on screen, until the import has said whether this model
-   * joins parts into one body. Pins and removed vents name bodies by number, and versions before 1.0.1
-   * numbered each part of the file as a body of its own.
+   * M11c: the format and app version of the project on screen, until the import has said whether this model
+   * joins parts into one body. Pins and removed vents name bodies by number, and internal builds before 1.0.1
+   * numbered each part of the file as a body of its own. Since R1 the format tells which rule a file follows.
    */
-  private numbering: { file: string; savedBy: string } | null = null;
+  private numbering: { file: string; savedBy: SavedBy } | null = null;
   /**
    * Called when a project's saved plane was found under another choice than the file's, so the store
    * can mean the same face in the history it holds and in what it last saved.
@@ -327,7 +330,7 @@ export class Pipeline {
    * is asked for with the settings the page had before. `stored` is the plane the file was saved on,
    * which the model's first S2 checks the choice against, and `sha256` the hash its STL was checked by.
    */
-  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null, savedBy = APP_VERSION): void {
+  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null, savedBy: SavedBy = CURRENT_FORMAT): void {
     this.startFile(bytes, name);
     this.file!.sha256 = sha256;
     this.params = project.params;
@@ -342,9 +345,9 @@ export class Pipeline {
   /**
    * Settings for the model on screen, from an export ZIP or a lone project.json, as one change. With
    * the plane the file was saved on, the choice is checked against it as for a loaded project. `savedBy`
-   * is the version that saved the pins and removed vents in `project`.
+   * is the format and version of the file that holds the pins and removed vents in `project`.
    */
-  applyProject(project: Project, stored: StoredPlane | null, savedBy = APP_VERSION): void {
+  applyProject(project: Project, stored: StoredPlane | null, savedBy: SavedBy = CURRENT_FORMAT): void {
     this.numbering = this.file ? { file: this.file.id, savedBy } : null;
     this.setProject(project);
     if (this.checkNumbering()) this.changed();
@@ -1287,7 +1290,7 @@ export class Pipeline {
 
   /**
    * Once the import of a project's model is in: if it joins parts into one body and the project was saved by
-   * a version that numbered each part as a body, its pins and removed vents are reset, with a warning, as
+   * a build that numbered each part as a body, its pins and removed vents are reset, with a warning, as
    * body 2 there is some other part here, or none. Returns whether it reset them.
    */
   private checkNumbering(): boolean {
@@ -1299,8 +1302,11 @@ export class Pipeline {
     if (!bodiesByPart(check.savedBy) || report.bodies === parts || (this.pins.length === 0 && this.removed.length === 0)) return false;
     this.pins = [];
     this.removed = [];
-    const by = /^\d+\.\d+\.\d+/.test(check.savedBy) ? `version ${check.savedBy} of the app` : 'an earlier version of the app';
-    this.notes.push({ code: 'openings-reset', severity: 'warning', message: `This project was saved by ${by}, which took each part of the file for a model of its own. Parts that overlap or touch are one model since version 1.0.1, so the openings it moved and the vents it removed were reset: move or remove them again.` });
+    // Only internal builds wrote formats before 4. Their numbers would read as newer than a public one, such
+    // as 1.0.0 beside the header's v0.1.0, so the build is named as a test build, its number only in brackets.
+    const { appVersion } = check.savedBy;
+    const by = /^\d+\.\d+\.\d+/.test(appVersion) ? `an early test build of the app (${appVersion})` : 'an early test build of the app';
+    this.notes.push({ code: 'openings-reset', severity: 'warning', message: `This project was saved by ${by}, from before the public versions, which took each part of the file for a model of its own. Parts that overlap or touch are now one model, so the openings it moved and the vents it removed were reset: move or remove them again.` });
     return true;
   }
 

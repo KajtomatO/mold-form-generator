@@ -1,5 +1,5 @@
-Casting Form Generator: third-party notices
-===========================================
+Mold Form Generator: third-party notices
+========================================
 
 This app is built with the open-source software below. Each entry gives its
 version, licence, copyright and source, then the full licence text it is

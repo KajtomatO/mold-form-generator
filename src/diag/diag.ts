@@ -148,8 +148,8 @@ function downloadFitTest(): Promise<void> {
 }
 
 document.querySelector('#dl-fit')?.addEventListener('click', () => void downloadFitTest());
-document.querySelector('#dl-stl')?.addEventListener('click', () => saveBytes('cfg-test.stl', stlBytes, 'model/stl'));
-document.querySelector('#dl-zip')?.addEventListener('click', () => saveBytes('cfg-test.zip', zipBytes, 'application/zip'));
+document.querySelector('#dl-stl')?.addEventListener('click', () => saveBytes('download-test.stl', stlBytes, 'model/stl'));
+document.querySelector('#dl-zip')?.addEventListener('click', () => saveBytes('download-test.zip', zipBytes, 'application/zip'));
 
 const done = (async (): Promise<DiagResults> => {
   render();

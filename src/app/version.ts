@@ -1,20 +1,30 @@
 /**
- * The app's version, as package.json has it. A unit test keeps the two the same. 0.2.0 came with
- * project format 2 (M9), 0.3.0 with 3 (M10), and 1.0.0 is the first complete release (M11b), still
- * format 3. 1.0.1 joins parts that overlap or touch into one body (M11c), format 3 still.
+ * The app's name, as every page, export and the notices give it. The version is package.json's alone:
+ * the build reads it from there (vite.config.ts) and buildInfo.ts holds it as BUILD.version.
+ *
+ * Public versioning starts at 0.1.0, the first release on GitHub Pages (R1). Before it, internal builds on
+ * the LAN server were numbered 0.2.0 (project format 2, M9), 0.3.0 (format 3, M10), 1.0.0 (M11b) and 1.0.1
+ * (M11c, which joined parts that overlap or touch into one body), so these numbers say nothing about order:
+ * never compare them.
  */
-export const APP_VERSION = '1.0.1';
+export const APP_NAME = 'Mold Form Generator';
 
-export const APP_NAME = 'Casting Form Generator';
+/** The one internal build whose project files, still format 3, already numbered bodies as joined parts. */
+export const JOINED_PARTS_BUILD = '1.0.1';
+
+/** Who wrote a project file: its format as written, before any migration, and the app version it names. */
+export interface SavedBy {
+  format: number;
+  appVersion: string;
+}
 
 /**
- * Whether a project saved by `version` numbered a model's bodies by its connected parts, as every version
- * before 1.0.1 did, so its pins and removed vents name bodies by those numbers. A version not given, or not
- * read, is taken for one of those.
+ * Whether a project numbered a model's bodies by its connected parts, as every internal build before 1.0.1
+ * did, so its pins and removed vents name bodies by those numbers. Format 4 says bodies are joined parts;
+ * of format 3, only build 1.0.1 already had that rule. The format decides, as public versions restarted at
+ * 0.1.0 and a version number cannot.
  */
-export function bodiesByPart(version: string): boolean {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
-  if (!match) return true;
-  const [major, minor, patch] = match.slice(1).map(Number);
-  return major < 1 || (major === 1 && minor === 0 && patch < 1);
+export function bodiesByPart(saved: SavedBy): boolean {
+  if (saved.format >= 4) return false;
+  return !(saved.format === 3 && saved.appVersion === JOINED_PARTS_BUILD);
 }

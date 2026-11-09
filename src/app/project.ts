@@ -2,7 +2,7 @@ import type { OpeningPin } from '../core/analysis/placement';
 import type { StoredPlane } from '../core/base/storedPlane';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import type { PlaneChoice } from '../workers/fieldStages';
-import { APP_VERSION } from './version';
+import { BUILD } from './buildInfo';
 
 export type { StoredPlane } from '../core/base/storedPlane';
 
@@ -17,7 +17,8 @@ export interface Project {
 
 /**
  * project.json, as a .moldproj and the export ZIP hold it. Version 2 added the STL's hash and the base
- * plane itself; src/app/projectFile.ts migrates older files and checks every field on the way in.
+ * plane itself, and 4 says its pins number bodies as joined parts; src/app/projectFile.ts migrates older
+ * files and checks every field on the way in. `appVersion` is the build's version string (buildInfo.ts).
  */
 export interface ProjectFile extends Project {
   schemaVersion: number;
@@ -32,7 +33,7 @@ export interface ProjectFile extends Project {
 
 /** The fields in the order project.json lists them, so the file reads from what it is about to what it holds. */
 export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null }): ProjectFile {
-  return { schemaVersion: SCHEMA_VERSION, appVersion: APP_VERSION, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...project };
+  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...project };
 }
 
 /** project.json's text, as both a .moldproj and the export ZIP write it. */

@@ -57,8 +57,15 @@ const v2ToV3: Migration = (file) => {
   return { ...file, params: { ...params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 } } };
 };
 
+/**
+ * Version 4 holds the same fields as 3. What it adds is a promise: its pins and removed vents number bodies
+ * as joined parts. Whether a version 3 file kept that rule depends on the build that wrote it, which the
+ * pipeline checks once the model's import has said whether it joins parts (bodiesByPart in version.ts).
+ */
+const v3ToV4: Migration = (file) => file;
+
 /** Each older version's step to the one after it. */
-export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3 };
+export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4 };
 
 export interface Migrated {
   file: Json;
@@ -77,7 +84,10 @@ export function migrate(raw: unknown, steps: Readonly<Record<number, Migration>>
   if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new ProjectError(`${name} does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`, 'project.json has no valid schemaVersion.');
   if (version > current) {
     const by = typeof raw.appVersion === 'string' ? ` (app version ${raw.appVersion})` : '';
-    throw new ProjectError(`${name} was saved by a newer version of the app${by}, in project format ${version}; this one reads formats up to ${current}. Open it in the newer version, or update this one.`);
+    // A web page cannot be updated by its visitor, so the maker is told where the newer version is: a new
+    // format reaches the beta site first, whose versions carry -beta+.
+    const where = typeof raw.appVersion === 'string' && raw.appVersion.includes('-beta+') ? 'Open it on the beta site that saved it, at the app\'s web address with beta/ at the end.' : 'Open it in the version of the app that saved it.';
+    throw new ProjectError(`${name} was saved by a newer version of the app${by}, in project format ${version}; this one reads formats up to ${current}. ${where}`);
   }
   let file: Json = raw;
   const notes: ProjectNote[] = [];

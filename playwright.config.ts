@@ -1,5 +1,15 @@
 import { defineConfig } from '@playwright/test';
 import { firefoxHasDisplay, firefoxLibDir, firefoxReady } from './e2e/firefox';
+import { buildConstants } from './vite.config.ts';
+
+// One build for the whole run: the servers' builds and the exports the tests make in Node to compare with
+// them say the same version. The servers inherit the environment, and so do the test workers, which load
+// this file again; buildInfo.ts reads the same constants from the global scope where no build defined them.
+const build = buildConstants(process.env);
+process.env.CFG_CHANNEL = build.channel;
+process.env.CFG_COMMIT = build.commit;
+process.env.CFG_BUILD_DATE = build.date;
+Object.assign(globalThis, { __CFG_VERSION__: build.version, __CFG_CHANNEL__: build.channel, __CFG_COMMIT__: build.commit, __CFG_BUILD_DATE__: build.date });
 
 // Tests run against the LAN address on purpose: 127.0.0.1 is a secure context
 // and would hide every problem that only appears over plain http on a LAN IP.

@@ -115,7 +115,7 @@ These build, check and test the app. None of their code is served, apart from th
 | `vite` | 8.3.6 | MIT | the build and the development server |
 | `vitest` | 5.1.0 | MIT | the unit tests |
 
-With their own dependencies, and leaving out Vite and Rolldown, whose helpers ship, 43 packages are installed for development only, at 1.0.0: 32 under MIT, 7 Apache-2.0, 1 ISC, 1 BSD-3-Clause and 2 MPL-2.0 (`lightningcss` and its Linux build, which Vite uses on stylesheets at build time). The licence test prints these counts on every run.
+With their own dependencies, and leaving out Vite and Rolldown, whose helpers ship, 43 packages are installed for development only, at version 0.1.0 of the app: 32 under MIT, 7 Apache-2.0, 1 ISC, 1 BSD-3-Clause and 2 MPL-2.0 (`lightningcss` and its Linux build, which Vite uses on stylesheets at build time). The licence test prints these counts on every run.
 
 ## How the list is checked
 

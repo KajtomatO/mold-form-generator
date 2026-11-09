@@ -202,7 +202,7 @@ test.describe('review screenshots', () => {
               await expect(page.getByTestId('file-notice')).toHaveAttribute('data-severity', 'error');
             } else if (shot.project === 'migrated') {
               await input.setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: V1_PROJECT });
-              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 3');
+              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 4');
               await hooks(page, (h) => h.idle());
             } else if (shot.m11 === 'bad-file') {
               const cube = new TextDecoder().decode(asciiStl(toSoup(box([0, 0, 0], [20, 20, 20])), 'cube'));

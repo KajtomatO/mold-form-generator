@@ -2,6 +2,8 @@
 
 This is for whoever runs the app on the local network. The app runs entirely in each visitor's browser: the server only hands out the built files. Nothing is uploaded to it, and it keeps no data.
 
+The app is also published on GitHub Pages, at https://kajtomato.github.io/mold-form-generator/ (the newest release) and https://kajtomato.github.io/mold-form-generator/beta/ (the newest work). `docs/RELEASING.md` says how those are built and published; this file is about the LAN server.
+
 ## What you need
 
 - **On the server:** Linux, Node 24 or newer, and npm. The browsers for the tests come with `scripts/install.sh`, below. Building takes about half a GB of memory for a few seconds, and serving takes little.
@@ -46,7 +48,7 @@ New versions are made in this checkout and arrive as commits in it. It has no gi
 scripts/install.sh
 ```
 
-Then stop the running server (Ctrl+C in its terminal, or end its process) and run `scripts/serve.sh` again: it builds the new version into `dist/` before it serves it. Reload the page in the browser.
+Then stop the running server (Ctrl+C in its terminal, or end its process) and run `scripts/serve.sh` again: it builds the new version into `dist/` before it serves it. Reload the page in the browser. The header shows which build you are looking at, such as `v0.1.0-local+a1b2c3d`: the version and the commit the server was built from, with `-dirty` if the checkout had uncommitted changes.
 
 The server serves whatever `dist/` holds, reading it from disk on every request, and only `scripts/serve.sh` builds into it. So until it is restarted it serves the old build, and nothing else should build into `dist/` while it runs: a page already open would lose files it still loads, such as the workers of the next export.
 
@@ -60,7 +62,7 @@ npx vite build --outDir ../cfg-static --emptyOutDir
 
 Then:
 
-- **Serve the folder at the root** of a host and port, such as `http://192.168.0.153:8080/`. The pages load their files from `/assets/...`, so the app does not work from a subfolder such as `/mold/`.
+- **Serve the folder anywhere:** at the root of a host and port, such as `http://192.168.0.153:8080/`, or in a subfolder such as `http://192.168.0.153:8080/mold/`. The pages load every file by a path relative to themselves (`./assets/...`), which is how one build works at both GitHub Pages addresses.
 - **Module workers:** the app's geometry runs in module workers, which the browser only starts from files sent as JavaScript. Check that `.js` files are sent as `text/javascript` (or `application/javascript`).
 - **WebAssembly:** send `.wasm` files as `application/wasm`, the right type. The app reads `manifold.wasm` as plain bytes, so it also works with a server that sends a generic type.
 - **No special headers** are needed: the app uses no SharedArrayBuffer, so it needs no cross-origin isolation headers.
@@ -72,6 +74,8 @@ This was checked with Python's built-in server (`python3 -m http.server 8080 --d
 The app is served over plain `http`, which on a network address is not a secure context. Browsers keep some features for secure contexts only, and the app uses none of them: no SharedArrayBuffer or WebAssembly threads, no WebGPU, no OPFS, no service workers, no Web Crypto (the SHA-256 of project files is computed in plain JavaScript), no `showSaveFilePicker` and no async clipboard. Files are saved by a Blob and a download link. A unit test refuses any of those APIs in the source, and the browser tests run against the network address, not `localhost`, which would count as secure and hide such a problem.
 
 ## Saving files over plain http
+
+This is about the LAN server only. GitHub Pages serves the app over HTTPS, which is a secure context, so none of what follows applies there: browsers save the STL and ZIP files as from any site.
 
 The user confirmed on 2026-11-07 that Firefox 158 saves STL and ZIP files from `diag.html` without a problem. Chrome has not been tried. Chromium's source suggests it may ask to keep or discard these files on an http address, so if you use Chrome, check `diag.html` first (Advanced, Developer pages, Browser check, in the app).
 
@@ -112,4 +116,4 @@ scripts/ci.sh --full --record  # also rewrites docs/BENCHMARKS.md
 - **`CFG_SHOTS=1`** adds the review screenshots of the app, written to `test-results/shots`, or to the folder `CFG_SHOTS_DIR` names: `CFG_SHOTS=1 npx playwright test e2e/shots.spec.ts` takes them alone, and `CFG_SHOTS=1 scripts/ci.sh --full` with everything else. The quick suite runs smoke tests only, so it takes none.
 - **Firefox needs a display** for its WebGL tests. When `DISPLAY` is not set and `xvfb` is installed, `scripts/ci.sh` starts the tests under `xvfb-run`. With a virtual display already running, point the tests at it instead, for example `DISPLAY=:97 scripts/ci.sh --full`. Without either, Firefox's WebGL tests skip themselves and `scripts/ci.sh` says so at the end.
 
-The browser tests build the app into `dist-ci/` and serve it on ports 5183 (development server) and 5184 (the build), on the network address `192.168.0.153`. Set `CFG_LAN_IP` if the server's address is another. They never touch `dist/` or port 5173, so they can run while the app is being served.
+The browser tests build the app into `dist-ci/` and serve it on ports 5183 (development server) and 5184 (the build), on the network address `192.168.0.153`. Set `CFG_LAN_IP` if the server's address is another. `e2e/pages.spec.ts` also builds the GitHub Pages layout with `scripts/build-pages.sh` into a temporary folder and serves it under `/mold-form-generator/` on a spare port the system picks. They never touch `dist/` or port 5173, so they can run while the app is being served.

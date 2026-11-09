@@ -2,7 +2,8 @@ import { zipSync } from 'fflate';
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { sha256 } from '../app/hash';
 import { projectFile, projectJson, type Project, type StoredPlane } from '../app/project';
-import { APP_NAME, APP_VERSION } from '../app/version';
+import { BUILD } from '../app/buildInfo';
+import { APP_NAME } from '../app/version';
 import { analyseIntervals, analysisCellProblem, type IntervalReport } from '../core/analysis/intervals';
 import { boreSilicone, placementSettings, replicateOpenings, uncoveredOnComposite } from '../core/analysis/placement';
 import { geometryReports, tapeAdvice, withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
@@ -450,7 +451,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       const { requested, minimum } = built.rim.edge;
       const readme = exportReadme({
         app: APP_NAME,
-        version: APP_VERSION,
+        version: BUILD.version,
         model: meta.model,
         params: scaled,
         // The margin is the one asked for: a raise of it has a line of its own.
@@ -512,7 +513,7 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
   const tiles = space.offsets.length;
   return {
     app: APP_NAME,
-    appVersion: APP_VERSION,
+    appVersion: BUILD.version,
     schemaVersion: SCHEMA_VERSION,
     model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: m.imported.report.bodies, volumeMm3: m.modelVolume },
     params,

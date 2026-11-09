@@ -89,13 +89,13 @@ test('@smoke STL and ZIP downloads arrive byte-identical', async ({ page }) => {
   const stlDownload = page.waitForEvent('download');
   await page.click('#dl-stl');
   const stl = await stlDownload;
-  expect(stl.suggestedFilename()).toBe('cfg-test.stl');
+  expect(stl.suggestedFilename()).toBe('download-test.stl');
   expect(Array.from(await readFile(await stl.path()))).toEqual(expected.stl);
 
   const zipDownload = page.waitForEvent('download');
   await page.click('#dl-zip');
   const zip = await zipDownload;
-  expect(zip.suggestedFilename()).toBe('cfg-test.zip');
+  expect(zip.suggestedFilename()).toBe('download-test.zip');
   const zipBytes = await readFile(await zip.path());
   expect(Array.from(zipBytes)).toEqual(expected.zip);
   expect(Array.from(unzipSync(zipBytes)['test.stl'])).toEqual(expected.stl);
