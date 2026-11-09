@@ -3,6 +3,7 @@ import { placementSettings, placeOpenings, type OpeningPin, type Placement } fro
 import { openingSizes, placementSpace, primeSpace, type OpeningKind } from '../core/analysis/validate';
 import { candidateAtLevel, candidateFromPick, findBaseCandidates, levelNear, pickable, type BaseCandidate } from '../core/base/candidates';
 import { orientToBase, type OrientedModel } from '../core/base/orient';
+import { baseLayerOf, withBaseLayer } from '../core/field/baseLayer';
 import { conditionField } from '../core/field/build';
 import { compositeTiles } from '../core/field/composite';
 import { dilate } from '../core/field/dilate';
@@ -367,9 +368,15 @@ export class FieldStages {
     const s6 = (): ConditionedStage => {
       if (this.s6?.key === keys.S6) return this.s6.value;
       const { plan, settings, tile, composite } = s5();
+      // D depends on nothing S5 does not, so a change S10 alone reads leaves this stage as it is. The layer's
+      // own settings are read here, as S5's settings were made before any change of them.
+      const { bounds } = s2();
+      const layer = baseLayerOf({ ...settings, baseLayer: resolveAuto(params, bounds).baseLayer, baseLayerSlopeDeg: params.silicone.baseLayerSlopeDeg }, s10().mold.D);
       const value = timed('S6', () => {
-        const field = conditionField(composite, settings).field;
-        const single = plan.nx === 1 && plan.ny === 1 ? field : conditionField(tile, settings).field;
+        const plain = conditionField(composite, settings).field;
+        // The layer goes into the field the tool is cut from, not into the tile placement reads.
+        const field = layer ? withBaseLayer(plain, layer) : plain;
+        const single = plan.nx === 1 && plan.ny === 1 ? plain : conditionField(tile, settings).field;
         // G6: wall warnings come from the export field only. A coarse preview can read a wall a cell thinner.
         return { plan, settings, field, tile: single, diagnostics: plan.diagnostics };
       });

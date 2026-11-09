@@ -126,8 +126,15 @@ describe('placement on one body', () => {
 });
 
 describe('bodies, per A3: one pour per body, not per cavity', () => {
-  it('two bodies far apart get a pour and a vent each, in 2 cavities', () => {
-    const p = plan(join(box([0, 0, 0], [30, 30, 15]), box([100, 0, 0], [130, 30, 15])));
+  it('two bodies far apart get a pour and a vent each, in 2 cavities without the base layer and in 1 with it', () => {
+    const far = join(box([0, 0, 0], [30, 30, 15]), box([100, 0, 0], [130, 30, 15]));
+    const layered = plan(far);
+    expect(layered.built.cavities.count).toBe(1);
+    expect(pours(layered).map((o) => o.body)).toEqual([0, 1]);
+    expect(vents(layered)).toHaveLength(2);
+    expectAllValid(layered);
+    // Without the layer each body has a cavity of its own.
+    const p = plan(far, (params) => (params.silicone.baseLayer = 0));
     expect(p.built.cavities.count).toBe(2);
     expect(p.search.bodies).toHaveLength(2);
     expect(pours(p)).toHaveLength(2);
@@ -400,7 +407,14 @@ describe('fragments, which are no bodies', () => {
   });
 
   it('a crumb far from everything is no body either, but its cavity must not stay sealed', () => {
-    const p = plan(join(box([0, 0, 0], [30, 30, 15]), crumb(60, 15)));
+    // The base layer joins the crumb's cavity to the body's, which the body's own pour then fills.
+    const layered = plan(join(box([0, 0, 0], [30, 30, 15]), crumb(60, 15)));
+    expect(layered.built.cavities.count).toBe(1);
+    expect(layered.placement.openings.filter((o) => o.role === 'cavity')).toHaveLength(0);
+    expect(codes(layered)).not.toContain('cavity-without-pour');
+    expectAllValid(layered);
+    // Without the layer the crumb's cavity stands alone.
+    const p = plan(join(box([0, 0, 0], [30, 30, 15]), crumb(60, 15)), (params) => (params.silicone.baseLayer = 0));
     expect(p.built.cavities.count).toBe(2);
     expect(p.search.bodies).toHaveLength(1);
     expect(p.placement.bodies).toHaveLength(1);
@@ -410,6 +424,19 @@ describe('fragments, which are no bodies', () => {
     expect(extra[0].kind).toBe('vent');
     expect(extra[0].x).toBeGreaterThan(55);
     expect(codes(p)).toContain('cavity-without-pour');
+    expectAllValid(p);
+  });
+
+  it('with the base layer, a thin pin far off fills through the layer and gets a vent for the air under its peak', () => {
+    // 0.3 mm square and 3 mm tall: under 5 mm2 of surface, so no body, but its jacket stands well clear of the layer.
+    const p = plan(join(box([0, 0, 0], [30, 30, 15]), box([60, 15, 0], [60.3, 15.3, 3])));
+    expect(p.search.bodies).toHaveLength(1);
+    const extra = p.placement.openings.filter((o) => o.role === 'cavity');
+    expect(extra).toHaveLength(1);
+    expect(extra[0].kind).toBe('vent');
+    expect(Math.hypot(extra[0].x - 60.15, extra[0].y - 15.15)).toBeLessThan(1);
+    expect(codes(p)).toContain('cavity-vent');
+    expect(codes(p)).not.toContain('cavity-without-pour');
     expectAllValid(p);
   });
 

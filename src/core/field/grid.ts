@@ -50,6 +50,9 @@ export interface FieldSettings {
   margin: boolean;
   draftDeg: number;
   closeWidth: number;
+  /** The silicone base layer's least depth in mm, 0 or absent for none, and its slope. See baseLayer.ts. */
+  baseLayer?: number;
+  baseLayerSlopeDeg?: number;
   nx: number;
   ny: number;
   /** Between model bounding boxes. Null follows the auto rule. */
@@ -71,6 +74,8 @@ export function fieldSettings(params: Params, bounds: Bounds, cell: number = par
     margin: true,
     draftDeg: params.silicone.wallDraftDeg,
     closeWidth: params.silicone.closeWidth,
+    baseLayer: resolveAuto(params, bounds).baseLayer,
+    baseLayerSlopeDeg: params.silicone.baseLayerSlopeDeg,
     nx: params.grid.nx,
     ny: params.grid.ny,
     spacing: params.grid.spacing,

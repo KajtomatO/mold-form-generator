@@ -1,4 +1,16 @@
 import type { ExampleId } from '../fixtures/loadExamples';
+import { defaultParams } from '../../src/core/params/defaults';
+import type { Params } from '../../src/core/params/schema';
+
+/**
+ * The defaults every golden here was measured at: today's, less the silicone base layer, which came with
+ * 1.0.2 after all of them. The suites read the goldens with it off and check the layer on its own.
+ */
+export function goldenParams(): Params {
+  const params = defaultParams();
+  params.silicone.baseLayer = 0;
+  return params;
+}
 
 /**
  * M1 numbers measured on the 7 examples. Parameters: all defaults, so planeTol is auto (0.05 to

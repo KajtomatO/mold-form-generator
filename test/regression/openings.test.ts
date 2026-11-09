@@ -4,7 +4,6 @@ import { boreSilicone, replicateOpenings, type PlacedOpening } from '../../src/c
 import { mergeTree, significantLeaves } from '../../src/core/analysis/peaks';
 import { boreRadius, checkOpening, discMinimum, dropOpening, heightAt, isValid, openingSizes, placementSpace, topRadius, type OpeningKind, type OpeningSpot } from '../../src/core/analysis/validate';
 import { connectedPieces } from '../../src/core/mesh/shells';
-import { defaultParams } from '../../src/core/params/defaults';
 import { crossParameterErrors } from '../../src/core/params/rules';
 import type { Params } from '../../src/core/params/schema';
 import { buildBaseBody, buildGlueBase, buildMergedBase } from '../../src/core/parts/base';
@@ -25,7 +24,7 @@ import { buildMold, type Mold } from '../fixtures/mold';
 import { openMold, planOpenings, type OpenedMold, type PlannedOpenings } from '../fixtures/openings';
 import { boxSolid, clipToBox, compareVoids, CRUMB_MM3, insideOutline, outlineArea, readPart, splitShells, unpose, type ExpectedVoid } from '../fixtures/solidChecks';
 import { boxWithTopHole, signedVolume, withoutTriangles } from '../fixtures/synthetic';
-import { FIELD_GOLDEN, OPENING_GOLDEN } from './golden';
+import { FIELD_GOLDEN, goldenParams, OPENING_GOLDEN } from './golden';
 
 /** The solid checks are what take time, so the plain suite runs them on two models and the full one on all. */
 const FULL = process.env.CFG_FULL === '1';
@@ -46,7 +45,7 @@ const within = (actual: number, expected: number, fraction: number): void => {
 };
 
 function paramsWith(change: (p: Params) => void = () => {}): Params {
-  const params = defaultParams();
+  const params = goldenParams();
   change(params);
   return params;
 }
@@ -57,7 +56,7 @@ function plannedAtDefaults(id: ExampleId): PlannedOpenings {
   let found = planned.get(id);
   if (!found) {
     const { mesh, bounds } = orientedExample(id);
-    planned.set(id, (found = planOpenings(mesh, bounds, defaultParams())));
+    planned.set(id, (found = planOpenings(mesh, bounds, goldenParams())));
   }
   return found;
 }
@@ -370,7 +369,7 @@ describe('peaks and placement on the 8 examples', () => {
   describe('at a preview cell', () => {
     it.each([['wolf', 2], ['goddess', 2], ['jersey', 1], ['barrel', 1]] as [ExampleId, number][])('%s places much as at the export cell, in the same box', (id, slack) => {
       const { mesh, bounds } = orientedExample(id);
-      const preview = planOpenings(mesh, bounds, defaultParams(), { cell: 0.5 });
+      const preview = planOpenings(mesh, bounds, goldenParams(), { cell: 0.5 });
       const final = plannedAtDefaults(id);
       expect(preview.rim).toEqual(final.rim);
       expectAllValid(preview);
@@ -447,7 +446,7 @@ describe('peaks and placement on the 8 examples', () => {
     it('Benchy with its base removed comes apart into 9 pieces, and is still one body with one pour', () => {
       const { mesh, bounds } = baseFree('benchy');
       expect(connectedPieces(mesh)).toHaveLength(9);
-      const p = planOpenings(mesh, bounds, defaultParams());
+      const p = planOpenings(mesh, bounds, goldenParams());
       expect(p.search.bodies).toHaveLength(1);
       expect(p.search.fragments).toHaveLength(8);
       expect(p.search.fragments.every((f) => f.reason === 'buried')).toBe(true);
@@ -460,7 +459,7 @@ describe('peaks and placement on the 8 examples', () => {
 
     it('negative control: x8 with its bases removed keeps all 8 bodies, as those are no fragments', () => {
       const { mesh, bounds } = baseFree('x8');
-      const p = planOpenings(mesh, bounds, defaultParams());
+      const p = planOpenings(mesh, bounds, goldenParams());
       expect(p.search.bodies).toHaveLength(8);
       expect(p.search.fragments).toEqual([]);
     });

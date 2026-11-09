@@ -85,7 +85,7 @@ describe('names and versions', () => {
     const file = projectFile(project, 'x.stl', { modelSha256: 'ab'.repeat(32), basePlane });
     expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
     expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
-    expect(SCHEMA_VERSION).toBe(4);
+    expect(SCHEMA_VERSION).toBe(5);
   });
 
   it('each request counts its own steps, and only the ZIP packs README, report and project', () => {
@@ -130,7 +130,7 @@ function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
     version: BUILD.version,
     model: '3dbenchy.stl',
     params: defaultParams(),
-    resolved: { 'base.pocketDepth': 0.2, 'base.planeTol': 0.05, 'silicone.printMargin': 0.1, 'vents.persistence': 1.5, 'grid.spacing': 9.77, 'grid.edge': 6.4, 'bolts.length': 12 },
+    resolved: { 'base.pocketDepth': 0.2, 'base.planeTol': 0.05, 'silicone.printMargin': 0.1, 'silicone.baseLayer': 3, 'vents.persistence': 1.5, 'grid.spacing': 9.77, 'grid.edge': 6.4, 'bolts.length': 12 },
     files: ['cover.stl', 'base.stl', 'funnel.stl', 'model_oriented.stl', 'report.json', 'project.json'],
     pours: 1,
     vents: 2,
@@ -209,7 +209,7 @@ describe('README.txt', () => {
       expect(settings, group).toContain(` ${GROUP_TITLES[group]} -`);
       for (const def of Object.values(defs)) expect(settings, def.label).toContain(`- ${def.label}: `);
     }
-    for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.35 (35 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only', '- Nuts and bolts: off', '- Bolt size: M3', '- Bolt length: auto, 12 mm', '- Nut clearance per side: 0.15 mm']) {
+    for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.35 (35 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Base layer: auto, 3 mm', '- Base layer slope: 2 deg', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only', '- Nuts and bolts: off', '- Bolt size: M3', '- Bolt length: auto, 12 mm', '- Nut clearance per side: 0.15 mm']) {
       expect(settings).toContain(line);
     }
     // Every auto setting but the preview's own cell gets a figure from the export.
@@ -466,7 +466,7 @@ describe('the export of jersey in Node', () => {
     expect(report).toMatchObject({ app: 'Mold Form Generator', appVersion: BUILD.version, schemaVersion: SCHEMA_VERSION, model: { file: EXAMPLE_FILES.jersey, triangles: model.rawTriangleCount }, plane: { choice: { rank: 0, upper: false }, normal: [0, 0, -1] } });
     // README.txt is wrapped at 76 columns, so its lines are joined first.
     expect(text(files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain(`Made by Mold Form Generator ${BUILD.version} from ${EXAMPLE_FILES.jersey}.`);
-    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 4, appVersion: BUILD.version });
+    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 5, appVersion: BUILD.version });
     // STL headers name the app and carry no version, so every build gives the same bytes for the same mold.
     for (const [name, bytes] of Object.entries(files).filter(([f]) => f.endsWith('.stl'))) expect(text(bytes.subarray(0, 80)).replace(/\0+$/, ''), name).toBe('binary STL, mold-form-generator');
     expect(report.params).toEqual(p.params);
@@ -489,8 +489,9 @@ describe('the export of jersey in Node', () => {
     for (const [name, part] of Object.entries(report.parts)) expect(part.triangles, name).toBe((files[name].length - 84) / 50);
     expect(report.parts['cover.stl'].volumeMm3!).toBeGreaterThan(0);
     expect(report.silicone.ml / previewSilicone(p)!.ml).toBeCloseTo(1, 1);
-    // The plan's figure at the export cell, as M6b measured it, and the bores' share as M4 did on the same openings.
-    expect(Math.abs(report.silicone.ml / 11.3591 - 1)).toBeLessThan(0.001);
+    // The plan's figure at the export cell, 11.3591 ml as M6b measured it before the base layer and 11.6832 with
+    // it, and the bores' share as M4 measured it on the same openings.
+    expect(Math.abs(report.silicone.ml / 11.6832 - 1)).toBeLessThan(0.001);
     expect(Math.abs(report.silicone.boresMl / OPENING_GOLDEN.jersey.boreMl - 1)).toBeLessThan(0.01);
     expect(report.silicone.sealedAirMl).toBe(0);
     expect(report.silicone.grams).toBeCloseTo(report.silicone.ml * 1.1, 9);
@@ -682,15 +683,18 @@ describe('the export of jersey in Node', () => {
   }, 60_000);
 
   it('a clearance measured under t raises the margin once and builds again: a warning, at least t, a larger box, and the README says so', async () => {
-    // A margin of -0.6 mm, which the number box takes, leaves the first build about 0.47 mm short at jersey's thinnest point.
+    // A margin of -0.6 mm, which the number box takes, leaves the first build about 0.41 mm short at jersey's thinnest point,
+    // with the base layer; 0.47 before it, whose rising top moved the thinnest point off the model's foot.
     const p = await loaded(inProcessSolid, (q) => q.setParams((params) => (params.silicone.printMargin = -0.6)));
     const steps: ExportProgress[] = [];
     const outputs = await p.exportParts((s) => steps.push(s));
     const { clearance, report } = outputs;
     // Raised by the shortfall plus 0.05, so the second build measures t + 0.05, give or take how the gap follows the margin.
-    expect(clearance!.raisedBy).toBeCloseTo(0.515, 3);
+    expect(clearance!.raisedBy).toBeCloseTo(0.458, 3);
     expect(clearance!.measured).toBeGreaterThanOrEqual(3);
-    expect(Math.abs(clearance!.measured - 3.05)).toBeLessThan(0.01);
+    // 3.05 before the base layer; with it the thinnest point sits where the gap grows a little less than the
+    // margin, so the second build measures 3.022, still at least t.
+    expect(clearance!.measured).toBeCloseTo(3.022, 3);
     expect(report!.clearance).toMatchObject({ measured: clearance!.measured, marginRaisedBy: clearance!.raisedBy });
     expect(outputs.diagnostics.filter((d) => d.code === 'margin-raised' || d.code === 'clearance-short')).toEqual([{ code: 'margin-raised', severity: 'warning', message: expect.stringContaining(`raised by ${clearance!.raisedBy.toFixed(2)} mm`) }]);
     // The rebuilt mold's box is larger than the one the preview shows, on every side.
@@ -904,15 +908,18 @@ describe('the export with bolts, in Node', () => {
     return { p, outputs, files: unzipSync(outputs.zip) };
   }
 
-  // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off, must give the same bytes,
-  // past the header's text, which names the app (m9Sha).
+  // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off and no base layer, which M9
+  // had none of, must give the same bytes, past the header's text, which names the app (m9Sha).
   it.each([
     ['jersey', 'jersey', () => {}],
     ['jersey-merged', 'jersey', (p: Params) => (p.base.mode = 'merged')],
     ['jersey-2x1', 'jersey', (p: Params) => (p.grid.nx = 2)],
     ['barrel', 'barrel', () => {}],
-  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged', async (name, id, change) => {
-    const { files } = await exported(id, change);
+  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged, the base layer at 0', async (name, id, change) => {
+    const { files } = await exported(id, (params) => {
+      params.silicone.baseLayer = 0;
+      change(params);
+    });
     expect(m9Sha(files['cover.stl']), 'cover.stl').toBe(M9.parts[name]['cover.stl']);
     expect(m9Sha(files['base.stl']), 'base.stl').toBe(M9.parts[name]['base.stl']);
     const fit = Object.fromEntries(Object.entries(files).filter(([f]) => f.startsWith('fit_test/') && f.endsWith('.stl')).map(([f, b]) => [f, m9Sha(b)]));
@@ -966,8 +973,10 @@ describe('the export with bolts, in Node', () => {
     expect(report.bolts!.slot.width).toBeCloseTo(5.8, 9);
     expect(report.bolts!.axes).toEqual(rim.bolts!.spots.map((s) => ({ x: s.x, y: s.y, slotOpensAt: s.exit })));
     for (const [what, wall] of Object.entries(report.bolts!.walls)) expect(wall, what).toBeGreaterThanOrEqual(1.2 - 1e-9);
-    // The cavity's wall as the solid test reads it off the same export field, not capped by the search.
-    expect(Math.abs(report.bolts!.walls.cavity! - BOLT_GOLDEN.jersey.cavity)).toBeLessThanOrEqual(BOLT_GOLDEN.jersey.cavity * 0.01);
+    // The cavity's wall as the solid test reads it off the same export field, not capped by the search: 7.96 mm
+    // without the base layer (BOLT_GOLDEN, measured before it), and 5.66 with it, which reaches D's corners.
+    expect(BOLT_GOLDEN.jersey.cavity).toBeCloseTo(7.962, 3);
+    expect(report.bolts!.walls.cavity!).toBeCloseTo(5.665, 2);
     expect(Math.abs(report.bolts!.walls.notches! - BOLT_GOLDEN.jersey.notches)).toBeLessThanOrEqual(BOLT_GOLDEN.jersey.notches * 0.01);
     expect(report.bolts!.advice).toMatchObject({ count: 4, enough: true, strips: 0 });
     expect(report.box.x).toBeCloseTo(86.038, 3);
@@ -1090,7 +1099,7 @@ describe('models of parts that overlap, exported in Node', () => {
     const bounds = meshBounds(mesh.positions);
     const settings = fieldSettings(p.params, bounds);
     const plan = planField(bounds, settings);
-    const field = buildField(mesh, plan, settings).field;
+    const field = buildField(mesh, plan, settings, undefined, moldBounds(mesh, bounds, settings).D).field;
     const ml = (overlap: number): number => moldSilicone(mesh, plan, field, { overlapVolume: overlap }, settings).ml + report.silicone.boresMl;
     expect(report.silicone.ml).toBeCloseTo(ml(80), 4);
     expect(Math.abs(report.silicone.ml - ml(imported.overlapVolume))).toBeGreaterThan(0.003);

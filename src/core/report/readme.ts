@@ -233,6 +233,10 @@ export function exportReadme(input: ReadmeInput): string {
   } else {
     item(`The clearance could not be measured, as the model's mesh is not closed. The mold is planned to leave at least ${mm(t, 2)}, but that is not verified.`);
   }
+  const layer = params.silicone.baseLayer ?? t;
+  const together = input.tiles > 1 ? ', which joins the copies into one mold' : '';
+  const slope = params.silicone.baseLayerSlopeDeg > 0 ? `, rising towards the model by ${params.silicone.baseLayerSlopeDeg} degrees so air under it reaches the vents` : ', with a flat top';
+  item(layer > 0 ? `Base layer: silicone at least ${mm(layer, 2)} thick over the whole base plate inside the joint${together}${slope}.` : 'Base layer: none, so the silicone is a jacket around the model only.');
   item(`Silicone: about ${input.silicone.ml.toFixed(0)} ml, ${input.silicone.grams.toFixed(0)} g at ${params.silicone.density} g/cm3. Mix a little more, for what stays in the cup.`);
   item(`Mold box: ${input.box.map((v) => v.toFixed(1)).join(' x ')} mm, with a base ${mm(params.base.thickness)} thick.`);
   if (input.tiles > 1 && input.pitch) item(`${params.grid.nx} x ${params.grid.ny} copies of the model, every ${input.pitch[0].toFixed(2)} x ${input.pitch[1].toFixed(2)} mm.`);

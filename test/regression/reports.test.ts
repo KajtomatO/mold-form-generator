@@ -3,14 +3,13 @@ import { airReport } from '../../src/core/analysis/air';
 import { demoldReport, holdsInLoop, type DemoldReport } from '../../src/core/analysis/demold';
 import { analyseIntervals, type IntervalReport } from '../../src/core/analysis/intervals';
 import { exteriorMesh } from '../../src/core/field/sealed';
-import { defaultParams } from '../../src/core/params/defaults';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { EXAMPLE_IDS, type ExampleId } from '../fixtures/loadExamples';
 import { insideMesh } from '../fixtures/rays';
-import { REPORT_GOLDEN } from './golden';
+import { goldenParams, REPORT_GOLDEN } from './golden';
 
 /** S8 on each example on its default plane, at the default analysis cell, and the reports at default filters. */
-const params = defaultParams();
+const params = goldenParams();
 const minVolume = params.reports.minVolumeMl * 1000;
 const s8 = new Map<ExampleId, IntervalReport>();
 const demold = new Map<ExampleId, DemoldReport>();

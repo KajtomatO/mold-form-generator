@@ -80,7 +80,7 @@ async function roundTrip(page: Page, model: string, stl: Uint8Array): Promise<Pr
   expect(Object.keys(inside).sort()).toEqual([MODEL_ENTRY, PROJECT_ENTRY].sort());
   expect(Buffer.compare(Buffer.from(inside[MODEL_ENTRY]), Buffer.from(stl))).toBe(0);
   const json = JSON.parse(text(inside[PROJECT_ENTRY])) as ProjectFile;
-  expect(json).toMatchObject({ schemaVersion: 4, model, modelSha256: sha(stl), ...before.project });
+  expect(json).toMatchObject({ schemaVersion: 5, model, modelSha256: sha(stl), ...before.project });
   expect(json.basePlane).not.toBeNull();
   const after = await shown(page);
   expect(after.sha).toBe(sha(stl));
@@ -244,7 +244,7 @@ test.describe('project files on index.html', () => {
       ['broken.json', strToU8('{"schemaVersion": 2, "params": {'), `broken.json is damaged: its settings cannot be read. ${again}`],
       ['typed.json', strToU8(JSON.stringify(typed)), `typed.json cannot be used: its Silicone thickness must be a number, not "thick". ${again}`],
       ['bomb.moldproj', declaredSize(moldproj, MODEL_ENTRY, 0xf0000000), 'bomb.moldproj is damaged or too large: the model inside it says it unpacks to 3840 MB, past the 1024 MB this app takes.'],
-      ['newer.json', strToU8(JSON.stringify({ ...good, schemaVersion: 5 })), 'newer.json was saved by a newer version of the app (app version 0.3.0), in project format 5; this one reads formats up to 4.'],
+      ['newer.json', strToU8(JSON.stringify({ ...good, schemaVersion: 6 })), 'newer.json was saved by a newer version of the app (app version 0.3.0), in project format 6; this one reads formats up to 5.'],
       ['photo.png', Uint8Array.from([0x89, 0x50, 0x4e, 0x47, ...new Uint8Array(100)]), `photo.png is not an STL or a project file, so it was not opened. ${instead}`],
     ];
     let by: 'choose' | 'drop' = 'choose';
@@ -317,11 +317,11 @@ test.describe('project files on index.html', () => {
     await choose(page, 'project.json', v1Fixture);
     const notice = page.getByTestId('file-notice');
     await expect(notice).toContainText('Applied the settings of project.json to jersey-barrier.stl.');
-    await expect(notice).toContainText('Saved in project format 1 by an earlier version of the app, and brought up to format 4.');
+    await expect(notice).toContainText('Saved in project format 1 by an earlier version of the app, and brought up to format 5.');
     await expect(notice).toContainText('matched to jersey-barrier.stl by the file name alone');
     const v1 = JSON.parse(v1Fixture.toString('utf8')) as ProjectFile;
-    // Migrated to format 3, so with the bolts off, as every version 1 mold was taped.
-    expect((await shown(page)).project).toEqual({ params: { ...v1.params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 } }, plane: v1.plane, pins: v1.pins, removed: v1.removed });
+    // Migrated to the current format, so with the bolts off, as every version 1 mold was taped, and no base layer.
+    expect((await shown(page)).project).toEqual({ params: { ...v1.params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 }, silicone: { ...v1.params.silicone, baseLayer: 0, baseLayerSlopeDeg: 2 } }, plane: v1.plane, pins: v1.pins, removed: v1.removed });
     await idle(page);
     expect(await hooks(page, (h) => h.openings().find((o) => o.pinned))).toMatchObject({ id: v1.pins[0].id, x: v1.pins[0].x, y: v1.pins[0].y });
     // Settings applied in full open again to just this, so nothing is unsaved.

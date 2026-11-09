@@ -317,7 +317,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     if (inputs.needsTrim && model && !path.heavy) shared = overlap > 0 ? timed('import', () => sharedVolume(arena, model)) : 0;
     const cap = inputs.needsTrim && model ? arena.track(model.slice(0.02)) : undefined;
     const footprint = buildFootprint(arena, mesh, inputs.candidate, scaled.base.minIsland, cap);
-    const { pocketDepth, printMargin, ventPersistence, boltLength } = resolveAuto(scaled, bounds);
+    const { pocketDepth, printMargin, ventPersistence, boltLength, baseLayer } = resolveAuto(scaled, bounds);
     const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...imported.report.diagnostics, ...path.diagnostics, ...footprint.diagnostics];
     // The coarser cell widens the margin of G4, and with it the cavity and the box, past what the preview showed.
     if (cellScale !== 1) diagnostics.push({ code: 'export-coarser', severity: 'warning', message: `The geometry engine failed at full detail, so the export was built again at half the detail, on a ${scaled.quality.cellFinal} mm grid instead of ${params.quality.cellFinal} mm, with a wider safety margin and a larger box than the preview shows.` });
@@ -328,9 +328,9 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       const shaped = timed('field', () => {
         const settings = fieldSettings(raised, bounds);
         const plan = planField(bounds, settings);
-        const built = buildField(mesh, plan, settings);
         // The export plan's bounds and offsets, which the preview used as well, so the box is the one shown.
         const mold = moldBounds(mesh, bounds, settings);
+        const built = buildField(mesh, plan, settings, undefined, mold.D);
         const rim = deriveRim(mold, raised);
         const space = placementSpace(built.field, rim, mold.offsets, openingSizes(raised));
         own.push(...built.diagnostics, ...rim.diagnostics, ...boltCavityDiagnostics(rim.bolts, built.field, raised.quality.tinTolFinal, rim.D));
@@ -459,6 +459,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
           'base.pocketDepth': pocketDepth,
           'base.planeTol': inputs.planeTol,
           'silicone.printMargin': printMargin,
+          'silicone.baseLayer': baseLayer,
           'vents.persistence': ventPersistence,
           'grid.spacing': built.plan.spacing,
           'grid.edge': Math.max(requested ?? minimum, minimum),

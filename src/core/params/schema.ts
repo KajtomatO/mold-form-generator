@@ -12,10 +12,10 @@ import { BOLT_LENGTHS, BOLT_SIZES } from '../parts/fasteners';
  * The version of project.json, which holds these parameters with the plane, pins and removed vents.
  * Version 1 came with M6b's export ZIP; 2 added the STL's hash and the base plane itself (M9); 3 the bolts
  * (M10); 4 changes no field but says that the pins and removed vents number bodies as joined parts (M11c's
- * rule, R1), which the app once told by the app version. An older file is migrated one version at a time,
- * by src/app/projectFile.ts.
+ * rule, R1), which the app once told by the app version; 5 the silicone base layer, which a file of an older
+ * format opens without. An older file is migrated one version at a time, by src/app/projectFile.ts.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export interface NumberDef {
   kind: 'number';
@@ -85,6 +85,8 @@ export const PARAM_SCHEMA = {
     t: num('Silicone thickness', 3, { min: 1, max: 20 }),
     wallDraftDeg: num('Wall draft', 1, { ...DEG, min: 0, max: 5 }),
     closeWidth: num('Close fins under', 1.2, { min: 0, max: 5 }),
+    baseLayer: auto('Base layer', 'the silicone thickness', { min: 0, max: 20 }),
+    baseLayerSlopeDeg: num('Base layer slope', 2, { ...DEG, min: 0, max: 10 }),
     density: num('Silicone density', 1.1, { unit: 'g/cm3' }),
     printMargin: auto('Print margin', 'half a layer'),
   },

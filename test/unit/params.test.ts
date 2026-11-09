@@ -21,6 +21,9 @@ const PLAN_TABLE: Record<string, [value: unknown, min?: number, max?: number]> =
   'silicone.t': [3, 1, 20],
   'silicone.wallDraftDeg': [1, 0, 5],
   'silicone.closeWidth': [1.2, 0, 5],
+  // The base layer, which the user asked for on 2026-11-09: it follows t until set, and 0 leaves it out.
+  'silicone.baseLayer': [null, 0, 20],
+  'silicone.baseLayerSlopeDeg': [2, 0, 10],
   'silicone.density': [1.1],
   'silicone.printMargin': [null],
   'cover.wall': [3],
@@ -141,7 +144,7 @@ describe('default parameters', () => {
 
   it('tie the auto values to their rules until edited', () => {
     const p = defaultParams();
-    expect(resolveAuto(p, BOUNDS)).toEqual({ pocketDepth: 0.2, printMargin: 0.1, ventPersistence: 1.5, planeTol: 0.05, boltLength: 12 });
+    expect(resolveAuto(p, BOUNDS)).toEqual({ pocketDepth: 0.2, printMargin: 0.1, ventPersistence: 1.5, planeTol: 0.05, baseLayer: 3, boltLength: 12 });
 
     // Pocket follows layer height until the user types a value.
     p.print.layerHeight = 0.3;
@@ -156,6 +159,11 @@ describe('default parameters', () => {
     expect(resolveAuto(p, BOUNDS).ventPersistence).toBe(2.5);
     p.vents.persistence = 1;
     expect(resolveAuto(p, BOUNDS).ventPersistence).toBe(1);
+
+    // The base layer follows t until set, and 0 is a value of its own, not a return to auto.
+    expect(resolveAuto(p, BOUNDS).baseLayer).toBe(5);
+    p.silicone.baseLayer = 0;
+    expect(resolveAuto(p, BOUNDS).baseLayer).toBe(0);
   });
 
   it('supply the options base detection needs, and honour an edited tolerance', () => {

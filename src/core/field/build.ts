@@ -1,5 +1,7 @@
 import type { WeldedMesh } from '../mesh/weld';
 import type { Diagnostic } from '../report/diagnostics';
+import type { Rect } from '../solid/rect';
+import { baseLayerOf, withBaseLayer } from './baseLayer';
 import { countCavities, tileWalls, type CavityCount } from './cavities';
 import { applyClosing } from './closing';
 import { compositeTiles } from './composite';
@@ -14,14 +16,21 @@ export interface StageTimings {
   composite: number;
   draft: number;
   closing: number;
+  /** The silicone base layer, 0 without one. */
+  layer: number;
   cavities: number;
   /** The check between tiles, which only a real grid needs. */
   wall: number;
 }
 
 export interface BuiltField {
-  /** The conditioned composite. */
+  /** The conditioned composite, with the silicone base layer when one is asked for. */
   field: Field;
+  /**
+   * The conditioned composite without the base layer, which is `field` itself when there is none. The
+   * walls between tiles are read from it, as they stand above the layer, and placement's tile from it too.
+   */
+  plain: Field;
   cavities: CavityCount;
   /** Thinnest plastic keeping tiles apart in mm, or null when no wall separates them. */
   minWall: number | null;
@@ -52,9 +61,10 @@ export function conditionField(composite: Field, settings: Pick<FieldSettings, '
 
 /**
  * S3 to S6 in one go, with the checks on the result. M5's stage cache will call the same steps one
- * by one. `now` comes from the caller, as core has no clock.
+ * by one. `now` comes from the caller, as core has no clock. `D` is G8's bound on the cavity, from
+ * moldBounds, which the silicone base layer fills; without it no layer is added.
  */
-export function buildField(mesh: WeldedMesh, plan: FieldPlan, settings: FieldSettings, now: () => number = () => 0): BuiltField {
+export function buildField(mesh: WeldedMesh, plan: FieldPlan, settings: FieldSettings, now: () => number = () => 0, D: Rect | null = null): BuiltField {
   const t0 = now();
   const raster = rasterize(mesh, plan.tile);
   const t1 = now();
@@ -62,12 +72,17 @@ export function buildField(mesh: WeldedMesh, plan: FieldPlan, settings: FieldSet
   const t2 = now();
   const { field: composite, owners } = compositeTiles(tile, plan);
   const t3 = now();
-  const { field, draftMs, closingMs } = conditionField(composite, settings, now);
+  const { field: plain, draftMs, closingMs } = conditionField(composite, settings, now);
+  const tLayer = now();
+  const layer = D ? baseLayerOf(settings, D) : null;
+  const field = layer ? withBaseLayer(plain, layer) : plain;
   const t4 = now();
   const cavities = countCavities(field);
   const t5 = now();
 
-  const { minWall, merged } = owners ? tileWalls(field, owners) : { minWall: null, merged: false };
+  // The layer joins every tile at the floor, which is what it is for. The walls that still stand between
+  // tiles are the plastic above it, so they are read without it.
+  const { minWall, merged } = owners ? tileWalls(plain, owners) : { minWall: null, merged: false };
   const t6 = now();
   const { requiredWall, spacing, autoSpacing } = plan;
   const diagnostics = [...plan.diagnostics];
@@ -87,10 +102,11 @@ export function buildField(mesh: WeldedMesh, plan: FieldPlan, settings: FieldSet
   }
   return {
     field,
+    plain,
     cavities,
     minWall,
     tilesMerged: merged,
     diagnostics,
-    timings: { raster: t1 - t0, dilate: t2 - t1, composite: t3 - t2, draft: draftMs, closing: closingMs, cavities: t5 - t4, wall: t6 - t5 },
+    timings: { raster: t1 - t0, dilate: t2 - t1, composite: t3 - t2, draft: draftMs, closing: closingMs, layer: t4 - tLayer, cavities: t5 - t4, wall: t6 - t5 },
   };
 }

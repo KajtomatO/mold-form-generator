@@ -306,9 +306,35 @@ function highestNear(work: Work, body: Body, from: { x: number; y: number }, rad
 function openLeftoverCavities(work: Work): void {
   const { cavities, at } = mapCavities(work.tile, 0);
   const opened = new Set(work.openings.map((opening) => at(opening.x, opening.y)));
+  // On the whole mold, where the silicone base layer joins the cavities, the silicone reaches a cavity that
+  // meets an opened one there through the layer, so it needs no pour. Read only if a cavity is left over.
+  let whole: { reached: Set<number>; at: (x: number, y: number) => number; leaves: { x: number; y: number }[] } | null = null;
+  const wholeMold = () => {
+    if (whole) return whole;
+    const map = mapCavities(work.space.field, 0);
+    const reached = new Set<number>();
+    for (const opening of work.openings) for (const [ox, oy] of work.space.offsets) reached.add(map.at(opening.x + ox, opening.y + oy));
+    const tree = mergeTree(work.space.field);
+    return (whole = { reached, at: map.at, leaves: significantLeaves(tree, work.settings.ventPersistence) });
+  };
   cavities.forEach((cavity, index) => {
     if (opened.has(index)) return;
     const [x, y] = cavity.peak;
+    const mold = wholeMold();
+    if (mold.reached.has(mold.at(x, y))) {
+      // Filled through the layer: only air can be caught, under a peak of its own that stands clear of it.
+      if (!work.settings.ventsEnabled) return;
+      for (const leaf of mold.leaves) {
+        if (at(leaf.x, leaf.y) !== index) continue;
+        const spot: OpeningSpot = { kind: 'vent', x: leaf.x, y: leaf.y };
+        const place = valid(work, spot) ? spot : snapOpening(work.space, spot, work.openings);
+        if (!place || at(place.x, place.y) !== index) continue;
+        add(work, { kind: 'vent', x: place.x, y: place.y }, `cavity:${index}`, -1, 'cavity');
+        work.diagnostics.push({ code: 'cavity-vent', severity: 'info', message: `The small cavity at (${x.toFixed(1)}, ${y.toFixed(1)}) fills through the base layer, so it got a vent for its air.` });
+        return;
+      }
+      return;
+    }
     for (const kind of ['pour', 'vent'] as const) {
       const spot: OpeningSpot = { kind, x, y };
       const place = valid(work, spot) ? spot : snapOpening(work.space, spot, work.openings);

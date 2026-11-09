@@ -18,6 +18,8 @@ export interface ResolvedAuto {
   printMargin: number;
   ventPersistence: number;
   planeTol: number;
+  /** The silicone base layer follows the silicone thickness until edited. */
+  baseLayer: number;
   /** The shortest standard screw that passes the nut, whether or not the bolts are on. */
   boltLength: number;
 }
@@ -29,6 +31,7 @@ export function resolveAuto(params: Params, bounds: Bounds): ResolvedAuto {
     printMargin: params.silicone.printMargin ?? layer / 2,
     ventPersistence: params.vents.persistence ?? params.silicone.t / 2,
     planeTol: params.base.planeTol ?? autoPlaneTol(bounds),
+    baseLayer: params.silicone.baseLayer ?? params.silicone.t,
     boltLength: boltNeeds(params).autoLength,
   };
 }

@@ -638,14 +638,14 @@ test.describe('the app on index.html', () => {
     await expect.poll(() => app(page, (a) => a.scene.diagnosticMarkers.group.children.length)).toBe(0);
     await expect.poll(async () => canvasPatch(page, spot, 3)).toEqual(before);
 
-    // Cover & joint: twice wolf's lift of 11 N, which 3 strips of the Tape strip setting hold, and 2 each way
-    // across its 121 x 142 mm box, so the tape presses the seal all round.
-    await expect(page.getByTestId('clamp-advice')).toContainText('Tape: hold 22 N with at least 4 strips at 10 N each, 2 front to back and 2 left to right, spread round the joint.');
+    // Cover & joint: twice wolf's lift of 21 N with the base layer (11 N before it), which 5 strips of the Tape
+    // strip setting hold, 2 each way across its 121 x 142 mm box among them, so the tape presses the seal all round.
+    await expect(page.getByTestId('clamp-advice')).toContainText('Tape: hold 41 N with at least 5 strips at 10 N each, 2 front to back and 2 left to right, spread round the joint.');
     await hooks(page, async (h) => {
       h.setParam('print.tapeStrip', 5);
       await h.idle();
     });
-    await expect(page.getByTestId('clamp-advice')).toContainText('at least 5 strips at 5 N each');
+    await expect(page.getByTestId('clamp-advice')).toContainText('at least 9 strips at 5 N each');
 
     // The M6 layout rules still hold with the report in the sidebar, at both sizes, scrolled to it.
     for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {

@@ -51,6 +51,12 @@ Merged mode is off for a mesh with holes (an open mesh), and the reason shows un
 
 A file may hold several parts, as a model split for multi-colour printing does, such as a figure whose body, eyes and feet are closed parts of their own, passing into each other or sharing a face. That is fine. Parts that overlap or touch print as one object, and the app takes them as one model: one pour at its highest point, vents at its other high points, and a note in Diagnostics saying how many parts there are and, for a closed mesh, by how much they overlap (a mesh with holes has no volume to measure). Parts that stand apart, such as several models in one file, are separate models, and each gets its own pours, as many as Pours per body under Pour & funnel says. In Mode A, `model_oriented.stl` keeps the parts as your file has them, and your slicer prints overlapping parts as one; in Mode B the base holds them as one.
 
+### The silicone base layer
+
+Base layer, under Silicone, spreads silicone over the whole base plate inside the joint, so the models stand in one sheet of silicone. Several copies in a grid, or several models in one file, then come out as one mold that holds them all, and a single model gets a flat foot that keeps the mold's shape on the table. The layer follows the silicone thickness until you set it, and 0 leaves it out: then each model gets a jacket of its own, which takes less silicone.
+
+The top of the layer rises a little towards the models, by Base layer slope under Advanced, Silicone (2 degrees by default), so the air under it moves to the models and out through their vents, even with the mold a little off level. Far from the models the layer is as thick as Base layer says; near them it is thicker. A slope of 0 makes it flat, and a flat top can trap air along its outer edge.
+
 ## 2. Check your printer with the fit test
 
 Every printer prints a little over or under size. The joint between the base and the cover has small clearances, so find the ones that suit your printer before you print a whole mold.

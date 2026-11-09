@@ -3,6 +3,7 @@ import { stageKeys } from '../../src/app/stages';
 import { buildField } from '../../src/core/field/build';
 import { fieldSettings, planField } from '../../src/core/field/grid';
 import { defaultParams } from '../../src/core/params/defaults';
+import { moldBounds } from '../../src/core/parts/rim';
 import type { Params } from '../../src/core/params/schema';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, previewCell } from '../../src/workers/fieldStages';
 import { orientedExample } from '../fixtures/fieldRuns';
@@ -27,7 +28,9 @@ describe('the staged field', () => {
     params.grid.ny = ny;
     const { mesh, bounds } = orientedExample(id);
     const settings = fieldSettings(params, bounds, previewCell(params, bounds));
-    const whole = buildField(mesh, planField(bounds, settings), settings).field;
+    // With the base layer in D, which S10 takes from the export plan whatever the preview's cell.
+    const { D } = moldBounds(mesh, bounds, fieldSettings(params, bounds));
+    const whole = buildField(mesh, planField(bounds, settings), settings, undefined, D).field;
     const field = staged(id, params);
     expect({ ...field, values: null }).toEqual({ ...whole, values: null });
     let differ = 0;

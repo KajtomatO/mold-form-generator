@@ -16,8 +16,18 @@ import { OPENING_GOLDEN, REPORT_GOLDEN, SOLID_GOLDEN } from '../regression/golde
  * raise would move, and the box, which M3's solids measured independently.
  */
 
-/** ml at defaults, on the preview field, with the bores: the "Silicone figure" note of M6. */
+/**
+ * ml at defaults with no base layer, on the preview field, with the bores: the "Silicone figure" note of M6,
+ * which M3's solids, all made before the layer, check independently.
+ */
 const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.39, vis35: 530.02, jersey: 11.53, x8: 89.52, barrel: 10.52, wolf: 207.41, chick: 12.25 };
+
+/**
+ * The same at defaults, which since 1.0.2 have the silicone base layer, 3 mm with its 2 degree slope, as
+ * first measured (docs/PLAN.md, the base layer). It adds 0.8% (jersey, whose cavity already fills most of
+ * the plate) to 19% (the chick, small in a box its overhangs set).
+ */
+const LAYER_ML: Record<ExampleId, number> = { benchy: 45.19, goddess: 122.45, vis35: 536.52, jersey: 11.62, x8: 92.97, barrel: 11.27, wolf: 226.47, chick: 14.6 };
 
 /**
  * How far the preview may read over M3's solids with the bores: 3% on the seven, whose most is the barrel's
@@ -57,14 +67,19 @@ describe('the box and the model size', () => {
 describe('the preview\'s silicone figure', () => {
   // One pipeline at a time, each freed once read: seven Manifold heaps at once would not be kind to the server.
   // With the reports on, as the app runs, so the figure takes off S8's sealed air.
-  const read = new Map<ExampleId, { silicone: ReturnType<typeof previewSilicone>; rim: Rim; sealedAir: number; reports: GeometryReports; current: boolean }>();
+  const read = new Map<ExampleId, { silicone: ReturnType<typeof previewSilicone>; layered: ReturnType<typeof previewSilicone>; rim: Rim; sealedAir: number; reports: GeometryReports; current: boolean }>();
   beforeAll(async () => {
     for (const id of EXAMPLE_IDS) {
       const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true, reports: true });
       try {
         p.load(exampleBytes(id), EXAMPLE_FILES[id]);
         await p.idle();
-        read.set(id, { silicone: previewSilicone(p), rim: p.field!.value.rim, sealedAir: p.reports!.value.air.sealedAir, reports: p.reports!.value, current: p.reports!.key === p.keys().S9 });
+        const layered = previewSilicone(p);
+        const reports = p.reports!.value, current = p.reports!.key === p.keys().S9;
+        // The layer reaches no further than S6, so the reports above stand, and this reruns only from there.
+        p.setParams((params) => (params.silicone.baseLayer = 0));
+        await p.idle();
+        read.set(id, { silicone: previewSilicone(p), layered, rim: p.field!.value.rim, sealedAir: p.reports!.value.air.sealedAir, reports, current });
       } finally {
         p.dispose();
       }
@@ -81,6 +96,10 @@ describe('the preview\'s silicone figure', () => {
     // The barrel reads 2.5% over, the most of the seven; at the export's cell and raise it is 0.13% over.
     within(ml, solidMl(id), PREVIEW_SLACK[id] ?? 0.03);
     expect(grams).toBeCloseTo(ml * defaultParams().silicone.density, 9);
+    // At defaults, with the base layer: more, and as first measured.
+    const layered = read.get(id)!.layered!;
+    expect(layered.ml).toBeGreaterThan(ml);
+    within(layered.ml, LAYER_ML[id], 0.001);
   });
 
   // M7's goldens through the app's own path, S9 in its worker on the preview, as the Demold report shows them.
@@ -113,6 +132,7 @@ describe('the preview\'s silicone figure', () => {
         p.setParams((params) => {
           params.quality.cellPreview = params.quality.cellFinal;
           params.quality.tinTolPreview = params.quality.tinTolFinal;
+          params.silicone.baseLayer = 0;
         });
         await p.idle();
         within(previewSilicone(p)!.ml, solidMl(id), 0.005);
@@ -126,11 +146,18 @@ describe('the preview\'s silicone figure', () => {
     const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
     try {
       p.load(exampleBytes('jersey'), EXAMPLE_FILES.jersey);
-      p.setParams((params) => (params.grid.nx = 2));
+      p.setParams((params) => {
+        params.grid.nx = 2;
+        params.silicone.baseLayer = 0;
+      });
       await p.idle();
       expect(p.field!.value.mold.offsets).toHaveLength(2);
-      // Apart, at auto spacing, the two cavities are two of one: 1.9999 times it, measured.
+      // Apart, at auto spacing and with no base layer, the two cavities are two of one: 1.9999 times it, measured.
       within(previewSilicone(p)!.ml, 2 * read.get('jersey')!.silicone!.ml, 0.001);
+      // The layer fills the plate between them as well, so two take more than twice one.
+      p.setParams((params) => (params.silicone.baseLayer = null));
+      await p.idle();
+      expect(previewSilicone(p)!.ml).toBeGreaterThan(2 * read.get('jersey')!.layered!.ml);
     } finally {
       p.dispose();
     }

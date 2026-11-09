@@ -26,6 +26,7 @@ const AUTO_VALUES: Partial<Record<ParamPath, number>> = {
   'grid.edge': 25,
   'quality.cellPreview': 0.75,
   'bolts.length': 16,
+  'silicone.baseLayer': 1.5,
 };
 
 /** Another valid value for each parameter, one that the stages can still build. */

@@ -69,7 +69,8 @@ export const STAGES: readonly StageDef[] = [
   { id: 'S3', label: 'raster', runs: 'field', deps: ['S2'], params: ['quality.cellPreview', 'quality.cellFinal', 'grid.nx', 'grid.ny'], inputs: ['tier', 'cellScale'] },
   { id: 'S4', label: 'envelope', runs: 'field', deps: ['S3'], params: RADIUS, inputs: [] },
   { id: 'S5', label: 'composite', runs: 'field', deps: ['S4'], params: ['grid.nx', 'grid.ny', 'grid.spacing', ...DOMAIN], inputs: [] },
-  { id: 'S6', label: 'conditioned', runs: 'field', deps: ['S5'], params: ['silicone.wallDraftDeg', 'silicone.closeWidth'], inputs: [] },
+  // The base layer fills D, which follows from S5's own inputs, so S6 needs no S10.
+  { id: 'S6', label: 'conditioned', runs: 'field', deps: ['S5'], params: ['silicone.wallDraftDeg', 'silicone.closeWidth', 'silicone.baseLayer', 'silicone.baseLayerSlopeDeg'], inputs: [] },
   {
     id: 'S7',
     label: 'peaks and placement',

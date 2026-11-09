@@ -535,18 +535,23 @@ interface ZipCase {
   id: ExampleId;
   settings: Settings;
   projects: string[];
-  /** report.json's silicone, in ml, as M6b measured it in Node: the plan's figure at the export cell. */
+  /** report.json's silicone, in ml, at the export cell, with the base layer as BL measured it. */
   ml: number;
 }
 
-/** M6b's silicone at defaults, per example, and M11c's for the chick. */
-const ML: Record<ExampleId, number> = { benchy: 43.1771, goddess: 118.0047, vis35: 541.4064, jersey: 11.3591, x8: 87.5913, barrel: 10.2682, wolf: 203.5269, chick: 11.807 };
+/**
+ * The silicone at defaults, per example, with the base layer, as BL measured it in the browser's export. M6b's
+ * before the layer were benchy 43.1771, goddess 118.0047, vis35 541.4064, jersey 11.3591, x8 87.5913, barrel
+ * 10.2682 and wolf 203.5269, and M11c's chick 11.807.
+ */
+const ML: Record<ExampleId, number> = { benchy: 45.1881, goddess: 122.3068, vis35: 548.0961, jersey: 11.6832, x8: 91.7855, barrel: 11.1166, wolf: 223.2889, chick: 14.336 };
 
 // All 8 in Chromium on the build; in the user's browser, jersey and the heaviest field, wolf.
 const CASES: ZipCase[] = [
   ...EXAMPLE_IDS.map((id): ZipCase => ({ name: id, id, settings: [], projects: id === 'jersey' || id === 'wolf' ? ['preview', 'firefox'] : ['preview'], ml: ML[id] })),
-  { name: 'barrel in Mode B', id: 'barrel', settings: [['base.mode', 'merged']], projects: ['preview'], ml: 10.2682 },
-  { name: 'jersey on a 2 x 3 grid', id: 'jersey', settings: [['grid.nx', 2], ['grid.ny', 3]], projects: ['preview'], ml: 68.1545 },
+  { name: 'barrel in Mode B', id: 'barrel', settings: [['base.mode', 'merged']], projects: ['preview'], ml: 11.1166 },
+  // 68.1545 before the base layer, which also fills the plate between the six copies.
+  { name: 'jersey on a 2 x 3 grid', id: 'jersey', settings: [['grid.nx', 2], ['grid.ny', 3]], projects: ['preview'], ml: 72.2966 },
 ];
 
 test.describe('Export ZIP on every example, unzipped and checked in Node', () => {

@@ -328,14 +328,15 @@ describe('the preview against a build through core alone', () => {
     const { mesh, bounds } = orientedExample('jersey');
     const settings = fieldSettings(params, bounds, previewCell(params, bounds));
     const plan = planField(bounds, settings);
-    const { field } = buildField(mesh, plan, settings);
-    expect(hashFloats(p.field!.value.field.values)).toBe(hashFloats(field.values));
-    // The box always comes from the export plan's bounds.
+    // The box always comes from the export plan's bounds, and the base layer fills its D.
     const mold = moldBounds(mesh, bounds, fieldSettings(params, bounds));
+    const { field, plain } = buildField(mesh, plan, settings, undefined, mold.D);
+    expect(hashFloats(p.field!.value.field.values)).toBe(hashFloats(field.values));
     const rim = deriveRim(mold, params);
     const space = placementSpace(field, rim, mold.offsets, openingSizes(params));
     const opening = placementSettings(params, bounds);
-    const placement = placeOpenings({ bodies: findBodies(mesh, plan, field, settings, opening).bodies, tile: field, space, settings: opening });
+    // Bodies and placement read the tile without the layer.
+    const placement = placeOpenings({ bodies: findBodies(mesh, plan, plain, settings, opening).bodies, tile: plain, space, settings: opening });
     const copies = replicateOpenings(placement.openings, space);
     expect(copies.length).toBeGreaterThan(0);
     expect(p.geometryHash().openings).toBe(hashString(JSON.stringify(copies)));

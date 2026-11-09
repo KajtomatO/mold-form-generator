@@ -88,12 +88,15 @@ describe('the cover\'s lift and the tape', () => {
     expect(figure!.holdN).toBeCloseTo(Math.max(2 * figure!.liftN, 10), 6);
     expect(figure!.liftStrips).toBe(Math.ceil(figure!.holdN / 10));
     expect(figure!.coverWeightN).toBeGreaterThan(0);
-    // Measured at M7: 11.0 N of lift from 197.4 mm, 22.0 N to hold, which 3 strips do. Its 121.2 x 142.4 mm
-    // box takes 2 strips each way to press the seal all round, so 4 in all.
-    expect(figure!.liftN).toBeCloseTo(10.98, 1);
-    expect(figure!.liftStrips).toBe(3);
+    // Measured at M7: 11.0 N of lift from 197.4 mm, 22.0 N to hold, which 3 strips did, before the base layer.
+    // The layer's wide, low ceiling all but doubles the lift, as measured with it: 20.6 N, more than the cover's
+    // own 11.8 N, so 41.1 N to hold, which takes 5 strips. Its 121.2 x 142.4 mm box takes 2 strips each way to
+    // press the seal all round, which the 5 already cover.
+    expect(figure!.liftN).toBeCloseTo(20.57, 1);
+    expect(figure!.liftN).toBeGreaterThan(figure!.coverWeightN!);
+    expect(figure!.liftStrips).toBe(5);
     expect(figure!.across).toEqual([2, 2]);
-    expect(figure!.strips).toBe(4);
+    expect(figure!.strips).toBe(5);
   });
 });
 
@@ -219,11 +222,12 @@ describe('printability', () => {
     // The plan estimated about 2 kg. The cover alone is 2.43 l, its 121.2 x 142.4 x 171.4 mm box less the
     // cavity: the rebate's taper, the groove, the chamfers, the notches and the bores make up the rest.
     expect(Math.abs(read.volume / read.expected - 1)).toBeLessThan(0.03);
-    expect(read.volume / 1e6).toBeCloseTo(2.43, 2);
+    // With the base layer the cavity is wider at the floor, so the cover is 2.41 l, and 2.43 l before it.
+    expect(read.volume / 1e6).toBeCloseTo(2.41, 2);
     expect(read.plastic.solid / 1000).toBeCloseTo(3.1, 1);
     expect(read.plastic.printed).toBeLessThan(read.plastic.solid);
     expect(read.rows).toHaveLength(1);
-    expect(read.rows[0].message).toContain('3.10 kg printed solid');
+    expect(read.rows[0].message).toContain('3.07 kg printed solid');
     expect(read.rows[0].severity).toBe('warning');
   });
 

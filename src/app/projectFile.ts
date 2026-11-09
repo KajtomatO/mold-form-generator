@@ -64,8 +64,18 @@ const v2ToV3: Migration = (file) => {
  */
 const v3ToV4: Migration = (file) => file;
 
+/**
+ * Version 4 had no silicone base layer, so it opens without one, which is the mold it made. A file that
+ * already holds the layer's settings, as the test build that brought the layer wrote in format 4, keeps them.
+ */
+const v4ToV5: Migration = (file) => {
+  const params = isObject(file.params) ? file.params : {};
+  const silicone = isObject(params.silicone) ? params.silicone : {};
+  return { ...file, params: { ...params, silicone: { baseLayer: 0, baseLayerSlopeDeg: 2, ...silicone } } };
+};
+
 /** Each older version's step to the one after it. */
-export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4 };
+export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5 };
 
 export interface Migrated {
   file: Json;

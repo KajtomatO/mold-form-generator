@@ -31,7 +31,7 @@ import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtu
 import { buildMold, type Mold, type MoldOptions } from '../fixtures/mold';
 import { boxSolid, cavitySection, clipToBox, compareVoids, contourArea, contourDistance, CRUMB_MM3, holeCentres, insideOutline, mirroredCoverStl, outlineArea, polygonArea, readPart, splitShells, unpose, type ExpectedVoid, type VoidShell } from '../fixtures/solidChecks';
 import { BOX_BOTTOM, BOX_TOP, MUSHROOM, blockOnFeet, box, boxWithTopHole, join, lShape, mushroom, recessedBlock, signedVolume, withoutTriangles } from '../fixtures/synthetic';
-import { BOLT_GOLDEN, FIELD_GOLDEN, SOLID_GOLDEN } from './golden';
+import { BOLT_GOLDEN, FIELD_GOLDEN, goldenParams, SOLID_GOLDEN } from './golden';
 
 /** minGap on Benchy takes 30 s at the plan's search length, and every model gets several runs of the rest. */
 const FULL = process.env.CFG_FULL === '1';
@@ -58,7 +58,7 @@ interface Ctx {
 
 /** A plan parameter set: the copy keeps one test's values out of the others. */
 function paramsWith(change: (p: Params) => void = () => {}): Params {
-  const params = defaultParams();
+  const params = goldenParams();
   change(params);
   return params;
 }
@@ -768,6 +768,30 @@ describe('plan facts on the examples', () => {
       expect(audit.openEdges).toBe(0);
       expect(meshBounds(mesh.positions).min[2]).toBeCloseTo(0, 4);
       within(signedVolume(mesh), m.model!.volume(), 1e-3);
+    });
+  }, SLOW);
+});
+
+/**
+ * The silicone base layer, on at today's defaults: every check of the set, one cavity however many bodies
+ * and copies, and no plastic under the layer's depth anywhere in D but for the models standing in it.
+ */
+describe('the silicone base layer, at defaults', () => {
+  const CASES: [ExampleId, number, number][] = FULL ? [...EXAMPLE_IDS.map((id): [ExampleId, number, number] => [id, 1, 1]), ['jersey', 2, 2], ['benchy', 2, 2]] : [['x8', 1, 1], ['jersey', 2, 2]];
+  it.each(CASES)('%s %i x %i: every check, one cavity, and the layer under the cover all over D', (id, nx, ny) => {
+    const params = defaultParams();
+    params.grid.nx = nx;
+    params.grid.ny = ny;
+    onModel(id, params, {}, (ctx) => {
+      const { arena, m } = ctx;
+      expect(m.built.cavities.count).toBe(1);
+      expect(m.built.diagnostics.map((d) => d.code)).not.toContain('tiles-merged');
+      checkAll(ctx);
+      // Just under the layer's depth, the cover holds no plastic within D, a mm in from its edge.
+      const { D } = m.rim;
+      const inner = arena.crossSection([[[D.x0 + 1, D.y0 + 1], [D.x1 - 1, D.y0 + 1], [D.x1 - 1, D.y1 - 1], [D.x0 + 1, D.y1 - 1]]]);
+      const plastic = arena.track(arena.track(m.cover.slice(params.silicone.t - 0.1)).intersect(inner)).area();
+      expect(plastic).toBeLessThan(1e-6);
     });
   }, SLOW);
 });

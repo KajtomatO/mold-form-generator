@@ -95,7 +95,8 @@ export function buildMold(arena: Arena, welded: WeldedMesh, params: Params, opti
   const settings = fieldSettings(params, bounds, options.cell);
   const plan = planField(bounds, settings);
   const t0 = now();
-  const built = buildField(oriented.mesh, plan, settings);
+  const mold = moldBounds(oriented.mesh, bounds, settings);
+  const built = buildField(oriented.mesh, plan, settings, undefined, mold.D);
   const t1 = now();
   // G4: the raise is the tolerance in use, so a preview at 0.1 gets 0.1. plan.raise is the export's.
   const tol = options.tinTol ?? params.quality.tinTolFinal;
@@ -103,7 +104,6 @@ export function buildMold(arena: Arena, welded: WeldedMesh, params: Params, opti
   const t2 = now();
   const tool = toolSolid(arena, toolMesh);
   const t3 = now();
-  const mold = moldBounds(oriented.mesh, bounds, settings);
   const rim = deriveRim(mold, params);
   const t4 = now();
   const cover = buildCoverBody(arena, rim, tool);

@@ -39,13 +39,13 @@ export function planOpenings(mesh: WeldedMesh, bounds: Bounds, params: Params, o
   const t0 = performance.now();
   const settings = fieldSettings(params, bounds, options.cell);
   const plan = planField(bounds, settings);
-  const built = buildField(mesh, plan, settings);
+  const mold = moldBounds(mesh, bounds, settings);
+  const built = buildField(mesh, plan, settings, undefined, mold.D);
   const t1 = performance.now();
   const single = { ...settings, nx: 1, ny: 1 };
   const tilePlan = planField(bounds, single);
-  const tile = plan.nx === 1 && plan.ny === 1 ? built.field : buildField(mesh, tilePlan, single).field;
+  const tile = plan.nx === 1 && plan.ny === 1 ? built.plain : buildField(mesh, tilePlan, single).field;
   const t2 = performance.now();
-  const mold = moldBounds(mesh, bounds, settings);
   const rim = deriveRim(mold, params);
   const opening = placementSettings(params, bounds);
   const search = findBodies(mesh, tilePlan, tile, single, opening);

@@ -11,7 +11,7 @@ export type SectionId = 'model' | 'base' | 'silicone' | 'cover' | 'pour' | 'grid
 export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
   model: ['base.planeTol'],
   base: ['base.mode', 'base.thickness', 'print.layerHeight', 'base.pocketDepth', 'base.pocketEnlarge'],
-  silicone: ['silicone.t', 'silicone.wallDraftDeg', 'silicone.density'],
+  silicone: ['silicone.t', 'silicone.baseLayer', 'silicone.wallDraftDeg', 'silicone.density'],
   // The bolts close the section as a group of their own, and their rows show only once the toggle is on.
   cover: [
     'cover.wall', 'cover.topCap', 'joint.taperDeg', 'joint.taperClearance', 'joint.grooveClearance', 'joint.ridgeWidth', 'joint.ridgeHeight', 'joint.pryNotches',
@@ -21,7 +21,7 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
   grid: ['grid.nx', 'grid.ny', 'grid.spacing', 'grid.edge'],
   advanced: [
     'base.minIsland', 'base.cornerRadius', 'base.bedReliefHeight', 'base.bedReliefRun',
-    'silicone.closeWidth', 'silicone.printMargin',
+    'silicone.baseLayerSlopeDeg', 'silicone.closeWidth', 'silicone.printMargin',
     'cover.topChamfer',
     'joint.landInner', 'joint.landOuter', 'joint.ridgeDraftDeg', 'joint.grooveExtraDepth', 'joint.baseProud', 'joint.pryWidth', 'joint.pryHeight',
     'pour.minLand', 'vents.persistence', 'seat.halfAngleDeg',
@@ -110,6 +110,7 @@ export function parseEntry(text: string, def: NumberDef | AutoDef): { value: num
 
 /** One step of the slider and of the wheel. Shift takes ten, Ctrl a tenth. */
 const STEPS: Partial<Record<ParamPath, number>> = {
+  'silicone.baseLayer': 0.1,
   'base.planeTol': 0.01,
   'base.pocketDepth': 0.01,
   'silicone.printMargin': 0.01,
@@ -178,6 +179,8 @@ export const HINTS: Partial<Record<ParamPath, string>> = {
   'base.planeTol': 'Corners this close to the base plane count as standing on it.',
   'silicone.t': 'The least silicone between the model and the cover, everywhere.',
   'silicone.wallDraftDeg': 'Lets the silicone slide out of the cover.',
+  'silicone.baseLayer': 'Silicone over the whole base plate inside the joint, which joins every copy and body into one mold. Follows the silicone thickness until you set it; 0 leaves it out. Double-click to follow again.',
+  'silicone.baseLayerSlopeDeg': 'The top of the base layer rises towards the models by this angle, so air under it moves to them and out through their vents. 0 makes it flat.',
   'grid.spacing': 'Between the models\' bounding boxes. Auto keeps a printable wall between them.',
   'grid.edge': 'From the models to the outside of the box. A minimum: the joint may need more.',
   'pour.perModel': 'Pours for each separate body in the model. Parts that overlap or touch, as in a model split for multi-colour printing, are one body.',

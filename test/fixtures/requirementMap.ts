@@ -239,8 +239,8 @@ export function testTitles(source: string): string[] {
   return titles;
 }
 
-/** The ids R01 to R35, as section 3 must list them. */
-export const REQUIREMENT_IDS = Array.from({ length: 35 }, (_, k) => `R${String(k + 1).padStart(2, '0')}`);
+/** The ids R01 to R36, as section 3 must list them. */
+export const REQUIREMENT_IDS = Array.from({ length: 36 }, (_, k) => `R${String(k + 1).padStart(2, '0')}`);
 
 /**
  * What is wrong with the map, in words that say what to fix; empty when every requirement maps to
@@ -256,7 +256,7 @@ export function mapProblems(requirements: string, read: (path: string) => string
   if (!matrix) return ['docs/REQUIREMENTS.md has no section 10.'];
   const rows = tableRows(table);
   const ids = rows.map((cells) => cells[0]);
-  if (ids.join() !== REQUIREMENT_IDS.join()) problems.push(`Section 3 lists ${ids.join(', ')}, not R01 to R35 in order.`);
+  if (ids.join() !== REQUIREMENT_IDS.join()) problems.push(`Section 3 lists ${ids.join(', ')}, not R01 to R36 in order.`);
 
   // Section 10: each user check with the requirements it covers.
   const users = new Map(tableRows(matrix).filter((cells) => /^U\d+$/.test(cells[0])).map((cells) => [cells[0], new Set(cells[2]?.match(/R\d\d/g) ?? [])]));

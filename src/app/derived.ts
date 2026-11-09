@@ -65,6 +65,8 @@ export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
       return params.print.layerHeight / 2;
     case 'vents.persistence':
       return params.silicone.t / 2;
+    case 'silicone.baseLayer':
+      return params.silicone.t;
     case 'base.planeTol':
       return oriented ? oriented.planeTol : null;
     case 'grid.spacing':
