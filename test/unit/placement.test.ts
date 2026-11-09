@@ -2,13 +2,34 @@ import type { ManifoldToplevel } from 'manifold-3d';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { replicateOpenings, boreSilicone, type PlacedOpening } from '../../src/core/analysis/placement';
 import { checkOpening, discMinimum, heightAt, type OpeningSpot } from '../../src/core/analysis/validate';
+import { countBodies } from '../../src/core/field/sealed';
 import type { Field } from '../../src/core/field/grid';
-import { meshBounds, type WeldedMesh } from '../../src/core/mesh/weld';
+import { auditEdges } from '../../src/core/mesh/audit';
+import { connectedPieces, importSolid, partsNote } from '../../src/core/mesh/shells';
+import { TOUCH_MM, touchingGroups } from '../../src/core/mesh/touching';
+import { meshBounds, weld, type WeldedMesh } from '../../src/core/mesh/weld';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
+import { withArena } from '../../src/core/solid/arena';
 import { loadManifold } from '../fixtures/loadExamples';
 import { planOpenings, type PlanOptions, type PlannedOpenings } from '../fixtures/openings';
-import { box, join, ring, SPIKES, spikes, TOWERS, towers } from '../fixtures/synthetic';
+import { arch, box, channel, inverted, join, ring, sphere as sphereMesh, SPIKES, spikes, toSoup, TOWERS, towers } from '../fixtures/synthetic';
+
+type V3 = [number, number, number];
+
+/** join() for many meshes, which spreads no array as an argument list. */
+function joinMany(meshes: WeldedMesh[]): WeldedMesh {
+  const positions = new Float32Array(meshes.reduce((sum, m) => sum + m.positions.length, 0));
+  const indices = new Uint32Array(meshes.reduce((sum, m) => sum + m.indices.length, 0));
+  let p = 0, i = 0;
+  for (const m of meshes) {
+    positions.set(m.positions, p);
+    for (let k = 0; k < m.indices.length; k++) indices[i + k] = m.indices[k] + p / 3;
+    p += m.positions.length;
+    i += m.indices.length;
+  }
+  return { positions, indices };
+}
 
 let api: ManifoldToplevel;
 beforeAll(async () => {
@@ -135,6 +156,237 @@ describe('bodies, per A3: one pour per body, not per cavity', () => {
   });
 });
 
+/** A tetrahedron wound outward, whichever order its corners come in. */
+function tetra(a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number]): WeldedMesh {
+  const det = (b[0] - a[0]) * ((c[1] - a[1]) * (d[2] - a[2]) - (c[2] - a[2]) * (d[1] - a[1])) - (b[1] - a[1]) * ((c[0] - a[0]) * (d[2] - a[2]) - (c[2] - a[2]) * (d[0] - a[0])) + (b[2] - a[2]) * ((c[0] - a[0]) * (d[1] - a[1]) - (c[1] - a[1]) * (d[0] - a[0]));
+  const faces = [0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2];
+  return { positions: Float32Array.from([...a, ...b, ...c, ...d]), indices: Uint32Array.from(det > 0 ? faces : faces.map((v, k) => faces[k - (k % 3) + [0, 2, 1][k % 3]])) };
+}
+
+/**
+ * A wedge whose edge from (15, -5, 5) to (15, 5, 15) crosses the 30 x 30 x 10 block's top front edge at
+ * (15, 0, 10) and touches it nowhere else, moved `gap` mm straight away from that edge: only the distance
+ * between two edges sees how close they come.
+ */
+const edgeOn = (gap: number): WeldedMesh => {
+  const s = gap / Math.SQRT2;
+  return join(box([0, 0, 0], [30, 30, 10]), tetra([15, -5 - s, 5 + s], [15, 5 - s, 15 + s], [5, -10 - s, 20 + s], [25, -10 - s, 20 + s]));
+};
+
+/**
+ * A tetrahedron whose face x + y + z = 30 is slanted to every axis, and a second whose corner stands `gap` mm
+ * off that face's middle, along its normal, with the rest of it further out: only the distance from that
+ * corner to the face sees how close they come.
+ */
+const cornerOffSlant = (gap: number): WeldedMesh => {
+  const n = 1 / Math.sqrt(3);
+  const u = [Math.SQRT1_2, -Math.SQRT1_2, 0], v = [n / Math.SQRT2, n / Math.SQRT2, -2 * (n / Math.SQRT2)];
+  const out = (d: number, a: number, b: number): [number, number, number] => [0, 1, 2].map((k) => 10 + n * d + a * u[k] + b * v[k]) as [number, number, number];
+  return join(tetra([0, 0, 0], [30, 0, 0], [0, 30, 0], [0, 0, 30]), tetra(out(gap, 0, 0), out(gap + 5, 3, 0), out(gap + 5, -1.5, 2.6), out(gap + 5, -1.5, -2.6)));
+};
+
+/**
+ * M11c: files of several parts, as multi-colour models are, with the bodies each gives, and of those the
+ * bodies with a peak of their own at the ceiling, which get the pours. A 30 x 30 x 10 block and a part beside,
+ * on, in or past it. Before M11c every part was a body of its own, so each row past the controls failed.
+ */
+const PARTS: [string, number, number, () => WeldedMesh][] = [
+  ['two boxes overlapping', 1, 1, () => join(box([0, 0, 0], [30, 30, 10]), box([20, 5, 0], [50, 25, 14]))],
+  ['two boxes sharing a face exactly', 1, 1, () => join(box([0, 0, 0], [30, 30, 10]), box([30, 5, 0], [60, 25, 14]))],
+  ['two boxes 0.049 mm apart, within the tolerance', 1, 1, () => join(box([0, 0, 0], [30, 30, 10]), box([30.049, 5, 0], [60, 25, 14]))],
+  ['negative control: two boxes 0.051 mm apart, past the tolerance, which their boxes already tell', 2, 2, () => join(box([0, 0, 0], [30, 30, 10]), box([30.051, 5, 0], [60, 25, 14]))],
+  ['negative control: two boxes 0.5 mm apart', 2, 2, () => join(box([0, 0, 0], [30, 30, 10]), box([30.5, 5, 0], [60, 25, 14]))],
+  ['a small part buried inside a big one', 1, 1, () => join(box([0, 0, 0], [30, 30, 15]), box([10, 10, 4], [20, 20, 8]))],
+  ['two boxes crossing as a plus sign, no corner of either in the other', 1, 1, () => join(box([0, 0, 0], [30, 10, 10]), box([10, -10, 2], [20, 20, 8]))],
+  ['a part with a corner 0.049 mm over the middle of another\'s top', 1, 1, () => join(box([0, 0, 0], [30, 30, 10]), tetra([20, 10, 10.049], [10, 0, 20], [30, 0, 20], [20, 20, 20]))],
+  ['two parts whose edges cross 0.049 mm apart', 1, 1, () => edgeOn(0.049)],
+  ['negative control: two parts whose edges cross 0.051 mm apart', 2, 2, () => edgeOn(0.051)],
+  ['a part on top of another, as a hat', 1, 1, () => join(box([0, 0, 0], [30, 30, 10]), box([10, 10, 10], [20, 20, 16]))],
+  ['negative control: a part in a sealed hollow of another, touching nothing', 2, 1, () => join(box([0, 0, 0], [30, 30, 30]), inverted(box([5, 5, 5], [25, 25, 25])), box([10, 10, 10], [20, 20, 20]))],
+  // A hollow's wall is the outer part's surface too (M11c review). Its first corner in the hollow, this part
+  // passes through the far wall into the material; another part rests on the hollow's floor.
+  ['a part passing through the wall of another\'s sealed hollow, from inside it', 1, 1, () => join(box([0, 0, 0], [30, 30, 30]), inverted(box([5, 5, 5], [25, 25, 25])), box([22, 12, 12], [28, 18, 18]))],
+  ['a part resting on the floor of another\'s sealed hollow', 1, 1, () => join(box([0, 0, 0], [30, 30, 30]), inverted(box([5, 5, 5], [25, 25, 25])), box([10, 10, 5], [20, 20, 12]))],
+];
+
+describe('bodies are physical objects: parts that overlap or touch are one (M11c)', () => {
+  // Read as the app reads a file: welded from its triangles, so parts share no vertex unless the file says so.
+  const parts = (make: () => WeldedMesh): WeldedMesh => weld(toSoup(make()));
+
+  it.each(PARTS)('%s: %i bodies, %i with pours', (_name, physical, poured, make) => {
+    const mesh = parts(make);
+    expect(connectedPieces(mesh).filter((piece) => piece.kind !== 'void')).toHaveLength(2);
+    expect(touchingGroups(mesh, connectedPieces(mesh))).toHaveLength(physical);
+    // A closed mesh is read along a line through it, an open one by the winding number: the same groups.
+    expect(touchingGroups(mesh, connectedPieces(mesh), { closed: true })).toHaveLength(physical);
+    expect(countBodies(mesh)).toBe(physical);
+    // The import counts them by the same rule, with Manifold at hand, so report.json says the same.
+    expect(withArena(api, (arena) => importSolid(arena, mesh, auditEdges(mesh)).report.bodies)).toBe(physical);
+    const p = plan(mesh);
+    expect(p.search.bodies).toHaveLength(poured);
+    expect(p.search.fragments).toHaveLength(physical - poured);
+    expect(pours(p)).toHaveLength(poured);
+    expect(p.placement.bodies.map((b) => b.placed)).toEqual(p.placement.bodies.map(() => 1));
+    expect(codes(p)).not.toContain('pour-shortfall');
+    expect(p.placement.uncovered).toEqual([]);
+    expectAllValid(p);
+  });
+
+  it('the tolerance is 0.05 mm, the least plane tolerance the auto rule picks', () => {
+    expect(TOUCH_MM).toBe(0.05);
+  });
+
+  // Parts whose boxes overlap, so only the test on the surfaces can tell them apart (M11c review): a part over
+  // another's floor, between its walls, which the boxes of the facing triangles tell; and a corner over the
+  // slanted face of another, where those boxes overlap and the corner's distance to the face decides. Each pair
+  // 0.049 mm apart is one body and 0.051 mm apart two, so the tolerance is pinned at 0.05 within 0.001.
+  const NEAR: [string, number, () => WeldedMesh][] = [
+    ['a box 0.049 mm over the floor of a U channel, 1 mm from its walls', 1, () => join(channel(api), box([6, 5, 2.049], [24, 25, 9]))],
+    ['negative control: the same box 0.051 mm over the floor', 2, () => join(channel(api), box([6, 5, 2.051], [24, 25, 9]))],
+    ['a corner 0.049 mm off the middle of a slanted face', 1, () => cornerOffSlant(0.049)],
+    ['negative control: the same corner 0.051 mm off it', 2, () => cornerOffSlant(0.051)],
+  ];
+  it.each(NEAR)('%s: %i bodies, as the surfaces decide', (_name, physical, make) => {
+    const mesh = parts(make);
+    const pieces = connectedPieces(mesh);
+    expect(pieces).toHaveLength(2);
+    // The boxes, grown by the tolerance, overlap on every axis, so no box test can have decided it.
+    const [a, b] = pieces;
+    for (let axis = 0; axis < 3; axis++) expect(a.min[axis] - TOUCH_MM <= b.max[axis] && b.min[axis] - TOUCH_MM <= a.max[axis]).toBe(true);
+    expect(touchingGroups(mesh, pieces)).toHaveLength(physical);
+    expect(touchingGroups(mesh, pieces, { closed: true })).toHaveLength(physical);
+    expect(countBodies(mesh)).toBe(physical);
+    expect(withArena(api, (arena) => importSolid(arena, mesh, auditEdges(mesh)).report.bodies)).toBe(physical);
+    const p = plan(mesh);
+    expect(p.search.bodies.length + p.search.fragments.length).toBe(physical);
+  });
+
+  it('a known limit: a small part 0.06 mm over another, past the tolerance, is a body of its own, and with no room for a pour of its own, it is short of one, an error that keeps Export ZIP off', () => {
+    // As printed, a gap this thin under a layer fuses; S8's columns, a cell apart, see one shell. The rule is
+    // the plan's: past TOUCH_MM, parts are separate bodies, and each needs its pour (M11c review).
+    const off = plan(parts(() => join(box([0, 0, 0], [30, 30, 10]), box([12, 12, 10.06], [18, 18, 16]))));
+    expect(off.search.bodies).toHaveLength(2);
+    expect(pours(off)).toHaveLength(1);
+    expect(off.placement.diagnostics.find((d) => d.code === 'pour-shortfall')?.severity).toBe('error');
+    // 0.04 mm over, it is the block's, and the body's one pour stands on it.
+    const on = plan(parts(() => join(box([0, 0, 0], [30, 30, 10]), box([12, 12, 10.04], [18, 18, 16]))));
+    expect(on.search.bodies).toHaveLength(1);
+    expect(codes(on)).not.toContain('pour-shortfall');
+    expectAllValid(on);
+  });
+
+  it('a file of two figures 20 mm apart, each a box with a taller part passing into it: two bodies, each poured at its own part\'s top', () => {
+    // The tall parts stand off their boxes' middles, so a body's field from its box alone would put the pour
+    // on the box's flat top, away from the part.
+    const hats: [V3, V3][] = [
+      [[2, 2, 5], [12, 12, 20]],
+      [[66, 16, 5], [76, 26, 22]],
+    ];
+    const mesh = parts(() => join(box([0, 0, 0], [30, 30, 10]), box(...hats[0]), box([50, 0, 0], [80, 30, 10]), box(...hats[1])));
+    const pieces = connectedPieces(mesh);
+    expect(touchingGroups(mesh, pieces)).toEqual([[0, 1], [2, 3]]);
+    const p = plan(mesh);
+    expect(p.search.bodies).toHaveLength(2);
+    expect(p.search.fragments).toEqual([]);
+    expect(pours(p)).toHaveLength(2);
+    pours(p).forEach((pour, b) => {
+      const [min, max] = hats[b];
+      expect(pour.body).toBe(b);
+      expect(pour.x).toBeGreaterThan(min[0]);
+      expect(pour.x).toBeLessThan(max[0]);
+      expect(pour.y).toBeGreaterThan(min[1]);
+      expect(pour.y).toBeLessThan(max[1]);
+      // At the top of the ceiling over that part, read off the tile.
+      let peak = 0;
+      for (let x = min[0]; x <= max[0]; x += 0.25) for (let y = min[1]; y <= max[1]; y += 0.25) peak = Math.max(peak, heightAt(p.tile, x, y));
+      expect(heightAt(p.tile, pour.x, pour.y)).toBeCloseTo(peak, 1);
+    });
+    expect(p.placement.bodies.map((b) => b.placed)).toEqual([1, 1]);
+    expect(codes(p)).not.toContain('pour-shortfall');
+    expectAllValid(p);
+    // The import counts 4 parts, which make 2 models, and says so; their union is 10,000 and 10,200 mm3.
+    const report = withArena(api, (arena) => importSolid(arena, mesh, auditEdges(mesh)).report);
+    expect(report.bodies).toBe(2);
+    expect(report.overlapVolume).toBeCloseTo(1000, 3);
+    expect(report.diagnostics).toEqual([
+      {
+        code: 'shell-overlap',
+        severity: 'info',
+        message: 'The file is made of 4 parts, some of which overlap by 1000.0 mm3, as models split for multi-colour printing often are. The mold treats parts that overlap or touch as one model, so it makes 2 models of them, 20200 mm3 in all.',
+      },
+    ]);
+  });
+
+  it('a sphere of 64,800 triangles with 500 small parts 0.5 mm off its surface is grouped in well under a second on a closed mesh (M11c review: 5.5 s)', () => {
+    const ball = sphereMesh(api, 20, 360);
+    expect(ball.indices.length / 3).toBe(64_800);
+    let seed = 7;
+    const random = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const cubes = Array.from({ length: 500 }, () => {
+      const z = 2 * random() - 1, phi = 2 * Math.PI * random(), s = Math.sqrt(1 - z * z);
+      // 0.5 mm off the surface past the cube's own half diagonal.
+      const at = [s * Math.cos(phi), s * Math.sin(phi), z].map((d) => d * (20 + 0.5 + 0.25 * Math.sqrt(3))) as V3;
+      return box([at[0] - 0.25, at[1] - 0.25, at[2] - 0.25], [at[0] + 0.25, at[1] + 0.25, at[2] + 0.25]);
+    });
+    const mesh = parts(() => joinMany([ball, ...cubes]));
+    const pieces = connectedPieces(mesh);
+    const t0 = performance.now();
+    const groups = touchingGroups(mesh, pieces, { closed: true });
+    const ms = performance.now() - t0;
+    // No cube touches the sphere: its group is itself alone.
+    expect(groups.find((group) => group.includes(0))).toEqual([0]);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it('a joined body gets its other peaks vented: of two towers on a bridge, the lower has a vent and no pour', () => {
+    // Three parts, each passing into the next. Apart, the towers took a pour each.
+    const p = plan(parts(() => join(box([0, 0, 0], [20, 20, 14]), box([40, 0, 0], [60, 20, 12]), box([15, 5, 0], [45, 15, 4]))));
+    expect(p.search.bodies).toHaveLength(1);
+    expect(pours(p).map((o) => o.x < 20)).toEqual([true]);
+    expect(vents(p).filter((o) => o.role === 'leaf').map((o) => o.x > 40)).toEqual([true]);
+    expect(p.placement.uncovered).toEqual([]);
+    expectAllValid(p);
+  });
+
+  it('a joined body stands where the union of its parts does, a shared patch counted once', () => {
+    // On the plane the union is 40 x 20, centred at (20, 10). Summed, the 10 x 20 the parts share would
+    // count twice and put the centre at x = 19.
+    const p = plan(parts(() => join(box([0, 0, 0], [20, 20, 10]), box([10, 0, 0], [40, 20, 5]))));
+    const [body] = p.search.bodies;
+    expect(body.centroid[0]).toBeCloseTo(20, 1);
+    expect(body.centroid[1]).toBeCloseTo(10, 1);
+    expect(body.extent).toBeCloseTo(20, 4);
+  });
+
+  it('perModel 3 gives 3 pours on a joined body, spread round its centroid', () => {
+    const p = plan(parts(() => join(box([0, 0, 0], [60, 60, 10]), box([20, 20, 10], [40, 40, 14]))), (q) => (q.pour.perModel = 3));
+    expect(p.search.bodies).toHaveLength(1);
+    expect(pours(p)).toHaveLength(3);
+    expect(codes(p)).not.toContain('pour-shortfall');
+    expectAllValid(p);
+  });
+
+  it('the note says how many parts overlap or touch, and the volume of their union, and says nothing for parts apart', () => {
+    expect(partsNote(8, 8, 0, 59683)).toBeNull();
+    expect(partsNote(6, 1, 964.37, 16813.2)).toEqual({
+      code: 'shell-overlap',
+      severity: 'info',
+      message: 'The file is made of 6 parts that overlap by 964.4 mm3, as models split for multi-colour printing often are. The mold treats them as one model, of 16813 mm3.',
+    });
+    expect(partsNote(2, 1, 0, 4200)?.message).toBe('The file is made of 2 parts that touch, as models split for multi-colour printing often are. The mold treats them as one model, of 4200 mm3.');
+    expect(partsNote(3, 2, 12.5, 1000)?.message).toBe('The file is made of 3 parts, some of which overlap by 12.5 mm3, as models split for multi-colour printing often are. The mold treats parts that overlap or touch as one model, so it makes 2 models of them, 1000 mm3 in all.');
+    const hat = parts(PARTS.find(([name]) => name.includes('hat'))![3]);
+    expect(withArena(api, (arena) => importSolid(arena, hat, auditEdges(hat)).report.diagnostics)).toEqual([{ code: 'shell-touch', severity: 'info', message: 'The file is made of 2 parts that touch, as models split for multi-colour printing often are. The mold treats them as one model, of 9600 mm3.' }]);
+  });
+
+  it('one piece is a group of its own, with no test at all, and a void belongs to none', () => {
+    const hollow = join(box([0, 0, 0], [20, 20, 20]), inverted(box([5, 5, 5], [15, 15, 15])));
+    const pieces = connectedPieces(hollow);
+    expect(pieces.map((piece) => piece.kind)).toEqual(['unverified', 'void']);
+    expect(touchingGroups(hollow, pieces)).toEqual([[0]]);
+  });
+});
+
 describe('fragments, which are no bodies', () => {
   const crumb = (x: number, y: number, z = 0): WeldedMesh => box([x, y, z], [x + 0.5, y + 0.5, z + 0.5]);
 
@@ -162,8 +414,10 @@ describe('fragments, which are no bodies', () => {
   });
 
   it('a piece under another\'s ceiling is no body, however large', () => {
-    const inner = box([10, 10, 0], [20, 20, 5]);
-    const p = plan(join(box([0, 0, 0], [30, 30, 15]), inner));
+    // Between the arch's legs and under its top, 2 mm from each and touching neither. M11c: a piece inside
+    // another, or touching it, is part of that body, as the hat and buried part below show.
+    const inner = box([12, 1, 0], [28, 9, 10]);
+    const p = plan(join(arch(api), inner));
     expect(p.search.bodies).toHaveLength(1);
     expect(p.search.fragments).toMatchObject([{ reason: 'buried' }]);
     expect(pours(p)).toHaveLength(1);

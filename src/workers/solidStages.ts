@@ -3,8 +3,9 @@ import type { BaseCandidate } from '../core/base/candidates';
 import { buildFootprint, classifyLevels, type Footprint, type LevelReport } from '../core/base/footprint';
 import { transformPositions, type RigidTransform } from '../core/base/orient';
 import type { Field } from '../core/field/grid';
+import { exteriorMesh } from '../core/field/sealed';
 import type { MeshAudit } from '../core/mesh/audit';
-import { importSolid, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
+import { importSolid, sharedVolume, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
 import { displayProxy, HEAVY_LIMITS, importFromCopy, manifoldPathSolid, type HeavyLimits, type MeshSimplifier } from '../core/mesh/simplify';
 import type { WeldedMesh } from '../core/mesh/weld';
 import { crossParameterErrors } from '../core/params/rules';
@@ -55,12 +56,23 @@ export interface ImportOutput {
   import: ImportInput;
   /** G1.8: a lighter copy for the viewport above 300k triangles, or null. Picking still uses the real mesh. */
   display: PartMesh | null;
+  /**
+   * M11c: the union of parts the import joined, which the section's cut is counted from, with its triangles
+   * less its void shells for the silicone's (null with none); null where the import kept none.
+   */
+  joined: { mesh: PartMesh; exterior: Uint32Array | null } | null;
 }
 
 /** The footprint as main needs it before any part is built: G2.6's levels, and the islands it dropped. */
 export interface FootprintOutput {
   levels: LevelReport;
   diagnostics: Diagnostic[];
+  /**
+   * What the model's parts share above the plane, in mm3, which the silicone takes off: the import's
+   * overlap, or on a plane that trims the model, that of the trimmed parts, as the trim takes away what
+   * they share below it (M11c).
+   */
+  overlap: number;
 }
 
 export interface SolidOutputs {
@@ -111,7 +123,7 @@ export class SolidStages {
    * uses, and the whole one is freed once checked, so the two never stand in the heap together for long.
    */
   private model: Held<{ solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean }> | null = null;
-  private footprint: { key: string; footprint: Footprint; mesh: WeldedMesh } | null = null;
+  private footprint: { key: string; footprint: Footprint; mesh: WeldedMesh; overlap: number } | null = null;
   private tool: Held<ToolEntry> | null = null;
   private coverBody: Held | null = null;
   private baseBody: Held | null = null;
@@ -232,7 +244,7 @@ export class SolidStages {
       return held.solid;
     };
 
-    const footprint = (): { footprint: Footprint; mesh: WeldedMesh } => {
+    const footprint = (): { footprint: Footprint; mesh: WeldedMesh; overlap: number } => {
       if (this.footprint?.key === keys.S2) return this.footprint;
       const imported = inputs.plane.needsTrim ? manifoldModel() : model();
       const value = timed('S2', () => withArena(api, (arena) => {
@@ -240,7 +252,10 @@ export class SolidStages {
         const mesh = { positions: transformPositions(imported.mesh.positions, transform), indices: imported.mesh.indices };
         const placed = needsTrim ? orientedSolid(arena, imported, { transform, needsTrim }) : null;
         const cap = placed ? arena.track(placed.slice(0.02)) : undefined;
-        return { footprint: buildFootprint(arena, mesh, candidate, params.base.minIsland, cap), mesh };
+        // Past G1.8's limit the trimmed model is the copy's, as everything after the import is; the export measures the whole one.
+        const { overlapVolume } = imported.report;
+        const overlap = placed && overlapVolume > 0 ? sharedVolume(arena, placed) : overlapVolume;
+        return { footprint: buildFootprint(arena, mesh, candidate, params.base.minIsland, cap), mesh, overlap };
       }));
       this.footprint = { key: keys.S2, ...value };
       return value;
@@ -275,13 +290,15 @@ export class SolidStages {
     if (want.includes('S1')) {
       const { solid, outcome } = imported();
       const proxy = this.simplifier ? displayProxy(solid.mesh, this.simplifier) : null;
-      outputs.S1 = { report: solid.report, import: outcome, display: proxy ? { positions: proxy.positions, indices: proxy.indices } : null };
+      const exterior = solid.joined ? exteriorMesh(solid.joined) : null;
+      const joined = solid.joined ? { mesh: solid.joined, exterior: exterior === solid.joined ? null : exterior!.indices } : null;
+      outputs.S1 = { report: solid.report, import: outcome, display: proxy ? { positions: proxy.positions, indices: proxy.indices } : null, joined };
     }
 
     if (want.includes('S2')) {
-      const { footprint: print, mesh } = footprint();
+      const { footprint: print, mesh, overlap } = footprint();
       const { candidate, planeTol } = inputs.plane;
-      outputs.S2 = timed('levels', () => ({ levels: classifyLevels(mesh, candidate, print, planeTol), diagnostics: print.diagnostics }));
+      outputs.S2 = timed('levels', () => ({ levels: classifyLevels(mesh, candidate, print, planeTol), diagnostics: print.diagnostics, overlap }));
     }
 
     if (want.includes('S13')) {

@@ -30,6 +30,11 @@ const VOID: [[number, number, number], [number, number, number]] = [
   [70, 60, 15],
 ];
 const VOID_MM3 = 40 * 30 * 10;
+/** M11c: a part passing into the block's rippled top, as a multi-colour model's do, so the model is their union. */
+const HAT: [[number, number, number], [number, number, number]] = [
+  [75, 75, 10],
+  [90, 90, 30],
+];
 
 let api: ManifoldToplevel;
 const pipelines: Pipeline[] = [];
@@ -57,32 +62,42 @@ function heavyPipeline(): { p: Pipeline; spawned: () => number; sent: ToWorker[]
   return { p, spawned: () => spawned, sent };
 }
 
-/** The block with its void, which the import finds as a solid of 200,000 mm3 less the void's. */
+/** The block with its void and a part passing into its top, which the import finds as one body of the block and part less the void and their overlap. */
 function hollowBlock(): WeldedMesh {
-  return join(heightBlockMesh(BLOCK, weld), inverted(box(...VOID)));
+  return join(heightBlockMesh(BLOCK, weld), inverted(box(...VOID)), box(...HAT));
 }
 
-/** The block with a cone 0.5 mm under its floor, a stray vertex the base plane keeps and the export trims. */
+/**
+ * The block with a cone from a point 0.5 mm under its floor, 4 mm in radius at the floor, a stray the base
+ * plane keeps and the export trims; and a 4 x 4 post on the cone's axis from 0.3 mm under the floor to 5 mm
+ * up, a part of its own, which shares about 4 mm3 with the cone under the floor and 80 mm3 with the block
+ * over it (M11c review).
+ */
 function spikedBlock(): WeldedMesh {
   const block = heightBlockMesh(BLOCK, weld);
-  return withArena(api, (arena) => {
+  const spiked = withArena(api, (arena) => {
     const solid = arena.manifold(new api.Mesh({ numProp: 3, vertProperties: block.positions, triVerts: block.indices }));
-    const cone = arena.track(arena.track(api.Manifold.cylinder(1.5, 0, 0.5, 16)).translate([50, 50, -0.5]));
+    const cone = arena.track(arena.track(api.Manifold.cylinder(1, 0, 8, 48)).translate([50, 50, -0.5]));
     const mesh = arena.track(solid.add(cone)).getMesh();
     return { positions: mesh.vertProperties, indices: mesh.triVerts };
   });
+  return join(spiked, box([48, 48, -0.3], [52, 52, 5]));
 }
 
 const solidJobs = (sent: ToWorker[]) => sent.filter((m): m is Extract<ToWorker, { t: 'solid' }> => m.t === 'solid');
 const exportJobs = (sent: ToWorker[]) => sent.filter((m): m is Extract<ToWorker, { t: 'export' }> => m.t === 'export');
 
 describe('a mesh past G1.8\'s limit in the pipeline (limits of 4,000 and 2,000 triangles)', () => {
-  it('the preview checks it whole once, then a fresh worker builds the copy alone, whose warning shows under Mode in both modes; the export, told that import, needs no other, and reports the whole model with its void left out', async () => {
+  it('the preview checks it whole once, then a fresh worker builds the copy alone, whose warning shows under Mode in both modes; the export, told that import, needs no other, and reports the whole model with its void left out and its parts\' overlap once', async () => {
     const mesh = hollowBlock();
     expect(mesh.indices.length / 3).toBeGreaterThan(LIMITS.limit);
     const whole = withArena(api, (arena) => importSolid(arena, mesh, auditEdges(mesh)));
     expect(whole.report.voidVolume).toBeCloseTo(VOID_MM3, 0);
-    const wholeVolume = whole.report.solidVolume - whole.report.voidVolume;
+    expect(whole.report.bodies).toBe(1);
+    // The part's 15 x 15 mm stands in the block from 10 mm up to the ripple, about 20 mm.
+    expect(whole.report.overlapVolume).toBeGreaterThan(15 * 15 * 9);
+    expect(whole.report.overlapVolume).toBeLessThan(15 * 15 * 11);
+    const wholeVolume = whole.report.solidVolume - whole.report.voidVolume - whole.report.overlapVolume;
 
     const { p, spawned, sent } = heavyPipeline();
     p.load(asciiStl(toSoup(mesh), 'hollow block'), 'hollow-block.stl');
@@ -114,7 +129,7 @@ describe('a mesh past G1.8\'s limit in the pipeline (limits of 4,000 and 2,000 t
     const [job] = exportJobs(sent);
     expect(job.inputs!.importReport).toMatchObject({ route: 'manifold', voidVolume: whole.report.voidVolume });
     const report = JSON.parse(new TextDecoder().decode(outputs.files['report.json'])) as ExportReport;
-    // The whole model less its void, not the sum of its bodies, as model_oriented.stl holds.
+    // The whole model less its void, and its parts' union, not the sum of its bodies, as a slicer prints model_oriented.stl.
     expect(report.model.volumeMm3!).toBeCloseTo(wholeVolume, 3);
     expect(report.parts['model_oriented.stl'].volumeMm3!).toBeCloseTo(wholeVolume, 3);
     expect(Math.abs(report.model.volumeMm3! - whole.report.solidVolume)).toBeGreaterThan(VOID_MM3 * 0.99);
@@ -131,6 +146,10 @@ describe('a mesh past G1.8\'s limit in the pipeline (limits of 4,000 and 2,000 t
   it('an export that trims the model imports it whole, reads the trimmed model_oriented.stl and the volume from it, and builds on the copy', async () => {
     const mesh = spikedBlock();
     expect(mesh.indices.length / 3).toBeGreaterThan(LIMITS.limit);
+    const whole = withArena(api, (arena) => importSolid(arena, mesh, auditEdges(mesh)));
+    expect(whole.report.bodies).toBe(1);
+    expect(whole.report.overlapVolume).toBeGreaterThan(82);
+    expect(whole.report.overlapVolume).toBeLessThan(86);
     const { p, sent } = heavyPipeline();
     p.load(asciiStl(toSoup(mesh), 'spiked block'), 'spiked-block.stl');
     await p.idle();
@@ -143,8 +162,10 @@ describe('a mesh past G1.8\'s limit in the pipeline (limits of 4,000 and 2,000 t
     // A trim needs the whole solid, so the export, though told the preview's import, imports it whole.
     expect(exportJobs(sent)[0].inputs).toMatchObject({ needsTrim: true, importReport: { route: 'manifold' } });
     const report = JSON.parse(new TextDecoder().decode(outputs.files['report.json'])) as ExportReport;
-    // The cone above the floor lies inside the block, so trimmed, the model is the block alone.
+    // The cone and the post above the floor lie inside the block, so trimmed, the model is the block alone:
+    // the trimmed parts less what they share above the floor, 80 mm3, not the whole model's overlap.
     expect(report.model.volumeMm3!).toBeCloseTo(200_000, 0);
+    expect(report.parts['model_oriented.stl'].volumeMm3!).toBeCloseTo(200_000, 0);
     const model = parseStl(outputs.files['model_oriented.stl']);
     let lowest = Infinity;
     for (let k = 2; k < model.positions.length; k += 3) lowest = Math.min(lowest, model.positions[k]);

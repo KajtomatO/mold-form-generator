@@ -47,6 +47,10 @@ Use Mode A for a model that stands on several footprints, such as the wolf on it
 
 Merged mode is off for a mesh with holes (an open mesh), and the reason shows under Mode.
 
+### A model of several parts
+
+A file may hold several parts, as a model split for multi-colour printing does, such as a figure whose body, eyes and feet are closed parts of their own, passing into each other or sharing a face. That is fine. Parts that overlap or touch print as one object, and the app takes them as one model: one pour at its highest point, vents at its other high points, and a note in Diagnostics saying how many parts there are and, for a closed mesh, by how much they overlap (a mesh with holes has no volume to measure). Parts that stand apart, such as several models in one file, are separate models, and each gets its own pours, as many as Pours per body under Pour & funnel says. In Mode A, `model_oriented.stl` keeps the parts as your file has them, and your slicer prints overlapping parts as one; in Mode B the base holds them as one.
+
 ## 2. Check your printer with the fit test
 
 Every printer prints a little over or under size. The joint between the base and the cover has small clearances, so find the ones that suit your printer before you print a whole mold.

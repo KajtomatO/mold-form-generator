@@ -14,6 +14,7 @@ import { fileKind, holdsModel, PROJECT_EXTENSION } from './projectArchive';
 import { OPEN_INSTEAD, ProjectError, type ProjectNote } from './projectFile';
 import type { ProjectFiles } from './projectFiles';
 import { setParamValue, type ParamPath } from './stages';
+import { APP_VERSION } from './version';
 import { READ_IN_WORKER_BYTES, readStl, type Opened } from '../workers/projectJob';
 
 export type Theme = 'dark' | 'light';
@@ -385,7 +386,7 @@ export class Store {
   private loadOpened(opened: Opened, name: string): void {
     const { file } = opened;
     this.beforeLoad();
-    this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256);
+    this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256, file.appVersion);
     this.saved = this.pipeline.project();
     // The history is empty, so every step from here stands on the file's choice until the user picks.
     this.fileSteps = this.history.nextSeq;
@@ -414,7 +415,7 @@ export class Store {
     // Steps already in the history are the user's own: a resolution of the file's plane, even one found
     // during this very step, must not rewrite them, and the step's own "before" is one of them.
     this.fileSteps = Infinity;
-    this.change(`opening the settings of ${name}`, null, () => this.pipeline.applyProject(project, same ? file.basePlane : null));
+    this.change(`opening the settings of ${name}`, null, () => this.pipeline.applyProject(project, same ? file.basePlane : null, same ? file.appVersion : APP_VERSION));
     if (!same) {
       const why = file.model === current ? `another model of the same name, ${file.model}, whose contents differ from the one on screen` : `${file.model}, not ${current}`;
       this.fileNotice.value = { severity: 'warning', message: `${name} was saved for ${why}, so only its settings were applied: the model keeps its own base face, pinned openings and removed vents.`, notes };

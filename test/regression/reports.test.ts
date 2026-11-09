@@ -30,7 +30,7 @@ const within = (value: number, expected: number, share: number, what: string): v
   else expect(Math.abs(value / expected - 1), `${what}: ${value} against ${expected}`).toBeLessThanOrEqual(share);
 };
 
-describe('S8 and the reports on the 7 examples', () => {
+describe('S8 and the reports on the 8 examples', () => {
   it('sealed domains: the barrel\'s void of 3.43 ml within 3%, inside the model, and none past the filter on the others', () => {
     for (const id of EXAMPLE_IDS) {
       const sealed = air(id).sealed;

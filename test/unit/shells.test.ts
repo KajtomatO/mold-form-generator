@@ -2,7 +2,8 @@ import { MeshoptSimplifier } from 'meshoptimizer/simplifier';
 import type { ManifoldToplevel } from 'manifold-3d';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { auditEdges } from '../../src/core/mesh/audit';
-import { importSolid, type ImportedSolid } from '../../src/core/mesh/shells';
+import { importSolid, sharedVolume, type ImportedSolid } from '../../src/core/mesh/shells';
+import { trimToBase } from '../../src/core/base/orient';
 import { DISPLAY_TRIANGLE_LIMIT, displayProxy, MANIFOLD_TRIANGLE_LIMIT, simplifyForManifold } from '../../src/core/mesh/simplify';
 import type { WeldedMesh } from '../../src/core/mesh/weld';
 import { Arena, withArena } from '../../src/core/solid/arena';
@@ -20,6 +21,46 @@ function run(mesh: WeldedMesh): ImportedSolid {
   return withArena(api, (arena) => importSolid(arena, mesh, auditEdges(mesh)));
 }
 const codes = (imported: ImportedSolid): string[] => imported.report.diagnostics.map((d) => d.code);
+
+describe('what parts share, once trimmed at the base plane (M11c review)', () => {
+  it('a plane through the overlap of two boxes leaves only what they share above it, and the union is the trimmed volume less that', () => {
+    // Overlapping in 5 x 10 x 7 from z = -2 to 5: 350 mm3 in all, 250 of it above z = 0.
+    const mesh = join(box([0, 0, -2], [10, 10, 5]), box([5, 0, -2], [15, 10, 5]));
+    withArena(api, (arena) => {
+      const imported = importSolid(arena, mesh, auditEdges(mesh));
+      expect(imported.report.overlapVolume).toBeCloseTo(350, 6);
+      const trimmed = trimToBase(arena, imported.solid!);
+      expect(trimmed.volume()).toBeCloseTo(1000, 6);
+      expect(sharedVolume(arena, trimmed)).toBeCloseTo(250, 6);
+      // Checked against each box trimmed alone and then joined.
+      const parts = [box([0, 0, -2], [10, 10, 5]), box([5, 0, -2], [15, 10, 5])].map((part) => trimToBase(arena, arena.manifold(new api.Mesh({ numProp: 3, vertProperties: part.positions, triVerts: part.indices }))));
+      expect(trimmed.volume() - sharedVolume(arena, trimmed)).toBeCloseTo(arena.track(api.Manifold.union(parts)).volume(), 6);
+      // Untrimmed, it is the import's figure; parts apart share nothing.
+      expect(sharedVolume(arena, imported.solid!)).toBeCloseTo(350, 6);
+      const apart = join(box([0, 0, -2], [10, 10, 5]), box([20, 0, -2], [30, 10, 5]));
+      expect(sharedVolume(arena, trimToBase(arena, importSolid(arena, apart, auditEdges(apart)).solid!))).toBe(0);
+    });
+  });
+});
+
+describe('the union kept for the section\'s cut (M11c review)', () => {
+  it('is the parts\' union where parts were joined, with no wall of one left inside another, and null for one part or parts apart', () => {
+    const joined = run(join(box([0, 0, 0], [20, 20, 10]), box([10, 5, 0], [30, 15, 14]))).joined!;
+    expect(signedVolume(joined)).toBeCloseTo(20 * 20 * 10 + 20 * 10 * 14 - 10 * 10 * 10, 3);
+    // One closed surface: no face of either box lies inside the other.
+    expect(auditEdges(joined)).toMatchObject({ openEdges: 0, nonManifoldEdges: 0 });
+    let inside = 0;
+    for (let v = 0; v < joined.positions.length; v += 3) {
+      const [x, y, z] = [joined.positions[v], joined.positions[v + 1], joined.positions[v + 2]];
+      if (x > 10 && x < 20 && y > 5 && y < 15 && z > 0 && z < 10) inside++;
+    }
+    expect(inside).toBe(0);
+    // A hat sharing a face is joined, and its shared face goes.
+    expect(signedVolume(run(join(box([0, 0, 0], [30, 30, 10]), box([10, 10, 10], [20, 20, 16]))).joined!)).toBeCloseTo(9600, 3);
+    expect(run(box([0, 0, 0], [10, 10, 10])).joined).toBeNull();
+    expect(run(join(box([0, 0, 0], [10, 10, 10]), box([20, 0, 0], [30, 10, 10]))).joined).toBeNull();
+  });
+});
 
 describe('repair ladder', () => {
   it('takes a closed box straight through with nothing to report', () => {
@@ -126,6 +167,26 @@ describe('repair ladder', () => {
     expect(report.shells.map((s) => s.kind)).toEqual(['unverified', 'unverified']);
   });
 
+  it('M11c: counts two open parts that overlap as one body, by the same rule as a closed file, and says so with no volume', () => {
+    // Each a box with one triangle of its top missing, the second passing through the first's side.
+    const open = join(withoutTriangles(box([0, 0, 0], [20, 20, 10]), [BOX_TOP[0]]), withoutTriangles(box([10, 5, 0], [30, 15, 14]), [BOX_TOP[0]]));
+    const imported = run(open);
+    expect(imported.report.route).toBe('soup');
+    expect(imported.report.shells.map((s) => s.kind)).toEqual(['unverified', 'unverified']);
+    expect(imported.report.bodies).toBe(1);
+    // An open surface has no union to measure, so the note gives no volume and does not say which they do.
+    expect(imported.report.diagnostics.find((d) => d.code === 'shell-touch')).toEqual({
+      code: 'shell-touch',
+      severity: 'info',
+      message: 'The file is made of 2 parts that overlap or touch, as models split for multi-colour printing often are. The mold treats them as one model.',
+    });
+    expect(imported.report.overlapVolume).toBe(0);
+    // Apart, they stay two, with nothing to say.
+    const apart = run(join(withoutTriangles(box([0, 0, 0], [20, 20, 10]), [BOX_TOP[0]]), withoutTriangles(box([30, 5, 0], [50, 15, 14]), [BOX_TOP[0]])));
+    expect(apart.report.bodies).toBe(2);
+    expect(codes(apart)).not.toContain('shell-touch');
+  });
+
   it('reports a large missing cap, disables Mode B and states the hole size', () => {
     const imported = run(withoutTriangles(box([0, 0, 0], [20, 20, 10]), BOX_TOP));
     expect(imported.report.route).toBe('soup');
@@ -188,12 +249,18 @@ describe('shell analysis', () => {
   });
 
   it('records overlapping shells with the overlap volume', () => {
-    // 10 mm cubes offset by 5 mm in x overlap in a 5 x 10 x 10 block.
+    // 10 mm cubes offset by 5 mm in x overlap in a 5 x 10 x 10 block. M11c: they are one body, as a slicer
+    // prints them, where M1 counted 2, and the note says so, with the union's volume.
     const imported = run(join(box([0, 0, 0], [10, 10, 10]), box([5, 0, 0], [15, 10, 10])));
-    expect(imported.report.bodies).toBe(2);
+    expect(imported.report.bodies).toBe(1);
     expect(imported.report.solidVolume).toBeCloseTo(2000, 2);
     expect(imported.report.overlapVolume).toBeCloseTo(500, 2);
     expect(codes(imported)).toContain('shell-overlap');
+    expect(imported.report.diagnostics.find((d) => d.code === 'shell-overlap')).toEqual({
+      code: 'shell-overlap',
+      severity: 'info',
+      message: 'The file is made of 2 parts that overlap by 500.0 mm3, as models split for multi-colour printing often are. The mold treats them as one model, of 1500 mm3.',
+    });
   });
 
   it('negative control: separate shells report no overlap', () => {
@@ -243,11 +310,16 @@ describe('shell analysis', () => {
     expect(imported.report.diagnostics.map((d) => d.code)).toEqual(['shell-void']);
   });
 
-  it('negative control: a body reaching through the void into the solid does overlap, by that much', () => {
-    // A 10 mm cube sticking 2 mm out of the 20 mm void, into the wall: 2 x 10 x 10.
-    const imported = run(join(box([0, 0, 0], [30, 30, 30]), inverted(box([5, 5, 5], [25, 25, 25])), box([3, 10, 10], [13, 20, 20])));
+  it.each([
+    ['the near wall, its first corner in the wall', [3, 10, 10], [13, 20, 20]],
+    ['the far wall, its first corner in the void', [17, 10, 10], [27, 20, 20]],
+  ] as [string, [number, number, number], [number, number, number]][])('negative control: a body reaching through the void into %s does overlap, by that much, and is one body with the shell', (_where, min, max) => {
+    // A 10 mm cube sticking 2 mm out of the 20 mm void, into the wall: 2 x 10 x 10. M11c review: through the
+    // far wall it was 2 bodies, as only a corner in the wall read it as inside the shell.
+    const imported = run(join(box([0, 0, 0], [30, 30, 30]), inverted(box([5, 5, 5], [25, 25, 25])), box(min, max)));
     expect(imported.report.overlapVolume).toBeCloseTo(200, 1);
     expect(codes(imported)).toContain('shell-overlap');
+    expect(imported.report.bodies).toBe(1);
   });
 
   it('accepts negative genus with no diagnostics', () => {

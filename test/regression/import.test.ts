@@ -49,7 +49,10 @@ describe.each(EXAMPLE_IDS)('import of %s', (id) => {
     expect(audit.nonManifoldEdges).toBe(golden.nonManifoldEdges);
     expect(audit.openLoops).toEqual([]);
     const imported = importExample(id);
-    expect(imported.report).toMatchObject({ route: 'manifold', failure: null, flipped: false, modeBAvailable: true, overlapVolume: 0 });
+    expect(imported.report).toMatchObject({ route: 'manifold', failure: null, flipped: false, modeBAvailable: true });
+    // Exactly none but on the chick, whose parts overlap: that is a note, and no warning.
+    if (golden.overlapVolume === 0) expect(imported.report.overlapVolume).toBe(0);
+    else within(imported.report.overlapVolume, golden.overlapVolume, 0.01);
     expect(imported.report.diagnostics.filter((d) => d.severity !== 'info')).toEqual([]);
   });
 
@@ -113,6 +116,14 @@ describe('plan facts on import', () => {
     within(report.shells[1].volume, -3432, 0.01);
     expect(report.bodies).toBe(1);
     expect(report.diagnostics.map((d) => d.code)).toEqual(['shell-void']);
+  });
+
+  it('the chick is 6 parts that overlap, one body of their union, with a note and no warning (M11c)', () => {
+    const { report } = importExample('chick');
+    expect(report.shells.map((s) => [s.kind, s.triangleCount])).toEqual([['solid', 14136], ['solid', 85348], ['solid', 11122], ['solid', 10322], ['solid', 11122], ['solid', 14136]]);
+    expect(report.bodies).toBe(1);
+    within(report.solidVolume - report.overlapVolume, 16813.2, 1e-4);
+    expect(report.diagnostics).toEqual([{ code: 'shell-overlap', severity: 'info', message: 'The file is made of 6 parts that overlap by 964.4 mm3, as models split for multi-colour printing often are. The mold treats them as one model, of 16813 mm3.' }]);
   });
 
   it('x8 has 8 bodies, with negative genus and no error', () => {

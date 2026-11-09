@@ -3,6 +3,7 @@ import { dilate } from '../field/dilate';
 import { planField, type Field, type FieldPlan, type FieldSettings } from '../field/grid';
 import { rasterize } from '../field/raster';
 import { connectedPieces, type MeshPiece } from '../mesh/shells';
+import { touchingGroups } from '../mesh/touching';
 import type { WeldedMesh } from '../mesh/weld';
 import { mergeTree, significantLeaves, type Leaf, type MergeTree } from './peaks';
 import { findPlateau, flatPole, withinPlateauDrop, type Plateau } from './plateaus';
@@ -95,6 +96,61 @@ function standing(mesh: WeldedMesh, piece: MeshPiece, planeTol: number): { centr
 }
 
 /**
+ * standing() for a body of several pieces. Where they overlap, their faces on the plane can lie over each
+ * other, as a foot's sole under the body's own, and summed they would count that patch twice and pull the
+ * centroid towards it. So the faces mark the nodes of a lattice at the field's cell, and each counts once.
+ */
+function standingOfParts(mesh: WeldedMesh, piece: Pick<MeshPiece, 'triangles' | 'min' | 'max'>, planeTol: number, cell: number): { centroid: [number, number]; extent: number } {
+  const { positions: p, indices } = mesh;
+  const gather = (use: (az: number, bz: number, cz: number, doubled: number) => boolean): { centroid: [number, number]; extent: number } | null => {
+    const chosen: number[] = [];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const t of piece.triangles) {
+      const a = indices[t * 3] * 3, b = indices[t * 3 + 1] * 3, c = indices[t * 3 + 2] * 3;
+      const doubled = (p[b] - p[a]) * (p[c + 1] - p[a + 1]) - (p[b + 1] - p[a + 1]) * (p[c] - p[a]);
+      if (doubled === 0 || !use(p[a + 2], p[b + 2], p[c + 2], doubled)) continue;
+      chosen.push(t);
+      x0 = Math.min(x0, p[a], p[b], p[c]);
+      x1 = Math.max(x1, p[a], p[b], p[c]);
+      y0 = Math.min(y0, p[a + 1], p[b + 1], p[c + 1]);
+      y1 = Math.max(y1, p[a + 1], p[b + 1], p[c + 1]);
+    }
+    if (chosen.length === 0) return null;
+    const nx = Math.ceil((x1 - x0) / cell) + 1, ny = Math.ceil((y1 - y0) / cell) + 1;
+    const marked = new Uint8Array(nx * ny);
+    let count = 0, sx = 0, sy = 0;
+    for (const t of chosen) {
+      const a = indices[t * 3] * 3, b = indices[t * 3 + 1] * 3, c = indices[t * 3 + 2] * 3;
+      const ax = p[a], ay = p[a + 1], bx = p[b], by = p[b + 1], cx = p[c], cy = p[c + 1];
+      const iLow = Math.ceil((Math.min(ax, bx, cx) - x0) / cell), iHigh = Math.floor((Math.max(ax, bx, cx) - x0) / cell);
+      const jLow = Math.ceil((Math.min(ay, by, cy) - y0) / cell), jHigh = Math.floor((Math.max(ay, by, cy) - y0) / cell);
+      for (let j = jLow; j <= jHigh; j++) {
+        const y = y0 + j * cell;
+        for (let i = iLow; i <= iHigh; i++) {
+          const x = x0 + i * cell;
+          const w0 = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+          const w1 = (cx - bx) * (y - by) - (cy - by) * (x - bx);
+          const w2 = (ax - cx) * (y - cy) - (ay - cy) * (x - cx);
+          // Either winding, as faces on the plane look down and the top view's look up.
+          if (!((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) || marked[i + j * nx]) continue;
+          marked[i + j * nx] = 1;
+          count++;
+          sx += x;
+          sy += y;
+        }
+      }
+    }
+    // Faces too small to hold a node stand where their box does.
+    const centroid: [number, number] = count > 0 ? [sx / count, sy / count] : [(x0 + x1) / 2, (y0 + y1) / 2];
+    return { centroid, extent: Math.min(x1 - x0, y1 - y0) };
+  };
+  return (
+    gather((az, bz, cz) => az <= planeTol && bz <= planeTol && cz <= planeTol) ??
+    gather((_a, _b, _c, doubled) => doubled > 0) ?? { centroid: [(piece.min[0] + piece.max[0]) / 2, (piece.min[1] + piece.max[1]) / 2], extent: Math.min(piece.max[0] - piece.min[0], piece.max[1] - piece.min[1]) }
+  );
+}
+
+/**
  * The leaves of a piece that reach the ceiling of the whole model. Its highest nodes may be under
  * another body's, while the rest of the same flat top is in the open, so each leaf moves to its highest
  * node at the ceiling, and it is gone if none within a plateau's drop of its peak is. Lower nodes do not
@@ -170,31 +226,62 @@ export interface BodyOptions {
   planeTol: number;
 }
 
+/** A mesh's connected pieces and the groups of them that make its bodies, which depend on the mesh alone. */
+export interface MeshParts {
+  pieces: MeshPiece[];
+  groups: number[][];
+}
+
+/**
+ * The pieces and their groups. The groups depend on the mesh alone and cost a test of every pair of pieces
+ * that may touch, so field.worker keeps them while S2 stands, as placement runs again on every opening moved.
+ */
+export function meshParts(mesh: WeldedMesh): MeshParts {
+  const pieces = connectedPieces(mesh);
+  return { pieces, groups: touchingGroups(mesh, pieces) };
+}
+
 /**
  * The bodies of a model, each with its own peaks. A body gets its own pour, so this looks at each one
  * alone: x8 forms 2 cavities, but each of its 8 barriers has a highest point of its own.
  *
- * Never from mesh genus. Connected pieces of the mesh are candidates, and three kinds are not bodies:
+ * Never from mesh genus. Connected pieces of the mesh that overlap or touch are one body, as a slicer
+ * prints them: a model split for multi-colour printing is one object, whose parts pass into each other
+ * or share faces. Those groups are candidates, and three kinds are not bodies:
  *  - voids, whose surface faces into the solid around them;
- *  - pieces under about 5 mm2 of surface, as crumbs from a broken file;
- *  - pieces with no peak of their own at the ceiling, as nothing about them needs a pour, and a pour
+ *  - groups under about 5 mm2 of surface, as crumbs from a broken file;
+ *  - groups with no peak of their own at the ceiling, as nothing about them needs a pour, and a pour
  *    there would only open another body's ceiling. With its base removed, Benchy's sealed letters come
  *    apart as 8 such pieces, and they sit under the hull.
- * `tile` is the conditioned field of one tile, on the plan's lattice. Other pieces go on the same lattice.
+ * `tile` is the conditioned field of one tile, on the plan's lattice. Other groups go on the same lattice,
+ * each with the field of all its pieces' triangles together, the top envelope of their union. `parts` are
+ * the mesh's pieces and their groups, which field.worker passes with the groups it keeps between runs.
  */
-export function findBodies(mesh: WeldedMesh, plan: FieldPlan, tile: Field, settings: FieldSettings, options: BodyOptions): BodySearch {
-  const pieces = connectedPieces(mesh).filter((piece) => piece.kind !== 'void');
+export function findBodies(mesh: WeldedMesh, plan: FieldPlan, tile: Field, settings: FieldSettings, options: BodyOptions, parts: MeshParts = meshParts(mesh)): BodySearch {
+  const { pieces, groups } = parts;
+  // One group is the whole model, whether it is one piece or many joined: the tile field is already its own.
+  const alone = groups.length === 1;
   const bodies: Body[] = [];
   const fragments: Fragment[] = [];
-  for (const piece of pieces) {
+  for (const group of groups) {
+    const members = group.map((index) => pieces[index]);
+    // A body of one piece is that piece, exactly as before pieces were joined.
+    const piece: Pick<MeshPiece, 'triangles' | 'min' | 'max'> =
+      members.length === 1
+        ? members[0]
+        : {
+            triangles: members.flatMap((part) => part.triangles),
+            min: [0, 1, 2].map((axis) => Math.min(...members.map((part) => part.min[axis]))) as MeshPiece['min'],
+            max: [0, 1, 2].map((axis) => Math.max(...members.map((part) => part.max[axis]))) as MeshPiece['max'],
+          };
     const area = surfaceArea(mesh, piece.triangles);
     const about = { area, min: piece.min, max: piece.max };
-    if (area < FRAGMENT_MM2 && pieces.length > 1) {
+    if (area < FRAGMENT_MM2 && !alone) {
       fragments.push({ reason: 'tiny', ...about });
       continue;
     }
     let field = tile;
-    if (pieces.length > 1) {
+    if (!alone) {
       const own = planField({ min: piece.min, max: piece.max }, { ...settings, cell: plan.cell, nx: 1, ny: 1 });
       const triangles = new Uint32Array(piece.triangles.length * 3);
       piece.triangles.forEach((t, k) => triangles.set(mesh.indices.subarray(t * 3, t * 3 + 3), k * 3));
@@ -203,12 +290,13 @@ export function findBodies(mesh: WeldedMesh, plan: FieldPlan, tile: Field, setti
     const tree = mergeTree(field);
     const open = ownCeiling(field, tile);
     const significant = significantLeaves(tree, options.ventPersistence).map((leaf): BodyLeaf => ({ ...leaf, index: tree.leaves.indexOf(leaf) }));
-    const leaves = (pieces.length > 1 ? leavesAtCeiling(tree, field, open, significant) : significant).map((leaf) => centredOnFlat(field, leaf, open));
+    const leaves = (alone ? significant : leavesAtCeiling(tree, field, open, significant)).map((leaf) => centredOnFlat(field, leaf, open));
     if (leaves.length === 0) {
       fragments.push({ reason: 'buried', ...about });
       continue;
     }
-    bodies.push({ field, tree, leaves, plateau: findPlateau(field, leaves[0].height), ...standing(mesh, piece, options.planeTol), min: piece.min, max: piece.max });
+    const stands = members.length === 1 ? standing(mesh, members[0], options.planeTol) : standingOfParts(mesh, piece, options.planeTol, plan.cell);
+    bodies.push({ field, tree, leaves, plateau: findPlateau(field, leaves[0].height), ...stands, min: piece.min, max: piece.max });
   }
   return { bodies, fragments };
 }

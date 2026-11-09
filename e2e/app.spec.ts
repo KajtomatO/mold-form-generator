@@ -873,8 +873,8 @@ test.describe('the app on index.html', () => {
   });
 });
 
-test.describe('all seven examples, dropped into the app', () => {
-  test.skip(!FULL, 'all 7 run with CFG_FULL=1');
+test.describe('all eight examples, dropped into the app', () => {
+  test.skip(!FULL, 'all 8 run with CFG_FULL=1');
   for (const id of Object.keys(EXAMPLE_FILES) as ExampleId[]) {
     test(`${id}: base confirmed on -z, status strip as Node, geometry as Node`, async ({ page }, info) => {
       test.skip(info.project.name === 'dev', 'the dev server serves the same code; preview and firefox cover it');

@@ -49,6 +49,7 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     // an import that recomposed the mesh would leave an older one's indices pointing past it.
     const oriented = p.oriented && p.oriented.key === p.keys().S2 ? p.oriented.value : null;
     if (changed('extras', oriented)) scene.setModelExtras(oriented ? { exterior: oriented.exterior, sealedAir: oriented.sealedAir } : null);
+    if (changed('joined', p.joined)) scene.setModelJoined(p.joined);
 
     const field = p.field?.value ?? null;
     if (changed('field', field?.field ?? null)) scene.setField(field?.field ?? null);

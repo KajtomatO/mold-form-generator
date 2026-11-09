@@ -136,5 +136,5 @@ export function importFromCopy(arena: Arena, welded: WeldedMesh, known: SolidRep
     throw error;
   }
   if (!(solid.volume() > 0)) return null;
-  return { solid, mesh, openLoops: [], report: known, simplified: copy.diagnostics, errorMm: copy.errorMm };
+  return { solid, mesh, openLoops: [], report: known, joined: null, simplified: copy.diagnostics, errorMm: copy.errorMm };
 }

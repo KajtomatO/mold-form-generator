@@ -17,6 +17,8 @@ export const EXAMPLE_FILES = {
   x8: 'jersey-barriers-x8.stl',
   barrel: 'l_medieval_barrel.stl',
   wolf: 'wolfinal(1).stl',
+  // M11c: a multi-colour model of 6 parts that overlap, which the user's own file showed to be one body.
+  chick: 'chick_mc.stl',
 } as const;
 
 export type ExampleId = keyof typeof EXAMPLE_FILES;

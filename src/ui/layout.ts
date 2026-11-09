@@ -180,7 +180,7 @@ export const HINTS: Partial<Record<ParamPath, string>> = {
   'silicone.wallDraftDeg': 'Lets the silicone slide out of the cover.',
   'grid.spacing': 'Between the models\' bounding boxes. Auto keeps a printable wall between them.',
   'grid.edge': 'From the models to the outside of the box. A minimum: the joint may need more.',
-  'pour.perModel': 'Pours for each separate body in the model.',
+  'pour.perModel': 'Pours for each separate body in the model. Parts that overlap or touch, as in a model split for multi-colour printing, are one body.',
   'bolts.enabled': 'Four countersunk screws up through the base\'s corners into hex nuts slid into the cover\'s sides, in place of most of the tape. The box grows to hold them.',
   'bolts.size': 'Metric countersunk screws (ISO 10642 or DIN 7991; ISO 14581 for M2.5) and ISO 4032 hex nuts.',
   'bolts.length': 'Over the head, as countersunk screws are sold. Auto takes the shortest that passes the nut by 2 threads.',

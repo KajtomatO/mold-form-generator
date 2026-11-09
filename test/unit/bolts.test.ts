@@ -422,8 +422,8 @@ describe('the bolts in place of the tape count', () => {
     expect(advice).toMatchObject({ holdN: 300, liftStrips: 10, strips: 10, enough: false });
   });
 
-  it('all 7 at defaults: tape across the middle wherever bolts stand over 100 mm apart, VIS-35 2 left to right, x8 and wolf 1 each way', () => {
-    const expected: Record<ExampleId, [number, number]> = { benchy: [0, 0], goddess: [0, 0], vis35: [0, 2], jersey: [0, 0], x8: [1, 1], barrel: [0, 0], wolf: [1, 1] };
+  it('all 8 at defaults: tape across the middle wherever bolts stand over 100 mm apart, VIS-35 2 left to right, x8 and wolf 1 each way', () => {
+    const expected: Record<ExampleId, [number, number]> = { benchy: [0, 0], goddess: [0, 0], vis35: [0, 2], jersey: [0, 0], x8: [1, 1], barrel: [0, 0], wolf: [1, 1], chick: [0, 0] };
     for (const id of EXAMPLE_IDS) {
       const advice = boltAdvice(1, 10, rim(id).bolts!);
       expect(advice.middle, id).toEqual(expected[id]);

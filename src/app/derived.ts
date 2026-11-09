@@ -36,7 +36,10 @@ export function modelSize(bounds: Bounds): [number, number, number] {
 export function previewSilicone(pipeline: Pipeline): { ml: number; grams: number } | null {
   const field = pipeline.field?.value, oriented = pipeline.oriented?.value;
   if (!field || !oriented) return null;
-  const overlap = pipeline.imported?.value.overlapVolume ?? 0;
+  // What the parts share above the plane: on a plane that trims the model, the solid worker's figure for the
+  // trimmed parts once it is in for this plane, and until then, as on every other plane, the import's.
+  const trimmed = pipeline.footprint && pipeline.footprint.key === pipeline.oriented?.key ? pipeline.footprint.value.overlap : null;
+  const overlap = trimmed ?? pipeline.imported?.value.overlapVolume ?? 0;
   const raise = pipeline.params.quality.tinTolPreview;
   const sealedAir = pipeline.reports?.value.air.sealedAir ?? 0;
   const volume = siliconeVolume(field.field, { exteriorVolume: oriented.modelVolume - overlap, tiles: field.mold.offsets.length, sealedAir, raise });

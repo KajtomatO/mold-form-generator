@@ -17,7 +17,7 @@ import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, loadExample, type ExampleId }
 import { readPart, unpose } from '../test/fixtures/solidChecks';
 import { app, canDraw, canvasPixels, checkLayout, dropAndWait, hooks, idle, openApp, type PageWatch } from './appHarness';
 import { checkPieces } from './fitChecks';
-import { NO_FIREFOX_WEBGL } from './firefox';
+import { firefoxHasDisplay, firefoxReady, NO_FIREFOX_WEBGL } from './firefox';
 import { inNode } from './nodeRuns';
 
 const FULL = process.env.CFG_FULL === '1';
@@ -345,6 +345,102 @@ test.describe('the Export box on index.html', () => {
     expect(Object.keys(files)).toContain('fit_test/groove-0.35-taper-0.20_cover.stl');
   });
 
+  // M11c: the user's own file. Each of its 6 parts was a body with a pour of its own, three of them with no
+  // room, and their errors kept Export ZIP off in both browsers.
+  test('@smoke the chick, 6 parts that overlap as a multi-colour model\'s do: one body, one pour at its peak, Export ZIP on, its ZIP says so, and a cut through its head shows one model', async ({ page }, info) => {
+    test.skip(info.project.name === 'dev', 'the build is what the user gets, and the dev server serves the same UI code');
+    // The quick suite runs it in the user's browser, and Chromium's build with CFG_FULL, as M11a's hardening
+    // tests do, to keep scripts/ci.sh near its time. Where Firefox cannot draw, Chromium runs it in its place.
+    test.skip(info.project.name === 'preview' && !FULL && firefoxReady && firefoxHasDisplay, 'runs in Chromium with CFG_FULL=1, and in Firefox always');
+    test.setTimeout(300_000);
+    await dropAndWait(page, EXAMPLE_FILES.chick);
+    const openings = await app(page, (a) => a.store.pipeline.placement!.value.placement.openings.map(({ kind, x, y, body, valid }) => ({ kind, x, y, body, valid })));
+    const pours = openings.filter((o) => o.kind === 'pour');
+    expect(pours).toHaveLength(1);
+    // At the top part's peak, the chick's highest point, 23.6 mm up near (125, 104).
+    expect(Math.hypot(pours[0].x - 125, pours[0].y - 104), `pour at ${pours[0].x}, ${pours[0].y}`).toBeLessThan(1);
+    expect(openings.filter((o) => o.kind === 'vent').length).toBeGreaterThanOrEqual(1);
+    expect(openings.every((o) => o.valid && o.body === 0)).toBe(true);
+    const diagnostics = page.getByTestId('diagnostics');
+    await expect(diagnostics.locator('.diagnostic.error')).toHaveCount(0);
+    await expect(diagnostics.locator('[data-code="pour-shortfall"]')).toHaveCount(0);
+    await expect(diagnostics.locator('[data-code="shell-overlap"]')).toHaveClass(/info/);
+    await expect(diagnostics.locator('[data-code="shell-overlap"]')).toContainText('The file is made of 6 parts that overlap by 964.4 mm³, as models split for multi-colour printing often are. The mold treats them as one model, of 16813 mm³.');
+    for (const id of BUTTONS) await expect(page.getByTestId(id)).toBeEnabled();
+    await expect(page.getByTestId('export-reason')).toHaveCount(0);
+
+    const saved = await saveFrom(page, 'export-zip');
+    expect(saved.name).toBe('chick_mc-mold.zip');
+    const files = unzipSync(saved.bytes);
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(['cover.stl', 'base.stl', 'funnel.stl', 'model_oriented.stl', 'README.txt', 'report.json', 'project.json']));
+    const report = JSON.parse(text(files['report.json'])) as ExportReport;
+    expect(report.openings.map((o) => o.kind).sort()).toEqual(['pour', 'vent']);
+    expect(report.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(report.clearance.measured!).toBeGreaterThanOrEqual(3);
+    // The model's volume is its parts' union, 16,813.2 mm3, where their sum is 17,777.6.
+    expect(report.model.bodies).toBe(1);
+    expect(report.model.volumeMm3!).toBeCloseTo(16813.19, 1);
+    expect(report.parts['model_oriented.stl'].volumeMm3!).toBeCloseTo(16813.19, 1);
+    expect(stlVolume(files['model_oriented.stl'])).toBeCloseTo(17777.55, 0);
+    const readme = text(files['README.txt']).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('It keeps the 6 parts your file is made of, which overlap or touch, as the file has them: slicers print overlapping parts as one.');
+    expect(readme).toContain('The mold treats them as one model, of 16813 mm3.');
+    expect(readme).toContain('This mold has 1 pour opening and 1 vent.');
+    await expect(page.getByTestId('status-clearance')).toHaveText(`clearance measured ${report.clearance.measured!.toFixed(2)} mm`);
+
+    // A cut across x through the head, where the top part passes into the body: the model's cap is one, with no
+    // line of silicone along that part's walls inside it (M11c review: the parts' own walls, counted in the cut,
+    // left a dotted seam of silicone colour there, 42 to 50 pixels in the review shots; 31 here in Chromium and
+    // 1 in Firefox with the union taken out).
+    const card = page.getByTestId('software-renderer');
+    if ((await card.count()) > 0) await card.getByRole('button', { name: 'Dismiss' }).click();
+    await page.getByTestId('section').check();
+    await page.locator('[data-cut="x"]').click();
+    await app(page, (a) => a.store.setSection({ at: 125 }));
+    const cut = await app(page, (a) => {
+      const b = a.store.pipeline.oriented!.value.bounds;
+      return { y0: b.min[1], y1: b.max[1], top: b.max[2] };
+    });
+    // As the review shot chick-mc-section-head looks at it: from +x, a little above, at a distance set by the box.
+    await hooks(page, (h) => {
+      const { min, max } = h.partBounds('cover')!;
+      const c = [0, 1, 2].map((k) => (min[k] + max[k]) / 2) as [number, number, number];
+      const d = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+      h.setCamera({ position: [c[0] + 1.6 * d, c[1], c[2] + 0.35 * d], target: c, fov: 35 });
+    });
+    const corners = await Promise.all(([[cut.y0, 0], [cut.y1, cut.top]] as const).map(([y, z]) => hooks(page, (h, p: [number, number, number]) => h.worldToScreen(p), [125, y, z] as [number, number, number])));
+    const specks = await page.evaluate(async ({ a, b }) => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const canvas = document.querySelector('[data-testid="viewport"] canvas') as HTMLCanvasElement;
+      const rect = canvas.getBoundingClientRect();
+      const scale = canvas.width / rect.width;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const context = copy.getContext('2d')!;
+      context.drawImage(canvas, 0, 0);
+      const x0 = Math.round((Math.min(a.x, b.x) - rect.left) * scale), x1 = Math.round((Math.max(a.x, b.x) - rect.left) * scale);
+      const y0 = Math.round((Math.min(a.y, b.y) - rect.top) * scale), y1 = Math.round((Math.max(a.y, b.y) - rect.top) * scale);
+      const { data, width } = context.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+      const at = (x: number, y: number): number => 4 * (x + y * width);
+      // Silicone's teal, or a pixel blended with it: green well over red. The model's cap and its hatch are a
+      // warm grey, blue under red, where the cover's is cool, so a blend at the cover's edge is no seam.
+      const teal = (i: number): boolean => data[i + 1] - data[i] > 20;
+      const grey = (i: number): boolean => data[i] > 100 && Math.abs(data[i + 1] - data[i]) < 12 && data[i] - data[i + 2] > 5 && data[i] - data[i + 2] < 30;
+      const step = Math.max(2, Math.round(4 * scale));
+      let count = 0;
+      for (let y = step; y < y1 - y0 + 1 - step; y++) {
+        for (let x = step; x < width - step; x++) {
+          if (!teal(at(x, y))) continue;
+          // Silicone round the model lies against it on one side only; a seam inside the cap has the cap on both.
+          if ((grey(at(x - step, y)) && grey(at(x + step, y))) || (grey(at(x, y - step)) && grey(at(x, y + step)))) count++;
+        }
+      }
+      return count;
+    }, { a: corners[0], b: corners[1] });
+    expect(specks).toBe(0);
+  });
+
   test('@smoke the buttons say why they are off with no model or a hard error, look off in both themes, and what only the export finds shows inline and in Diagnostics', async ({ page }) => {
     /** How far the Export ZIP button's fill stands out from the panel under it, as a contrast ratio, opacity included. */
     const standout = (): Promise<number> =>
@@ -443,10 +539,10 @@ interface ZipCase {
   ml: number;
 }
 
-/** M6b's silicone at defaults, per example. */
-const ML: Record<ExampleId, number> = { benchy: 43.1771, goddess: 118.0047, vis35: 541.4064, jersey: 11.3591, x8: 87.5913, barrel: 10.2682, wolf: 203.5269 };
+/** M6b's silicone at defaults, per example, and M11c's for the chick. */
+const ML: Record<ExampleId, number> = { benchy: 43.1771, goddess: 118.0047, vis35: 541.4064, jersey: 11.3591, x8: 87.5913, barrel: 10.2682, wolf: 203.5269, chick: 11.807 };
 
-// All 7 in Chromium on the build; in the user's browser, jersey and the heaviest field, wolf.
+// All 8 in Chromium on the build; in the user's browser, jersey and the heaviest field, wolf.
 const CASES: ZipCase[] = [
   ...EXAMPLE_IDS.map((id): ZipCase => ({ name: id, id, settings: [], projects: id === 'jersey' || id === 'wolf' ? ['preview', 'firefox'] : ['preview'], ml: ML[id] })),
   { name: 'barrel in Mode B', id: 'barrel', settings: [['base.mode', 'merged']], projects: ['preview'], ml: 10.2682 },
@@ -454,7 +550,7 @@ const CASES: ZipCase[] = [
 ];
 
 test.describe('Export ZIP on every example, unzipped and checked in Node', () => {
-  test.skip(!FULL, 'all 7 run with CFG_FULL=1');
+  test.skip(!FULL, 'all 8 run with CFG_FULL=1');
   for (const c of CASES) {
     test(`${c.name}: the ZIP from the button checks out against a Node build`, async ({ page }, info) => {
       test.skip(!c.projects.includes(info.project.name), `runs in ${c.projects.join(' and ')}`);

@@ -111,7 +111,7 @@ function expectOverOwnBody(p: PlannedOpenings, opening: PlacedOpening): void {
 /** How far a spot is from the nearest node at the highest point. */
 const fromPeak = (peak: ReturnType<typeof highestOf>, x: number, y: number): number => Math.min(...peak.nodes.map(([u, v]) => Math.hypot(u - x, v - y)));
 
-describe('peaks and placement on the 7 examples', () => {
+describe('peaks and placement on the 8 examples', () => {
   it.each(EXAMPLE_IDS)('%s: every body has at least 1 valid pour, one opening is at each significant peak, and the golden numbers hold', (id) => {
     const p = plannedAtDefaults(id);
     const golden = OPENING_GOLDEN[id];
@@ -386,6 +386,50 @@ describe('peaks and placement on the 7 examples', () => {
       expect(preview.built.field.nx).toBeGreaterThan(0);
       const copies = replicateOpenings(preview.placement.openings, preview.space);
       expect(copies[1].x - copies[0].x).toBe(124.75);
+    });
+  });
+
+  // M11c: the user's own file, 6 closed parts of one chick, 5 passing into the largest, which placement took
+  // for 6 bodies: pours on 3 of them and errors on the other 3 ("Placed 0 of 1 pours on the body with its
+  // peak at (125.0, 104.0)", at (118.5, 83.5) and at (131.5, 83.5)), which kept Export ZIP off.
+  describe('the chick, a multi-colour model of 6 parts that overlap', () => {
+    it('is one body, with one pour at its highest point, the top part\'s, a vent beside it, and no shortfall', () => {
+      const p = plannedAtDefaults('chick');
+      const { mesh } = orientedExample('chick');
+      expect(connectedPieces(mesh)).toHaveLength(6);
+      expect(p.search.bodies).toHaveLength(1);
+      expect(p.search.fragments).toEqual([]);
+      expect(p.placement.bodies).toMatchObject([{ requested: 1, placed: 1, plateau: false }]);
+      const [pour] = poursOf(p);
+      expect(poursOf(p)).toHaveLength(1);
+      // The peak is the top part's, 23.61 mm up, which no other part reaches, and the field's highest point.
+      const top = connectedPieces(mesh).reduce((a, b) => (a.max[2] > b.max[2] ? a : b));
+      expect(top.triangleCount).toBe(10322);
+      expect(top.max[2]).toBeCloseTo(23.61, 2);
+      expect(pour.x).toBeGreaterThan(top.min[0]);
+      expect(pour.x).toBeLessThan(top.max[0]);
+      expect(pour.y).toBeGreaterThan(top.min[1]);
+      expect(pour.y).toBeLessThan(top.max[1]);
+      expect(fromPeak(highestOf(p.tile), pour.x, pour.y)).toBeLessThanOrEqual(1);
+      expect(Math.hypot(pour.x - 124.9, pour.y - 104)).toBeLessThan(1);
+      // G11 and D3: a vent beside it, and one at every other leaf past the persistence: there is none.
+      expect(ventsOf(p).map((o) => o.role)).toEqual(['beside']);
+      expect(significantLeaves(mergeTree(p.tile), 1.5)).toHaveLength(1);
+      expect(p.placement.uncovered).toEqual([]);
+      expect(p.placement.diagnostics).toEqual([]);
+      expectAllValid(p);
+    });
+
+    it.each([2, 3])('perModel %i gives that many pours, all on the one body', (count) => {
+      const p = planWith('chick', (q) => (q.pour.perModel = count));
+      expect(p.search.bodies).toHaveLength(1);
+      expect(poursOf(p)).toHaveLength(count);
+      expect(poursOf(p).every((o) => o.body === 0)).toBe(true);
+      expect(p.placement.bodies).toMatchObject([{ requested: count, placed: count }]);
+      expect(codes(p)).not.toContain('pour-shortfall');
+      // 40 mm funnels do not fit side by side on a 40 mm chick, which the soft rule says.
+      expect(codes(p)).toEqual(['funnel-collision']);
+      expectAllValid(p);
     });
   });
 

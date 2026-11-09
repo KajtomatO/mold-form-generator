@@ -17,7 +17,7 @@ import type { FieldWire, OrientedWire } from '../workers/fieldHost';
 import { DEFAULT_PLANE, PLAIN_IMPORT, samePlane, type FieldOutput, type FieldWanted, type ImportInput, type ParsedModel, type PlacementOutput, type PlaneChoice } from '../workers/fieldStages';
 import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type ReportsJobMessage, type SolidJobMessage, type WallsJobMessage, type WorkerLike } from '../workers/protocol';
 import type { ReportsOutputs } from '../workers/reportStages';
-import type { FootprintOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
+import type { FootprintOutput, ImportOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
 import type { WallCheck } from '../workers/wallCheck';
 import { Budgets } from './budgets';
 import { exportBlocked, siliconeAdvice } from './derived';
@@ -25,6 +25,7 @@ import { hashFloats, hashMesh, hashString } from './hash';
 import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
 import type { Project } from './project';
 import { stageKeys, type StageId, type StageInputs } from './stages';
+import { APP_VERSION, bodiesByPart } from './version';
 import { formatNormal } from '../ui/format';
 
 export type { Project } from './project';
@@ -228,6 +229,12 @@ export class Pipeline {
   private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null } | null = null;
   private planeCheck: PlaneCheck | null = null;
   /**
+   * M11c: the app version that saved the project on screen, until the import has said whether this model
+   * joins parts into one body. Pins and removed vents name bodies by number, and versions before 1.0.1
+   * numbered each part of the file as a body of its own.
+   */
+  private numbering: { file: string; savedBy: string } | null = null;
+  /**
    * Called when a project's saved plane was found under another choice than the file's, so the store
    * can mean the same face in the history it holds and in what it last saved.
    */
@@ -252,6 +259,8 @@ export class Pipeline {
   imported: Shown<SolidReport> | null = null;
   /** G1.8: the lighter copy the viewport draws above 300k triangles, from the import. */
   displayProxy: PartMesh | null = null;
+  /** The union of the parts the import joined, for the section's cut, or null: see ImportOutput. */
+  joined: ImportOutput['joined'] = null;
   footprint: Shown<FootprintOutput> | null = null;
   field: Shown<FieldOutput> & { mold: string } | null = null;
   placement: Shown<PlacementShown> | null = null;
@@ -318,7 +327,7 @@ export class Pipeline {
    * is asked for with the settings the page had before. `stored` is the plane the file was saved on,
    * which the model's first S2 checks the choice against, and `sha256` the hash its STL was checked by.
    */
-  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null): void {
+  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null, savedBy = APP_VERSION): void {
     this.startFile(bytes, name);
     this.file!.sha256 = sha256;
     this.params = project.params;
@@ -326,15 +335,19 @@ export class Pipeline {
     this.pins = project.pins;
     this.removed = project.removed;
     this.planeCheck = stored ? { file: this.file!.id, stored, tried: false, moved: false } : null;
+    this.numbering = { file: this.file!.id, savedBy };
     this.changed();
   }
 
   /**
    * Settings for the model on screen, from an export ZIP or a lone project.json, as one change. With
-   * the plane the file was saved on, the choice is checked against it as for a loaded project.
+   * the plane the file was saved on, the choice is checked against it as for a loaded project. `savedBy`
+   * is the version that saved the pins and removed vents in `project`.
    */
-  applyProject(project: Project, stored: StoredPlane | null): void {
+  applyProject(project: Project, stored: StoredPlane | null, savedBy = APP_VERSION): void {
+    this.numbering = this.file ? { file: this.file.id, savedBy } : null;
     this.setProject(project);
+    if (this.checkNumbering()) this.changed();
     if (!stored || !this.file) return;
     this.planeCheck = { file: this.file.id, stored, tried: false, moved: false };
     // The plane on screen may be the one the file chose already, and then no S2 is on its way to check it.
@@ -353,6 +366,7 @@ export class Pipeline {
     this.exportWait?.();
     this.file = { id: `f${++this.loads}`, name, bytes, sha256: null };
     this.planeCheck = null;
+    this.numbering = null;
     this.plane = DEFAULT_PLANE;
     this.importInput = PLAIN_IMPORT;
     this.pins = [];
@@ -365,6 +379,7 @@ export class Pipeline {
     this.reports = null;
     this.reportsFailure = null;
     this.displayProxy = null;
+    this.joined = null;
     this.walls = null;
     // Timings belong to the model they were taken on.
     for (const list of Object.values(this.timing)) list.length = 0;
@@ -1220,6 +1235,7 @@ export class Pipeline {
       if (outputs.S1 && this.accept('import', target, this.imported)) {
         this.imported = { key: target.keys.S1, rev: target.rev, value: outputs.S1.report };
         this.displayProxy = outputs.S1.display;
+        this.joined = outputs.S1.joined;
         // Field.worker started on the welded mesh. If the import changed it, S2 and all after it go again.
         if (outputs.S1.import.key !== this.importInput.key) {
           this.importInput = outputs.S1.import;
@@ -1229,6 +1245,7 @@ export class Pipeline {
           this.failed.clear();
           this.error = null;
         }
+        if (this.checkNumbering()) this.rev++;
       }
       if (outputs.S2 && this.accept('footprint', target, this.footprint)) this.footprint = { key: target.keys.S2, rev: target.rev, value: outputs.S2 };
       if (outputs.S13 && this.accept('cover', target, this.cover)) this.cover = { key: target.keys.S13, mold: target.keys.S10, rev: target.rev, value: outputs.S13 };
@@ -1266,6 +1283,25 @@ export class Pipeline {
     }
     this.failed.add(event.target.id);
     this.error = event.kind === 'crashed' ? `The geometry could not be built, even at a coarser cell: ${event.error.message}` : event.error.message;
+  }
+
+  /**
+   * Once the import of a project's model is in: if it joins parts into one body and the project was saved by
+   * a version that numbered each part as a body, its pins and removed vents are reset, with a warning, as
+   * body 2 there is some other part here, or none. Returns whether it reset them.
+   */
+  private checkNumbering(): boolean {
+    const check = this.numbering;
+    if (!check || check.file !== this.file?.id || !this.parsed || this.imported?.key !== this.parsed.key) return false;
+    this.numbering = null;
+    const report = this.imported.value;
+    const parts = report.shells.filter((shell) => shell.kind !== 'void').length;
+    if (!bodiesByPart(check.savedBy) || report.bodies === parts || (this.pins.length === 0 && this.removed.length === 0)) return false;
+    this.pins = [];
+    this.removed = [];
+    const by = /^\d+\.\d+\.\d+/.test(check.savedBy) ? `version ${check.savedBy} of the app` : 'an earlier version of the app';
+    this.notes.push({ code: 'openings-reset', severity: 'warning', message: `This project was saved by ${by}, which took each part of the file for a model of its own. Parts that overlap or touch are one model since version 1.0.1, so the openings it moved and the vents it removed were reset: move or remove them again.` });
+    return true;
   }
 
   /**

@@ -15,8 +15,11 @@ export interface Golden {
   nonManifoldEdges: number;
   bodies: number;
   genus: number;
+  /** The solid shells summed, so where parts overlap this counts what they share twice. */
   solidVolume: number;
   voidVolume: number;
+  /** M11c: the shells' sum less their union, 0 on every model but the chick. */
+  overlapVolume: number;
   planeTol: number;
   /** Height of the default plane in the file's own coordinates. */
   planeZ: number;
@@ -44,6 +47,7 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: 5,
     solidVolume: 15550.5,
     voidVolume: 0,
+    overlapVolume: 0,
     planeTol: 0.05,
     planeZ: 0,
     baseArea: 447.8,
@@ -62,6 +66,7 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: 0,
     solidVolume: 88656.6,
     voidVolume: 0,
+    overlapVolume: 0,
     planeTol: 0.0632,
     planeZ: -1.9837,
     baseArea: 1184.5,
@@ -80,6 +85,7 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: 3,
     solidVolume: 244605.2,
     voidVolume: 0,
+    overlapVolume: 0,
     planeTol: 0.1207,
     planeZ: 0.0002,
     baseArea: 361.3,
@@ -98,6 +104,7 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: 0,
     solidVolume: 7964.05,
     voidVolume: 0,
+    overlapVolume: 0,
     planeTol: 0.05,
     planeZ: 0,
     baseArea: 711.5,
@@ -116,6 +123,7 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: -7,
     solidVolume: 59683.1,
     voidVolume: 0,
+    overlapVolume: 0,
     planeTol: 0.0709,
     planeZ: 0,
     baseArea: 5689.0,
@@ -134,6 +142,7 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: -1,
     solidVolume: 7489.0,
     voidVolume: 3432.0,
+    overlapVolume: 0,
     planeTol: 0.05,
     planeZ: 0,
     baseArea: 215.1,
@@ -152,12 +161,35 @@ export const GOLDEN: Record<ExampleId, Golden> = {
     genus: 0,
     solidVolume: 257293.2,
     voidVolume: 0,
+    overlapVolume: 0,
     planeTol: 0.1079,
     planeZ: 0.1413,
     baseArea: 2811.2,
     footprints: [2489.2, 159.7, 152.3],
     islands: [3.03, 1.83, 1.74, 1.45, 0.95, 0.95],
     upper: { offset: 0.917, area: 108.5, exposed: false },
+  },
+  // M11c: 6 closed parts, of 85,348, 14,136 (2), 11,122 (2) and 10,322 triangles, the 5 smaller each
+  // passing into the largest: one body, of 16,813.2 mm3. The base face's area is its triangles' sum, so it
+  // counts twice the 33.5 mm2 where two parts' soles lie on the largest's underside; the footprint is their union.
+  chick: {
+    format: 'binary',
+    rawTriangles: 146186,
+    degenerate: 0,
+    triangles: 146186,
+    vertices: 73105,
+    nonManifoldEdges: 0,
+    bodies: 1,
+    genus: -5,
+    solidVolume: 17777.6,
+    voidVolume: 0,
+    overlapVolume: 964.4,
+    planeTol: 0.05,
+    planeZ: 0,
+    baseArea: 1245.4,
+    footprints: [1211.9],
+    islands: [],
+    upper: null,
   },
 };
 
@@ -187,9 +219,9 @@ export interface FieldGolden {
    */
   bareOffLattice: number;
   /** The plan's table of estimates at defaults. The corner formula reproduces these within 2%, clipping less. */
-  planEstimate: number;
-  /** The plan's M2 check at the bare settings. */
-  planBare: number;
+  planEstimate: number | null;
+  /** The plan's M2 check at the bare settings. Null for the chick, added at M11c, which the plan has no figure for. */
+  planBare: number | null;
 }
 
 export const FIELD_GOLDEN: Record<ExampleId, FieldGolden> = {
@@ -200,6 +232,8 @@ export const FIELD_GOLDEN: Record<ExampleId, FieldGolden> = {
   x8: { silicone: 86.02, bare: 75.58, bareOffLattice: 73.02, planEstimate: 92, planBare: 79.3 },
   barrel: { silicone: 10.06, bare: 8.87, bareOffLattice: 8.82, planEstimate: 10.2, planBare: 9.0 },
   wolf: { silicone: 202.48, bare: 182.83, bareOffLattice: 182.03, planEstimate: 208, planBare: 186 },
+  // M11c, measured at the same settings. The model's volume taken off is its parts' union: their sum would read 0.96 ml less.
+  chick: { silicone: 11.46, bare: 10.16, bareOffLattice: 10.09, planEstimate: null, planBare: null },
 };
 
 /**
@@ -230,6 +264,8 @@ export const SOLID_GOLDEN: Record<ExampleId, SolidGolden> = {
   x8: { silicone: 85.86, cover: 315919, glue: 55195, merged: 116058, gap: 3.2262, gapDraft0: 3.2262, tinTriangles: 60852, boxX: 143.746, boxY: 109.136, Zt: 29.085 },
   barrel: { silicone: 10.05, cover: 75171, glue: 8077, merged: 15611, gap: 3.2189, gapDraft0: 3.2039, tinTriangles: 11538, boxX: 51.687, boxY: 51.688, Zt: 33.918 },
   wolf: { silicone: 202.26, cover: 2436510, glue: 61824, merged: 319814, gap: 3.2104, gapDraft0: 3.1986, tinTriangles: 74904, boxX: 121.234, boxY: 142.435, Zt: 167.405 },
+  // M11c. Mode B's merged base is the plate with the union of the 6 parts, and its cavity the union's.
+  chick: { silicone: 11.41, cover: 134573, glue: 16190, merged: 33252, gap: 3.26, gapDraft0: 3.2601, tinTriangles: 12344, boxX: 68.456, boxY: 72.941, Zt: 32.026 },
 };
 
 /**
@@ -264,6 +300,7 @@ export const OPENING_GOLDEN: Record<ExampleId, OpeningGolden> = {
   x8: { bodies: 8, cavities: 2, leaves: 16, significant: 9, plateauBodies: 7, pours: 8, vents: 9, longestBore: 7.75, boreMl: 1.573, cover: 311767 },
   barrel: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 5.8, boreMl: 0.206, cover: 74644 },
   wolf: { bodies: 1, cavities: 1, leaves: 2, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 147.3, boreMl: 1.049, cover: 2435148 },
+  chick: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 0, pours: 1, vents: 1, longestBore: 9.99, boreMl: 0.344, cover: 133906 },
 };
 
 /**
@@ -298,6 +335,9 @@ export const REPORT_GOLDEN: Record<ExampleId, ReportGolden> = {
   x8: { verdict: 'plausible', bodies: 8, footprints: [1, 1, 1, 1, 1, 1, 1, 1], underPlugMl: 0, sandwichedMl: 0, hints: 0, looped: 0, undersideMl: [], sealed: [], raw: { pockets: 0, sealed: 0 } },
   barrel: { verdict: 'jacket-out', bodies: 1, footprints: [1], underPlugMl: 1.035, sandwichedMl: 0.218, hints: 2, looped: 0, undersideMl: [], sealed: [{ ml: 3.432, inModel: true }], raw: { pockets: 0, sealed: 1 } },
   wolf: { verdict: 'cut-required', bodies: 1, footprints: [3], underPlugMl: 66.167, sandwichedMl: 14.727, hints: 16, looped: 2, undersideMl: [], sealed: [], raw: { pockets: 71, sealed: 18 } },
+  // M11c: S8 reads the 6 parts as one shell of 16,814.9 mm3 on one patch of 1,216.6 mm2. Its silicone past
+  // the filter is none: the largest under-plug body is 0.026 ml.
+  chick: { verdict: 'plausible', bodies: 1, footprints: [1], underPlugMl: 0, sandwichedMl: 0, hints: 0, looped: 0, undersideMl: [], sealed: [], raw: { pockets: 2, sealed: 0 } },
 };
 
 /**
@@ -326,4 +366,5 @@ export const BOLT_GOLDEN: Record<ExampleId, BoltGolden> = {
   x8: { cover: 378402, glue: 63135, merged: 123998, boxX: 152.038, boxY: 117.427, slotFloor: 2.8846, cavity: 7.962, notches: 58.877 },
   barrel: { cover: 106074, glue: 11057, merged: 18591, boxX: 59.979, boxY: 59.98, slotFloor: 2.7183, cavity: 12.503, notches: 14.214 },
   wolf: { cover: 2813521, glue: 70122, merged: 328112, boxX: 129.526, boxY: 150.727, slotFloor: 2.8052, cavity: 21.64, notches: 58.219 },
+  chick: { cover: 173821, glue: 20432, merged: 37494, boxX: 76.748, boxY: 81.233, slotFloor: 2.826, cavity: 14.685, notches: 24.088 },
 };

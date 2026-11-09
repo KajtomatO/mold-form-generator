@@ -17,7 +17,16 @@ import { OPENING_GOLDEN, REPORT_GOLDEN, SOLID_GOLDEN } from '../regression/golde
  */
 
 /** ml at defaults, on the preview field, with the bores: the "Silicone figure" note of M6. */
-const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.39, vis35: 530.02, jersey: 11.53, x8: 89.52, barrel: 10.52, wolf: 207.41 };
+const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.39, vis35: 530.02, jersey: 11.53, x8: 89.52, barrel: 10.52, wolf: 207.41, chick: 12.25 };
+
+/**
+ * How far the preview may read over M3's solids with the bores: 3% on the seven, whose most is the barrel's
+ * 2.5%. The chick, added at M11c, reads 4.2% over: 12.248 against 11.754, of which its own cell (0.5 mm
+ * against 0.125) makes 3.0% and its TIN raise (0.1 against 0.05) the rest, as at the export's cell and raise
+ * it reads 0.45% over, which the test below holds within 0.5% as it does the barrel and jersey. Its silicone
+ * is thin on a small, curved model, so the coarse cell's conservative raster adds more of it.
+ */
+const PREVIEW_SLACK: Partial<Record<ExampleId, number>> = { chick: 0.045 };
 
 /** M3's export-cell silicone with M4's bores: an independent figure, from the solids. */
 const solidMl = (id: ExampleId): number => SOLID_GOLDEN[id].silicone + OPENING_GOLDEN[id].boreMl;
@@ -70,7 +79,7 @@ describe('the preview\'s silicone figure', () => {
     within(ml, PREVIEW_ML[id], 0.001);
     // 3%: the preview runs at its own cell (0.5 mm here, against 0.125) and TIN raise (0.1 against 0.05).
     // The barrel reads 2.5% over, the most of the seven; at the export's cell and raise it is 0.13% over.
-    within(ml, solidMl(id), 0.03);
+    within(ml, solidMl(id), PREVIEW_SLACK[id] ?? 0.03);
     expect(grams).toBeCloseTo(ml * defaultParams().silicone.density, 9);
   });
 
@@ -97,7 +106,7 @@ describe('the preview\'s silicone figure', () => {
   });
 
   it('at the export\'s cell and raise, the same sum matches M3\'s solids within 0.5%', async () => {
-    for (const id of ['barrel', 'jersey'] as ExampleId[]) {
+    for (const id of ['barrel', 'jersey', 'chick'] as ExampleId[]) {
       const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
       try {
         p.load(exampleBytes(id), EXAMPLE_FILES[id]);

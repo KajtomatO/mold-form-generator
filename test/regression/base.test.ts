@@ -26,6 +26,33 @@ function footprintOf(id: ExampleId): Footprint {
   return withArena(api, (arena) => buildFootprint(arena, oriented.mesh, top, options.minIsland));
 }
 
+/** The plane the base faces cover, each spot once, sampled on a 0.05 mm lattice: no polygon involved. */
+function coveredArea(id: ExampleId, cell = 0.05): number {
+  const { welded, options } = loadExample(id);
+  const top = findBaseCandidates(welded, options)[0];
+  const { mesh } = orientToBase(welded, top, { planeTol: options.planeTol, soup: false });
+  const { positions: p, indices } = mesh;
+  const faces: number[] = [];
+  for (let t = 0; t < indices.length / 3; t++) if ([0, 1, 2].every((k) => p[indices[t * 3 + k] * 3 + 2] <= options.planeTol)) faces.push(t);
+  const xs = faces.flatMap((t) => [0, 1, 2].map((k) => p[indices[t * 3 + k] * 3]));
+  const ys = faces.flatMap((t) => [0, 1, 2].map((k) => p[indices[t * 3 + k] * 3 + 1]));
+  const x0 = Math.min(...xs), y0 = Math.min(...ys);
+  const nx = Math.ceil((Math.max(...xs) - x0) / cell) + 1, ny = Math.ceil((Math.max(...ys) - y0) / cell) + 1;
+  const covered = new Uint8Array(nx * ny);
+  for (const t of faces) {
+    const [ax, ay, bx, by, cx, cy] = [0, 1, 2].flatMap((k) => [p[indices[t * 3 + k] * 3], p[indices[t * 3 + k] * 3 + 1]]);
+    // Sample points at cell centres, half a cell in from the lattice's corner.
+    for (let j = Math.floor((Math.min(ay, by, cy) - y0) / cell); j <= Math.ceil((Math.max(ay, by, cy) - y0) / cell) && j < ny; j++) {
+      for (let i = Math.floor((Math.min(ax, bx, cx) - x0) / cell); i <= Math.ceil((Math.max(ax, bx, cx) - x0) / cell) && i < nx; i++) {
+        const x = x0 + (i + 0.5) * cell, y = y0 + (j + 0.5) * cell;
+        const w0 = (bx - ax) * (y - ay) - (by - ay) * (x - ax), w1 = (cx - bx) * (y - by) - (cy - by) * (x - bx), w2 = (ax - cx) * (y - cy) - (ay - cy) * (x - cx);
+        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) covered[i + j * nx] = 1;
+      }
+    }
+  }
+  return covered.reduce((sum, c) => sum + c, 0) * cell * cell;
+}
+
 function levelsOf(id: ExampleId): LevelReport {
   const { welded, options } = loadExample(id);
   const [top] = findBaseCandidates(welded, options);
@@ -100,7 +127,10 @@ describe.each(EXAMPLE_IDS)('base of %s', (id) => {
     footprint.components.forEach((c, i) => within(c.area, golden.footprints[i], 0.01));
     expect(footprint.islands).toHaveLength(golden.islands.length);
     footprint.islands.forEach((c, i) => within(c.area, golden.islands[i], 0.02));
-    within(footprint.rawArea, footprint.projectedArea, 0.02);
+    // Where parts overlap, as the chick's do, their soles can lie over each other and the summed triangles
+    // count that twice, so the union of the faces, sampled on a lattice, is the reference everywhere.
+    within(footprint.rawArea, coveredArea(id), 0.02);
+    if (golden.overlapVolume === 0) within(footprint.rawArea, footprint.projectedArea, 0.02);
     within(footprint.projectedArea, golden.baseArea, 0.01);
   });
 

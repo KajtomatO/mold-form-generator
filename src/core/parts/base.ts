@@ -1,7 +1,8 @@
 import type { CrossSection, Manifold, SimplePolygon, Vec2 } from 'manifold-3d';
 import type { Footprint, FootprintComponent } from '../base/footprint';
 import { orientSolid, trimToBase, type OrientedModel } from '../base/orient';
-import type { ImportedSolid } from '../mesh/shells';
+import { connectedPieces, type ImportedSolid } from '../mesh/shells';
+import { touchingGroups } from '../mesh/touching';
 import type { WeldedMesh } from '../mesh/weld';
 import type { Diagnostic } from '../report/diagnostics';
 import { auditOverhang } from '../report/overhang';
@@ -220,17 +221,22 @@ export function buildMergedBase(arena: Arena, body: Manifold, model: Manifold | 
   if (filledVoid >= CRUMB_MM3) {
     diagnostics.push({ code: 'void-filled', severity: 'info', message: `Merged mode fills ${filledVoid.toFixed(0)} mm3 of sealed space in and under the model, which silicone cannot reach.` });
   }
-  if (bodies.length > 1) {
-    const loose = bodies.length - 1;
-    const message = loose === 1 ? 'One part of this model does not touch the plate, so it would print as a loose piece.' : `${loose} parts of this model do not touch the plate, so they would print as loose pieces.`;
-    diagnostics.push({ code: 'merged-bodies', severity: 'warning', message });
-  }
   // compose keeps positive shells only, which is what fills those voids in the file.
   const base = bodies.length === 1 ? bodies[0] : track(M.compose(bodies));
+  const mesh = base.getMesh();
+  if (bodies.length > 1) {
+    // A union fuses only what overlaps, so parts the import joined as touching, within TOUCH_MM, stay
+    // shells of their own here: the pieces that print loose are the groups of shells by that same rule.
+    const surface = { positions: mesh.vertProperties, indices: mesh.triVerts };
+    const loose = touchingGroups(surface, connectedPieces(surface), { closed: true }).length - 1;
+    if (loose > 0) {
+      const message = loose === 1 ? 'One part of this model does not touch the plate, so it would print as a loose piece.' : `${loose} parts of this model do not touch the plate, so they would print as loose pieces.`;
+      diagnostics.push({ code: 'merged-bodies', severity: 'warning', message });
+    }
+  }
 
   // Read off the final part, as a recess filled above has no ceiling left to print. The faces on the
   // plane sit on the plate, not over air, and above it the ridge only faces up, so what is left is the model.
-  const mesh = base.getMesh();
   const { steepArea } = auditOverhang({ positions: mesh.vertProperties, indices: mesh.triVerts }, { only: (_x, _y, z) => z > options.planeTol + STUB_RISE });
   const modelOverhangArea = steepArea / options.offsets.length;
   // Under half a mm2 would read as 0 mm2 needing supports: slivers of the mesh, not an overhang to print.

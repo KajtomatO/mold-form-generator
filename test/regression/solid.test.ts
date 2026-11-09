@@ -322,7 +322,10 @@ function expectedVoids(m: Mold, mode: 'glue' | 'merged', arena: Arena): Expected
       for (const [ox, oy] of m.mold.offsets) change[at(x + ox, y + oy)] += part.area() * (m.pocketDepth + RAISED);
     }
   } else {
-    for (const part of arena.trackAll(m.model!.decompose())) {
+    // Parts that overlap print as one, as Mode B unions them, so what they share comes off once (M11c: the
+    // chick's 6 parts share 964 mm3). Each body of the union goes to the cavity it stands in.
+    const parts = arena.trackAll(m.model!.decompose()).filter((part) => part.volume() > 0);
+    for (const part of arena.trackAll(arena.track(arena.api.Manifold.union(parts)).decompose())) {
       if (part.volume() <= 0) continue;
       // The raised plate takes the part of the model below it too, and the filled void stays filled.
       const above = arena.track(part.trimByPlane([0, 0, 1], RAISED)).volume();
@@ -1194,10 +1197,12 @@ describe('a model standing only on feet under the island limit (G2.5)', () => {
       expect(m.footprint.islands).toHaveLength(2);
       expect(splitShells(arena, m.merged!.base!).bodies).toHaveLength(1);
       expect(m.merged!.diagnostics.map((d) => d.code)).not.toContain('merged-bodies');
-      // Negative control: with no islands to tie, the second post comes loose.
+      // Negative control: with no islands to tie, the second post is a shell of its own. 0.03 mm over the plate
+      // is within TOUCH_MM, so it prints fused to the plate all the same and is no loose part (M11c review);
+      // a part that touches nothing is warned about below.
       const loose = buildMergedBase(arena, m.baseBody, m.model, { ...m.footprint, islands: [] }, { planeTol: m.planeTol, offsets: m.mold.offsets });
       expect(splitShells(arena, loose.base!).bodies).toHaveLength(2);
-      expect(loose.diagnostics.map((d) => d.code)).toContain('merged-bodies');
+      expect(loose.diagnostics.map((d) => d.code)).not.toContain('merged-bodies');
     });
   }, SLOW);
 
@@ -1223,6 +1228,19 @@ describe('Mode B on models with a known answer', () => {
       expect(note?.severity).toBe('warning');
       expect(note?.message).toContain('One part');
       within(m.merged!.base!.volume(), m.baseBody.volume() + 2000 + 300, 1e-3);
+    });
+  }, SLOW);
+
+  it('M11c: a part the import joins as touching, 0.04 mm over the block, stays a shell of its own but no loose part; 0.5 mm over, it is one', () => {
+    withArena(api, (arena) => {
+      const close = buildMold(arena, join(box([0, 0, 0], [20, 10, 10]), box([5, 2, 10.04], [15, 8, 15])), paramsWith(), { pick: facingDown });
+      expect(close.imported.report.bodies).toBe(1);
+      // A union fuses only what overlaps, so the gap leaves two shells, which print as one all the same.
+      expect(splitShells(arena, close.merged!.base!).bodies).toHaveLength(2);
+      expect(close.merged!.diagnostics.map((d) => d.code)).not.toContain('merged-bodies');
+      const apart = buildMold(arena, join(box([0, 0, 0], [20, 10, 10]), box([5, 2, 10.5], [15, 8, 15])), paramsWith(), { pick: facingDown });
+      expect(apart.imported.report.bodies).toBe(2);
+      expect(apart.merged!.diagnostics.find((d) => d.code === 'merged-bodies')?.message).toBe('One part of this model does not touch the plate, so it would print as a loose piece.');
     });
   }, SLOW);
 

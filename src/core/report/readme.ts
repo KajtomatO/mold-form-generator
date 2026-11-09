@@ -40,6 +40,8 @@ export interface ReadmeInput {
   plastic: PlasticEstimate;
   /** Every diagnostic in force, the preview's and the export's. */
   diagnostics: Diagnostic[];
+  /** The file's separate parts, voids aside, and the bodies they make once those that overlap or touch are one. */
+  parts: { count: number; bodies: number };
 }
 
 function heading(title: string): string[] {
@@ -101,7 +103,10 @@ export function exportReadme(input: ReadmeInput): string {
   if (has('model_oriented.stl')) {
     out.push('', 'model_oriented.stl');
     const quantity = copies === 1 ? '' : ` Print ${copies} copies of it, one for each of the ${copies} pockets in the base.`;
-    out.push(...wrap(`Your model, turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base.${quantity} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
+    // The file's parts stay as they are: the mold took them as one, and a slicer does too.
+    const { count, bodies } = input.parts;
+    const parts = count > bodies ? ` It keeps the ${count} parts your file is made of, ${bodies === 1 ? 'which' : 'some of which'} overlap or touch, as the file has them: slicers print overlapping parts as one.` : '';
+    out.push(...wrap(`Your model, turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base.${quantity}${parts} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
   }
   if (has('funnel.stl')) {
     out.push('', 'funnel.stl');

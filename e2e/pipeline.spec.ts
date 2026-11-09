@@ -553,7 +553,9 @@ type Tier = keyof Measured;
 const TIERS: Tier[] = ['t1', 't2', 'first', 'drag', 'cut'];
 
 test.describe('budgets', () => {
-  const MODELS: ExampleId[] = FULL ? (Object.keys(EXAMPLE_FILES) as ExampleId[]) : ['jersey', 'benchy'];
+  // The budgets come from the M3 and M4 tables per model, which have no row for the chick, added at M11c:
+  // only `--record` measures those tables again.
+  const MODELS: ExampleId[] = FULL ? (Object.keys(EXAMPLE_FILES) as ExampleId[]).filter((id) => id !== 'chick') : ['jersey', 'benchy'];
   const GRIDS: [ExampleId, number, number][] = FULL ? [['benchy', 2, 3], ['x8', 3, 3]] : [];
   const RECORD = process.env.CFG_RECORD === '1';
 

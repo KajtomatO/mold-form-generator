@@ -60,6 +60,8 @@ interface Shot {
    * with its warning; a cut through one of Benchy's letters, close up; and jersey 20 x 1's last tile cut.
    */
   m11?: 'bad-file' | 'soup' | 'heavy' | 'lettering' | 'last-tile';
+  /** M11c: the view moved clear of the Diagnostics card, which stands bottom-left when it holds no warning. */
+  clearCard?: boolean;
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
@@ -74,6 +76,8 @@ const PROJECT_SETS = EXPORT_SETS;
 const BOLT_SETS = EXPORT_SETS;
 // M11a's: the export's sets, every size and theme in Chromium, and the user's browser at 1366 x 768, dark.
 const M11_SETS = EXPORT_SETS;
+// M11c's: 1366 x 768 in both themes in Chromium, and the user's browser at 1366 x 768, dark.
+const M11C_SETS = (browser: Browser, width: number, theme: Theme): boolean => width === 1366 && (browser === 'chromium' || theme === 'dark');
 const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
@@ -117,6 +121,10 @@ const CASES: Shot[] = [
   { name: 'heavy-merged-warning', file: null, grid: [1, 1], m11: 'heavy', scroll: 'base', only: M11_SETS },
   { name: 'benchy-lettering-section', file: EXAMPLE_FILES.benchy, grid: [1, 1], m11: 'lettering', only: M11_SETS },
   { name: 'jersey-20x1-last-tile', file: EXAMPLE_FILES.jersey, grid: [20, 1], m11: 'last-tile', only: M11_SETS },
+  // M11c: the user's multi-colour chick at defaults, one pour, its vent and the note on its parts, with the
+  // opening rows and Export ZIP on; and a cut across x through its head, where the top part passes into the body.
+  { name: 'chick-mc', file: EXAMPLE_FILES.chick, grid: [1, 1], scroll: 'pour', clearCard: true, only: M11C_SETS },
+  { name: 'chick-mc-section-head', file: EXAMPLE_FILES.chick, grid: [1, 1], section: 'x', faceCut: true, only: M11C_SETS },
 ];
 
 /** The soup-mode L standing on its underside, or the 3 million triangle block in merged mode, by the Open button's input. */
@@ -209,16 +217,18 @@ test.describe('review screenshots', () => {
             if (!keepCard && (await card.count()) > 0) await card.getByRole('button', { name: 'Dismiss' }).click();
             // The fixed camera: front right, above, at a distance set by the box. M11a's warnings move the
             // Diagnostics card to the top right, so there the view moves right and up by a share of the box,
-            // which puts the mold to the left of the card and below it.
-            await hooks(page, (h, clear: boolean) => {
+            // which puts the mold to the left of the card and below it. A card of notes stays bottom-left, and
+            // the view moves the other way (M11c).
+            const clear = shot.m11 === 'soup' || shot.m11 === 'heavy' ? 1 : shot.clearCard ? -1 : 0;
+            await hooks(page, (h, side: number) => {
               const { min, max } = h.partBounds('cover')!;
               const d = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
               // The screen's right, seen from (0.6, -1.4, 0.9), is (0.919, 0.394, 0); its up is near +z.
-              const shift = clear ? [0.27 * 0.919 * d, 0.27 * 0.394 * d, 0.12 * d] : [0, 0, 0];
+              const shift = [0.27 * 0.919 * d * side, 0.27 * 0.394 * d * side, 0.12 * d * side];
               const c = [0, 1, 2].map((k) => (min[k] + max[k]) / 2 + shift[k]);
-              const far = clear ? 1.12 * d : d;
+              const far = side !== 0 ? 1.12 * d : d;
               h.setCamera({ position: [c[0] + 0.6 * far, c[1] - 1.4 * far, c[2] + 0.9 * far], target: [c[0], c[1], c[2]], fov: 35 });
-            }, shot.m11 === 'soup' || shot.m11 === 'heavy');
+            }, clear);
             expect(await app(page, (a) => a.store.pipeline.status().stale)).toBe(false);
           } else if ((await card.count()) > 0) {
             await card.getByRole('button', { name: 'Dismiss' }).click();

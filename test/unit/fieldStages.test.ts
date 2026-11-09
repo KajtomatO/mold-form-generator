@@ -97,3 +97,27 @@ describe('what S2 brings the section\'s cut (M11)', () => {
     expect(kept.length % 3).toBe(0);
   });
 });
+
+describe('the bodies S7 places on (M11c review)', () => {
+  it('are grouped once per S2: a pin moved or t changed runs S7 again on the same groups, and another plane groups again', () => {
+    const stages = new FieldStages();
+    const params = defaultParams();
+    const file = exampleBytes('chick').slice().buffer;
+    const run = (p: Params, pins: { id: string; kind: 'pour' | 'vent'; x: number; y: number }[] = [], plane = DEFAULT_PLANE) => {
+      const keys = stageKeys(p, { ...INPUTS, plane: JSON.stringify(plane), pins });
+      return stages.run(keys, ['S7'], p, { file, import: PLAIN_IMPORT, plane, cellScale: 1, pins, removed: [] }).S7!;
+    };
+    const kept = (): unknown => (stages as unknown as { groups: { value: number[][] } | null }).groups?.value;
+    const first = run(params);
+    const groups = kept();
+    expect(groups).toEqual([[0, 1, 2, 3, 4, 5]]);
+    const [pour] = first.placement.openings.filter((o) => o.kind === 'pour');
+    const pinned = run(params, [{ id: pour.id, kind: 'pour', x: pour.x - 1, y: pour.y }]);
+    expect(pinned.placement.openings.find((o) => o.id === pour.id)).toMatchObject({ x: pour.x - 1, pinned: true });
+    expect(kept()).toBe(groups);
+    run({ ...params, silicone: { ...params.silicone, t: 3.5 } });
+    expect(kept()).toBe(groups);
+    run(params, [], { rank: 1, upper: false });
+    expect(kept()).not.toBe(groups);
+  });
+});

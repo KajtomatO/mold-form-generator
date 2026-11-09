@@ -249,6 +249,25 @@ export function spikedBlock(api: ManifoldToplevel, depth: number, radius = 0.5):
   });
 }
 
+/** M11c: a U channel, 30 x 30 x 10 and open along y, with a floor 2 mm thick and walls 5 mm wide, as one closed part. */
+export function channel(api: ManifoldToplevel): WeldedMesh {
+  return meshOf((keep) => keep(cuboid(api, keep, [0, 0, 0], [30, 30, 10]).subtract(cuboid(api, keep, [5, -1, 2], [25, 31, 11]))));
+}
+
+/**
+ * M11c: two parts that overlap below the base plane as well as above it. One is an 80 x 80 x 10 block with a
+ * cone from a point 0.5 mm under its floor, 4 mm in radius at the floor; the other a 4 x 4 post from 0.3 mm
+ * under the floor to 5 mm up, on the cone's axis, so it shares about 4 mm3 with the cone under the floor and
+ * 80 mm3 with the block over it. The floor is the base, and the cone's tip and the post's foot are trimmed.
+ */
+export function postThroughFloor(api: ManifoldToplevel): WeldedMesh {
+  const block = meshOf((keep) => {
+    const cone = keep(keep(api.Manifold.cylinder(1, 0, 8, 48)).translate([40, 40, -0.5]));
+    return keep(cuboid(api, keep, [0, 0, 0], [80, 80, 10]).add(cone));
+  });
+  return join(block, box([38, 38, -0.3], [42, 42, 5]));
+}
+
 /** A 40 x 40 x 10 block with a 10 x 10 recess cut `depth` into its underside: a closed-off level. */
 export function recessedBlock(api: ManifoldToplevel, depth: number): WeldedMesh {
   return meshOf((keep) => keep(cuboid(api, keep, [0, 0, 0], [40, 40, 10]).subtract(cuboid(api, keep, [15, 15, -1], [25, 25, depth]))));

@@ -1,5 +1,6 @@
 import { analyseIntervals, type SealedDomain } from '../analysis/intervals';
 import { connectedPieces } from '../mesh/shells';
+import { touchingGroups } from '../mesh/touching';
 import type { WeldedMesh } from '../mesh/weld';
 
 export type { SealedDomain } from '../analysis/intervals';
@@ -16,9 +17,12 @@ export function exteriorMesh(mesh: WeldedMesh): WeldedMesh {
   return { positions: mesh.positions, indices: Uint32Array.from(kept) };
 }
 
-/** Separate bodies in the mesh: each needs its own pour, so a void shell does not count as one. */
+/**
+ * Separate bodies in the mesh: each needs its own pour, so a void shell does not count as one, and pieces
+ * that overlap or touch are one body.
+ */
 export function countBodies(mesh: WeldedMesh): number {
-  return connectedPieces(mesh).filter((piece) => piece.kind !== 'void').length;
+  return touchingGroups(mesh, connectedPieces(mesh)).length;
 }
 
 /** One recess the plate closes off under the model, from its own triangles. */

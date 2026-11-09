@@ -19,14 +19,16 @@ import { parseStl } from '../../src/core/stl/parse';
 import { exportSteps, type ExportOutputs, type ExportReport, type ExportRequest } from '../../src/workers/exportJob';
 import type { WorkerLike } from '../../src/workers/protocol';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
-import { asciiStl, box, BOX_TOP, L_POCKET, patchedL, spikedBlock, toSoup, withoutTriangles } from '../fixtures/synthetic';
-import type { WeldedMesh } from '../../src/core/mesh/weld';
+import { asciiStl, box, BOX_TOP, join as joinMeshes, L_POCKET, patchedL, postThroughFloor, signedVolume, spikedBlock, toSoup, withoutTriangles } from '../fixtures/synthetic';
+import { meshBounds, weld, type WeldedMesh } from '../../src/core/mesh/weld';
+import { buildField } from '../../src/core/field/build';
+import { moldSilicone } from '../../src/core/field/silicone';
 import { buildBaseBody } from '../../src/core/parts/base';
 import { transformPositions } from '../../src/core/base/orient';
 import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
 import { holeCentres, readPart, unpose } from '../fixtures/solidChecks';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { fieldSettings } from '../../src/core/field/grid';
+import { fieldSettings, planField } from '../../src/core/field/grid';
 import type { Params } from '../../src/core/params/schema';
 import { basePose, coverPose } from '../../src/core/parts/poses';
 import { deriveRim, moldBounds } from '../../src/core/parts/rim';
@@ -142,6 +144,7 @@ function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
     bolts: null,
     plastic: { solid: 312, printed: 160 },
     diagnostics: [warning, note],
+    parts: { count: 1, bodies: 1 },
   };
   change(i);
   return i;
@@ -178,6 +181,22 @@ describe('README.txt', () => {
     expect(exportReadme(input((i) => (i.model = 'mold™ 中.stl')))).toContain('moldTM ?: silicone casting mold');
     // The word too long for any line is broken where the line ends, and nothing of it is lost.
     expect(exportReadme(input((i) => (i.model = long))).replace(/\r\n/g, '')).toContain(`${'x'.repeat(90)}.stl.`);
+  });
+
+  it('says model_oriented.stl keeps a file\'s parts that overlap or touch as they are, and that slicers print them as one, only when there are such parts (M11c)', () => {
+    const flat = (change: (i: ReadmeInput) => void): string => exportReadme(input(change)).replace(/\r\n\s*/g, ' ');
+    const said = 'slicers print overlapping parts as one';
+    expect(flat(() => {})).not.toContain(said);
+    // x8's 8 barriers stand apart, so they are 8 bodies and nothing is said.
+    expect(flat((i) => (i.parts = { count: 8, bodies: 8 }))).not.toContain(said);
+    expect(flat((i) => (i.parts = { count: 6, bodies: 1 }))).toContain('It keeps the 6 parts your file is made of, which overlap or touch, as the file has them: slicers print overlapping parts as one.');
+    expect(flat((i) => (i.parts = { count: 3, bodies: 2 }))).toContain('It keeps the 3 parts your file is made of, some of which overlap or touch, as the file has them');
+    // Merged mode prints the model in the base, so there is no model_oriented.stl to speak of.
+    expect(flat((i) => {
+      i.parts = { count: 6, bodies: 1 };
+      i.files = i.files.filter((f) => f !== 'model_oriented.stl');
+    })).not.toContain(said);
+    notepad(exportReadme(input((i) => (i.parts = { count: 6, bodies: 1 }))));
   });
 
   it('lists every setting the mold was made with, auto ones with what they came to', () => {
@@ -996,4 +1015,80 @@ describe('the export with bolts, in Node', () => {
     expect(readme).not.toContain('together when snug');
     expect(readme).toContain('Warning: An M3 x 10 mm screw does not reach through the nut');
   });
+});
+
+/** M11c review: files of parts that overlap, through the real export in Node. */
+describe('models of parts that overlap, exported in Node', () => {
+  const pipelines: Pipeline[] = [];
+  afterEach(() => {
+    pipelines.splice(0).forEach((p) => p.dispose());
+  });
+  async function opened(mesh: WeldedMesh, name: string): Promise<Pipeline> {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    p.load(asciiStl(toSoup(mesh), name), `${name}.stl`);
+    await p.idle();
+    expect(p.status().error).toBeNull();
+    return p;
+  }
+  const volumeOf = (stl: Uint8Array): number => signedVolume(weld(parseStl(stl).positions));
+  const flat = (bytes: Uint8Array): string => text(bytes).replace(/\r\n\s*/g, ' ');
+
+  it('a plane through parts that overlap under it as well: report.json, model_oriented.stl\'s entry and the silicone, in the preview and the export, take off only what they share above it', async () => {
+    const api = await loadManifold();
+    const p = await opened(postThroughFloor(api), 'post-through-floor');
+    // Its flat top is the larger face, so the floor is chosen, as a maker would.
+    p.setPlane({ rank: p.oriented!.value.candidates.findIndex((c) => c.normal[2] < -0.99), upper: false });
+    await p.idle();
+    const oriented = p.oriented!.value;
+    expect(oriented.chosen.normal[2]).toBeLessThan(-0.99);
+    expect(oriented.oriented.needsTrim).toBe(true);
+    const imported = p.imported!.value;
+    expect(imported.bodies).toBe(1);
+    // The post shares 80 mm3 with the block over the floor, and about 4 with the cone under it.
+    expect(imported.overlapVolume).toBeGreaterThan(82);
+    expect(imported.overlapVolume).toBeLessThan(86);
+    // The preview's figure: the solid worker's, for the trimmed parts on this plane.
+    expect(p.footprint!.key).toBe(p.oriented!.key);
+    expect(p.footprint!.value.overlap).toBeCloseTo(80, 3);
+    const untrimmed = previewSilicone({ field: p.field, oriented: p.oriented, imported: p.imported, params: p.params, reports: p.reports, placement: p.placement, footprint: null } as unknown as Pipeline)!;
+    // The model it takes off is the larger by the 4 mm3 shared under the floor, so the silicone the less.
+    expect(previewSilicone(p)!.ml - untrimmed.ml).toBeCloseTo((80 - imported.overlapVolume) / 1000, 6);
+
+    const outputs = await p.exportParts();
+    const files = unzipSync(outputs.zip);
+    const report = JSON.parse(text(files['report.json'])) as ExportReport;
+    // Trimmed, the block holds the cone's top and the post: the model is the block's 64,000 mm3.
+    expect(report.model.volumeMm3!).toBeCloseTo(64_000, 2);
+    expect(report.parts['model_oriented.stl'].volumeMm3!).toBeCloseTo(64_000, 2);
+    // The file keeps its parts, trimmed: the block, and the post's 80 mm3 over the floor.
+    expect(volumeOf(files['model_oriented.stl'])).toBeCloseTo(64_080, 1);
+    // The export's silicone takes off the same 80, worked out again here on the export's field.
+    expect(report.clearance.marginRaisedBy).toBe(0);
+    const mesh = { positions: transformPositions(p.modelMesh()!.positions, oriented.oriented.transform), indices: p.modelMesh()!.indices };
+    const bounds = meshBounds(mesh.positions);
+    const settings = fieldSettings(p.params, bounds);
+    const plan = planField(bounds, settings);
+    const field = buildField(mesh, plan, settings).field;
+    const ml = (overlap: number): number => moldSilicone(mesh, plan, field, { overlapVolume: overlap }, settings).ml + report.silicone.boresMl;
+    expect(report.silicone.ml).toBeCloseTo(ml(80), 4);
+    expect(Math.abs(report.silicone.ml - ml(imported.overlapVolume))).toBeGreaterThan(0.003);
+  }, 120_000);
+
+  it('two figures, each of two parts that overlap: report.json counts 2 models of their union, and README.txt says the 4 parts are kept, some of which overlap', async () => {
+    const p = await opened(joinMeshes(box([0, 0, 0], [30, 30, 10]), box([2, 2, 5], [12, 12, 20]), box([50, 0, 0], [80, 30, 10]), box([66, 16, 5], [76, 26, 22])), 'two-figures');
+    expect(p.placement!.value.placement.openings.filter((o) => o.kind === 'pour').map((o) => o.body)).toEqual([0, 1]);
+    const outputs = await p.exportParts();
+    const files = unzipSync(outputs.zip);
+    const report = JSON.parse(text(files['report.json'])) as ExportReport;
+    expect(report.model.bodies).toBe(2);
+    // 10,000 and 10,200 mm3 in union, where the parts sum to 21,200.
+    expect(report.model.volumeMm3!).toBeCloseTo(20_200, 3);
+    expect(report.parts['model_oriented.stl'].volumeMm3!).toBeCloseTo(20_200, 3);
+    expect(volumeOf(files['model_oriented.stl'])).toBeCloseTo(21_200, 2);
+    expect(report.openings.filter((o) => o.kind === 'pour')).toHaveLength(2);
+    const readme = flat(files['README.txt']);
+    expect(readme).toContain('It keeps the 4 parts your file is made of, some of which overlap or touch, as the file has them: slicers print overlapping parts as one.');
+    expect(readme).toContain('The file is made of 4 parts, some of which overlap by 1000.0 mm3, as models split for multi-colour printing often are. The mold treats parts that overlap or touch as one model, so it makes 2 models of them, 20200 mm3 in all.');
+  }, 120_000);
 });

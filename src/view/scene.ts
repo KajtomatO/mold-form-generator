@@ -108,6 +108,12 @@ export class PreviewScene {
    * a closed surface in the file's coordinates, which it takes away too.
    */
   private extras: ModelExtras | null = null;
+  /**
+   * M11c: the union of the model's parts where the import joined parts that overlap or touch, with its
+   * triangles less its void shells. A part's walls inside another would otherwise count in the cut, and
+   * where one crosses the plane a few samples read the model as absent, which drew a seam of silicone.
+   */
+  private joined: { mesh: PartGeometry; exterior: Uint32Array | null; whole: THREE.BufferGeometry | null; outer: THREE.BufferGeometry | null } | null = null;
   /** Their geometries, built from those once each, the first time a cut needs them. */
   private exteriorModel: { indices: Uint32Array; geometry: THREE.BufferGeometry } | null = null;
   private sealedAir: { surface: PartGeometry; geometry: THREE.BufferGeometry } | null = null;
@@ -296,6 +302,14 @@ export class PreviewScene {
   /** S2's extras for the model's cut, for the mesh set last, or null until they come. */
   setModelExtras(extras: ModelExtras | null): void {
     this.extras = extras;
+    this.requestRender();
+  }
+
+  /** The union of the model's joined parts, in the file's coordinates as the mesh is, or null to count the mesh itself. */
+  setModelJoined(joined: { mesh: PartGeometry; exterior: Uint32Array | null } | null): void {
+    this.joined?.whole?.dispose();
+    this.joined?.outer?.dispose();
+    this.joined = joined ? { ...joined, whole: null, outer: null } : null;
     this.requestRender();
   }
 
@@ -683,10 +697,11 @@ export class PreviewScene {
     this.section.setSources('funnel', shows('funnel') ? (this.funnels.children as THREE.Mesh[]).flatMap((copy) => from(copy)) : []);
   }
 
-  /** The real mesh's geometry, which is closed where a lighter drawn proxy need not be. */
+  /** The real mesh's geometry, which is closed where a lighter drawn proxy need not be, or the union of its joined parts. */
   private countedGeometry(): THREE.BufferGeometry {
     const mesh = this.modelMesh;
     if (!mesh || !this.model) throw new Error('No model to count.');
+    if (this.joined) return (this.joined.whole ??= partGeometry(this.joined.mesh));
     if (this.model.geometry.getAttribute('position').array === mesh.positions) return this.model.geometry;
     if (this.countedModel?.mesh !== mesh) {
       this.countedModel?.geometry.dispose();
@@ -699,6 +714,11 @@ export class PreviewScene {
   private exteriorGeometry(): THREE.BufferGeometry {
     const mesh = this.modelMesh, indices = this.extras?.exterior;
     if (!mesh) throw new Error('No model to count.');
+    if (this.joined) {
+      const { mesh: union, exterior } = this.joined;
+      if (!exterior) return this.countedGeometry();
+      return (this.joined.outer ??= partGeometry({ positions: union.positions, indices: exterior }));
+    }
     if (!indices) return this.countedGeometry();
     if (this.exteriorModel?.indices !== indices) {
       this.exteriorModel?.geometry.dispose();
@@ -739,6 +759,7 @@ export class PreviewScene {
   dispose(): void {
     for (const name of [...this.meshes.keys()]) this.setPart(name, null);
     this.setModel(null);
+    this.setModelJoined(null);
     this.setFunnel(null, []);
     this.heights.dispose();
     this.markers.dispose();

@@ -2,6 +2,7 @@ import type { ErrorStatus, Manifold, Mesh } from 'manifold-3d';
 import type { Diagnostic } from '../report/diagnostics';
 import type { Arena } from '../solid/arena';
 import { MISSING_SURFACE_MM2, type MeshAudit, type OpenLoop } from './audit';
+import { touchingGroups } from './touching';
 import { meshBounds, type WeldedMesh } from './weld';
 
 /** Where the repair ladder stopped: plain weld, weld plus Mesh.merge, or no solid at all. */
@@ -36,7 +37,10 @@ export interface SolidReport {
   /** The whole mesh was inside out and has been flipped. */
   flipped: boolean;
   shells: ShellInfo[];
-  /** Separate objects, each needing its own pour: solid, inverted and unverified shells, not voids. */
+  /**
+   * Separate objects, each needing its own pour: the solid, inverted and unverified shells, not voids,
+   * with those that overlap or touch counted as one, as a model split for multi-colour printing is.
+   */
   bodies: number;
   solidVolume: number;
   voidVolume: number;
@@ -57,7 +61,19 @@ export interface ImportedSolid {
   /** The audit's holes, turned to match `mesh`. For findBaseCandidates and orientToBase in soup mode. */
   openLoops: OpenLoop[];
   report: SolidReport;
+  /**
+   * The union of the model's parts, in `mesh`'s coordinates, where parts that overlap or touch were joined:
+   * the section's cut is counted from it, as the parts' own walls inside the model show in a cut as a seam.
+   * Null for a model of one part or of parts apart, and past JOINED_MESH_LIMIT.
+   */
+  joined: WeldedMesh | null;
 }
+
+/**
+ * The display proxy's limit (G1.8, 300k triangles): past it the union of joined parts is not kept for the
+ * section, as a second whole mesh on main costs memory a heavy model does not have to spare.
+ */
+const JOINED_MESH_LIMIT = 300_000;
 
 // Numerical noise on x8 is 2e-7 of its volume, so this only catches real overlap.
 const OVERLAP_FRACTION = 1e-4;
@@ -221,17 +237,23 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
   const mesh = flipped ? { positions: welded.positions, indices: reversed(welded.indices) } : welded;
   const openLoops = flipped ? audit.openLoops.map((loop): OpenLoop => ({ ...loop, capNormal: [-loop.capNormal[0] || 0, -loop.capNormal[1] || 0, -loop.capNormal[2] || 0] })) : audit.openLoops;
 
-  const shells = connectedPieces(mesh).map(({ triangles: _, ...shell }): ShellInfo => shell);
+  const pieces = connectedPieces(mesh);
+  const shells = pieces.map(({ triangles: _, ...shell }): ShellInfo => shell);
+  const bodies = touchingGroups(mesh, pieces).length;
+  // An open surface has no volume to give, so the note says only how many parts make how many models.
+  const note = partsNote(pieces.filter((piece) => piece.kind !== 'void').length, bodies, null, null);
+  if (note) diagnostics.push(note);
   return {
     solid: null,
     mesh,
     openLoops,
+    joined: null,
     report: {
       route: 'soup',
       failure,
       flipped,
       shells,
-      bodies: shells.filter((shell) => shell.kind === 'unverified').length,
+      bodies,
       solidVolume: 0,
       voidVolume: 0,
       overlapVolume: 0,
@@ -282,6 +304,29 @@ function hollowed(arena: Arena, bodies: Manifold[], voidParts: Manifold[]): Mani
     const inside = voids.filter(({ shell }) => isInside(shell, outer)).map(({ solid }) => solid);
     return inside.length === 0 ? body : arena.track(body.subtract(arena.track(arena.api.Manifold.union(inside))));
   });
+}
+
+/**
+ * What solid shells share, in mm3: their sum, each less the voids inside it, minus their union, or 0 under
+ * the noise of a mesh whose shells only meet.
+ */
+function overlapOf(arena: Arena, solids: Manifold[], voids: Manifold[]): { overlap: number; union: Manifold | null } {
+  if (solids.length < 2) return { overlap: 0, union: null };
+  const hollow = hollowed(arena, solids, voids);
+  const union = arena.track(arena.api.Manifold.union(hollow));
+  const excess = hollow.reduce((total, part) => total + part.volume(), 0) - union.volume();
+  const scale = solids.reduce((total, part) => total + part.volume(), 0);
+  return { overlap: excess > OVERLAP_FRACTION * scale ? excess : 0, union };
+}
+
+/**
+ * What the parts of a solid share, as the import measures it. A trim at the base plane takes away what they
+ * share below it and keeps them apart above it, so a trimmed model's own figure is this one, not the
+ * import's: its volume less this is the union of its parts above the plane.
+ */
+export function sharedVolume(arena: Arena, solid: Manifold): number {
+  const parts = arena.trackAll(solid.decompose());
+  return overlapOf(arena, parts.filter((part) => part.volume() > 0), parts.filter((part) => part.volume() < 0)).overlap;
 }
 
 /**
@@ -341,16 +386,22 @@ export function importSolid(arena: Arena, welded: WeldedMesh, audit: MeshAudit):
     result = { positions: composed.vertProperties, indices: composed.triVerts };
   }
 
-  const bodies = [...positives, ...flippedParts];
-  const solidVolume = bodies.reduce((sum, part) => sum + part.volume(), 0);
+  const solids = [...positives, ...flippedParts];
+  const solidVolume = solids.reduce((sum, part) => sum + part.volume(), 0);
   const voidVolume = voidParts.reduce((sum, part) => sum - part.volume(), 0);
   let overlapVolume = 0;
-  if (bodies.length > 1) {
-    const hollow = hollowed(arena, bodies, voidParts);
-    const excess = hollow.reduce((sum, part) => sum + part.volume(), 0) - arena.track(arena.api.Manifold.union(hollow)).volume();
-    if (excess > OVERLAP_FRACTION * solidVolume) {
-      overlapVolume = excess;
-      diagnostics.push({ code: 'shell-overlap', severity: 'warning', message: `Bodies in this mesh overlap by ${excess.toFixed(1)} mm3, so its stated volume counts that region twice.` });
+  let bodies = solids.length;
+  let joined: WeldedMesh | null = null;
+  if (solids.length > 1) {
+    const shared = overlapOf(arena, solids, voidParts);
+    overlapVolume = shared.overlap;
+    // The same rule as findBodies, on the mesh, so the count is the bodies that get their own pours.
+    bodies = touchingGroups(result, connectedPieces(result), { closed: true }).length;
+    const note = partsNote(solids.length, bodies, overlapVolume, solidVolume - voidVolume - overlapVolume);
+    if (note) diagnostics.push(note);
+    if (bodies < solids.length && result.indices.length / 3 <= JOINED_MESH_LIMIT) {
+      const union = shared.union!.getMesh();
+      if (union.numProp === 3) joined = { positions: union.vertProperties, indices: union.triVerts };
     }
   }
 
@@ -358,6 +409,23 @@ export function importSolid(arena: Arena, welded: WeldedMesh, audit: MeshAudit):
     solid,
     mesh: result,
     openLoops: [],
-    report: { route, failure, flipped, shells, bodies: bodies.length, solidVolume, voidVolume, overlapVolume, modeBAvailable: true, clearanceVerified: true, diagnostics },
+    report: { route, failure, flipped, shells, bodies, solidVolume, voidVolume, overlapVolume, modeBAvailable: true, clearanceVerified: true, diagnostics },
+    joined,
   };
+}
+
+/**
+ * What a maker reads about a file made of parts that overlap or touch, as models split for multi-colour
+ * printing often are: no fault of the file, so a note, with the model's volume as the union of its parts.
+ * Null when every part stands apart, as x8's barriers do. An open mesh has neither figure (null), as only a
+ * closed solid's union can be measured, and its note says only that its parts overlap or touch.
+ */
+export function partsNote(parts: number, bodies: number, overlap: number | null, volume: number | null): Diagnostic | null {
+  if (bodies === parts) return null;
+  const how = overlap === null ? 'overlap or touch' : overlap > 0 ? `overlap by ${overlap.toFixed(1)} mm3` : 'touch';
+  const one = bodies === 1;
+  const message = one
+    ? `The file is made of ${parts} parts that ${how}, as models split for multi-colour printing often are. The mold treats them as one model${volume === null ? '' : `, of ${volume.toFixed(0)} mm3`}.`
+    : `The file is made of ${parts} parts, some of which ${how}, as models split for multi-colour printing often are. The mold treats parts that overlap or touch as one model, so it makes ${bodies} models of them${volume === null ? '' : `, ${volume.toFixed(0)} mm3 in all`}.`;
+  return { code: overlap !== null && overlap > 0 ? 'shell-overlap' : 'shell-touch', severity: 'info', message };
 }

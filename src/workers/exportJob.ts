@@ -14,7 +14,7 @@ import { buildField } from '../core/field/build';
 import { fieldSettings, planField, type Field, type FieldPlan, type FieldSettings } from '../core/field/grid';
 import { moldSilicone } from '../core/field/silicone';
 import type { MeshAudit } from '../core/mesh/audit';
-import { importSolid, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
+import { importSolid, sharedVolume, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
 import { HEAVY_LIMITS, importFromCopy, manifoldPathSolid, simplifyForManifold, type HeavyLimits, type ManifoldPath, type MeshSimplifier } from '../core/mesh/simplify';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { resolveAuto } from '../core/params/defaults';
@@ -282,21 +282,29 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     // Past G1.8's limit, what only the whole solid can tell is read before the copy is made, so the whole
     // solid is freed before the build: the model's volume, and a trimmed model_oriented.stl, which otherwise
     // comes from the mesh. A trim makes two more solids the whole mesh's size, in an arena that ends here.
+    // A solid's own volume counts twice what its parts share, and a trim keeps them apart too: the model's
+    // volume is their union, the parts less their overlap, as a slicer prints them. A trim takes away what
+    // they share below the plane, so a trimmed model's overlap is measured on it again (`shared`); that is
+    // also what the silicone takes off. The import measured the whole model's, and only parts that overlap
+    // there can overlap once trimmed.
+    const overlap = imported.report.overlapVolume;
+    let shared = overlap;
     let wholeVolume: number | null = null;
     let trimmedStl: Uint8Array | null = null;
     if (fromCopy) {
       // The copy came only where no inside-out shell was flipped, so the whole solid is the bodies less their voids.
-      wholeVolume = known!.solidVolume - known!.voidVolume;
+      wholeVolume = known!.solidVolume - known!.voidVolume - overlap;
     } else if (imported.solid && imported.mesh.indices.length / 3 > limits.limit) {
       if (inputs.needsTrim) {
         const read = withArena(api, (scratch) => {
           const trimmed = orientedSolid(scratch, imported, { transform: inputs.transform, needsTrim: true })!;
-          return { volume: trimmed.volume(), stl: want === 'zip' && params.base.mode === 'glue' ? modelOrientedStl({ mesh, needsTrim: true } as OrientedModel, trimmed) : null };
+          return { volume: trimmed.volume(), shared: overlap > 0 ? sharedVolume(scratch, trimmed) : 0, stl: want === 'zip' && params.base.mode === 'glue' ? modelOrientedStl({ mesh, needsTrim: true } as OrientedModel, trimmed) : null };
         });
-        wholeVolume = read.volume;
+        shared = read.shared;
+        wholeVolume = read.volume - shared;
         trimmedStl = read.stl;
       } else {
-        wholeVolume = imported.solid.volume();
+        wholeVolume = imported.solid.volume() - overlap;
       }
     }
     // G1.8: past the limit every Manifold step after the import uses a simplified copy.
@@ -304,6 +312,8 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     // The copy stands in for the whole solid from here on. One that is no closed solid leaves the whole one in use.
     if (path.heavy && !fromCopy) arena.release(imported.solid!).delete();
     const model = orientedSolid(arena, { solid: path.solid }, { transform: inputs.transform, needsTrim: inputs.needsTrim });
+    // The whole solid trimmed: past the limit that was read above, from the whole one, not from the copy.
+    if (inputs.needsTrim && model && !path.heavy) shared = overlap > 0 ? timed('import', () => sharedVolume(arena, model)) : 0;
     const cap = inputs.needsTrim && model ? arena.track(model.slice(0.02)) : undefined;
     const footprint = buildFootprint(arena, mesh, inputs.candidate, scaled.base.minIsland, cap);
     const { pocketDepth, printMargin, ventPersistence, boltLength } = resolveAuto(scaled, bounds);
@@ -415,7 +425,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       }
       if (reportsError !== null) diagnostics.push({ code: 'reports-failed', severity: 'warning', message: `The demold and air reports could not be worked out for this export, so README.txt has no demold estimate and the silicone figure keeps any sealed air: ${reportsError}` });
       // Without S8 no sealed air is known, so none is taken off.
-      const silicone = moldSilicone(mesh, built.plan, built.field, imported.report, built.settings, s8 ?? { sealed: [] });
+      const silicone = moldSilicone(mesh, built.plan, built.field, { overlapVolume: shared }, built.settings, s8 ?? { sealed: [] });
       const boresMl = boreSilicone(built.copies, built.field, built.rim.Zt) / 1000;
       const ml = silicone.ml + boresMl;
       const tape = reports ? { lift: reports.lift, clamp: reports.clamp } : tapeAdvice(scaled, built.field, scaled.quality.tinTolFinal, built.rim);
@@ -433,10 +443,10 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         'cover.stl': built.cover.volume(),
         'base.stl': built.base!.volume(),
         'funnel.stl': funnel ? funnel.volume() : null,
-        'model_oriented.stl': wholeVolume ?? (model ? model.volume() : null),
+        'model_oriented.stl': wholeVolume ?? (model ? model.volume() - shared : null),
       };
       const found = reports ? (({ diagnostics: _shown, ...rest }) => rest)(reports) : null;
-      const report = buildReport(params, inputs, meta, { imported, modelVolume: wholeVolume ?? (model ? model.volume() : null), built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, bolts: bolts ? exportBolts(built, bolts.advice, scaled.quality.tinTolFinal) : null, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
+      const report = buildReport(params, inputs, meta, { imported, modelVolume: wholeVolume ?? (model ? model.volume() - shared : null), built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, bolts: bolts ? exportBolts(built, bolts.advice, scaled.quality.tinTolFinal) : null, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
       const { requested, minimum } = built.rim.edge;
       const readme = exportReadme({
         app: APP_NAME,
@@ -467,6 +477,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         bolts,
         plastic,
         diagnostics: inForce,
+        parts: { count: imported.report.shells.filter((shell) => shell.kind !== 'void').length, bodies: imported.report.bodies },
       });
       const text = new TextEncoder();
       files['README.txt'] = text.encode(readme);

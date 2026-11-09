@@ -11,7 +11,9 @@ import { NO_SOURCE, rasterize } from '../core/field/raster';
 import { exteriorMesh, plateSealedAir } from '../core/field/sealed';
 import { volumeAbovePlane } from '../core/field/silicone';
 import { auditEdges, type MeshAudit, type OpenLoop } from '../core/mesh/audit';
+import { connectedPieces } from '../core/mesh/shells';
 import { DISPLAY_TRIANGLE_LIMIT } from '../core/mesh/simplify';
+import { touchingGroups } from '../core/mesh/touching';
 import { meshBounds, weld, type Bounds, type WeldedMesh } from '../core/mesh/weld';
 import { baseOptions, resolveAuto } from '../core/params/defaults';
 import type { Params } from '../core/params/schema';
@@ -210,6 +212,11 @@ export class FieldStages {
   private s6: Entry<ConditionedStage> | null = null;
   private s10: Entry<MoldStage> | null = null;
   private s7: Entry<PlacementOutput> | null = null;
+  /**
+   * Which pieces of the oriented mesh make each body, kept while S2 stands, as S7 runs again on every opening
+   * moved. Only the groups: the pieces' lists of triangles would hold 35 MB on 3 million triangles.
+   */
+  private groups: { mesh: WeldedMesh; value: number[][] } | null = null;
 
   constructor(private readonly now: () => number = () => 0) {}
 
@@ -232,6 +239,7 @@ export class FieldStages {
   /** Drops everything, as loading another file does: the old model's arrays are the biggest thing here. */
   clear(): void {
     this.s1 = this.s2 = this.s3 = this.s4 = this.s5 = this.s6 = this.s10 = this.s7 = null;
+    this.groups = null;
   }
 
   /**
@@ -391,7 +399,12 @@ export class FieldStages {
         const single = { ...settings, nx: 1, ny: 1 };
         const tilePlan = planField(oriented.bounds, single);
         const opening = placementSettings(params, oriented.bounds);
-        const search = findBodies(oriented.oriented.mesh, tilePlan, tile, single, opening);
+        const { mesh } = oriented.oriented;
+        // The same mesh gives its pieces in the same order, so the groups found once index them every time.
+        const pieces = connectedPieces(mesh);
+        // A mesh the solid worker's Manifold took is closed; soup mode's is not.
+        if (this.groups?.mesh !== mesh) this.groups = { mesh, value: touchingGroups(mesh, pieces, { closed: !inputs.import.soup }) };
+        const search = findBodies(mesh, tilePlan, tile, single, opening, { pieces, groups: this.groups.value });
         const space = placementSpace(field, rim, mold.offsets, openingSizes(params));
         const placement = placeOpenings({ bodies: search.bodies, tile, space, settings: opening, pins: inputs.pins, removed: inputs.removed });
         primeSpace(space);

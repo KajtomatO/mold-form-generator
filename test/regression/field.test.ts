@@ -166,7 +166,8 @@ describe.each(EXAMPLE_IDS)('field of %s', (id) => {
   it('matches the plan: t=3, no margin, no draft, no closing, cell 0.25, within 5%', () => {
     const { mesh, bounds } = orientedExample(id);
     const { ml, domains } = siliconeOf(mesh, bareSettings(bounds, 0.25), bounds, solidReport(id));
-    within(ml, golden.planBare, 0.05);
+    // The plan has no figure for the chick, added at M11c: its own golden number still holds it.
+    if (golden.planBare !== null) within(ml, golden.planBare, 0.05);
     within(ml, golden.bare, 0.01);
     // Benchy's and wolf's sealed letters stay below the filter, so no air comes off any of these.
     expect(domains).toEqual([]);
@@ -177,7 +178,7 @@ describe.each(EXAMPLE_IDS)('field of %s', (id) => {
     const { ml } = siliconeOf(mesh, { ...bareSettings(bounds, 0.25), t: OFF_LATTICE_T }, bounds, solidReport(id));
     within(ml, golden.bareOffLattice, 0.01);
     expect(ml).toBeLessThan(golden.bare);
-    expect(Math.abs(ml / golden.planBare - 1) > 0.05).toBe(id === 'x8' || id === 'jersey');
+    if (golden.planBare !== null) expect(Math.abs(ml / golden.planBare - 1) > 0.05).toBe(id === 'x8' || id === 'jersey');
   });
 
   it('matches its golden number at plan defaults, with barely a change off the lattice', () => {
@@ -552,7 +553,8 @@ describe('timing', () => {
     const withClip = run(clipped), withCorners = run(corners);
     const saved = (withCorners - withClip) / withCorners;
     rasters.push(`| ${id} | ${round(t1 - t0)} | ${round(t2 - t1)} | ${withClip.toFixed(2)} | ${withCorners.toFixed(2)} | ${(saved * 100).toFixed(1)}% |`);
-    within(withCorners, FIELD_GOLDEN[id].planEstimate, 0.02);
+    const estimate = FIELD_GOLDEN[id].planEstimate;
+    if (estimate !== null) within(withCorners, estimate, 0.02);
     expect(withClip).toBeLessThanOrEqual(withCorners);
     expect(saved).toBeLessThanOrEqual(0.055);
     // The cost that matters is against the 5 s budget, not against the formula.

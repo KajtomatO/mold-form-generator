@@ -821,6 +821,55 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(store.fileNotice.value?.message).toBe('cube-mold.zip was saved for cube.stl, not jersey-barrier.stl, so only its settings were applied: the model keeps its own base face, pinned openings and removed vents.');
   });
 
+  it('M11c: a project saved before 1.0.1, of a model whose parts are one body now, opens with its moved openings and removed vents reset and a warning; one saved since, or of a model of one part, keeps them', async () => {
+    // A box with a part on top: two parts, one body since 1.0.1, where 1.0.0 numbered the top part body 1.
+    const hat = asciiStl(toSoup(joinMeshes(box([0, 0, 0], [30, 30, 10]), box([10, 10, 10], [20, 20, 16]))), 'hat');
+    const p = fresh();
+    p.load(hat, 'hat.stl');
+    await p.idle();
+    const old: Project = { ...structuredClone(p.project()), pins: [{ id: 'b1:pour:0', kind: 'pour', x: 15, y: 15 }], removed: ['b0:vent:beside'] };
+    const store = new Store(fresh(), () => 0, files);
+    const saved = (appVersion: string, stl = hat, model = 'hat.stl'): File => new File([packProject(projectJson({ ...projectFile(old, model, { modelSha256: null, basePlane: null }), appVersion }), stl).slice()], 'hat.moldproj');
+    await store.openFile(saved('1.0.0'));
+    await store.pipeline.idle();
+    expect(store.pipeline.project().pins).toEqual([]);
+    expect(store.pipeline.project().removed).toEqual([]);
+    expect(store.pipeline.diagnostics.find((d) => d.code === 'openings-reset')).toEqual({
+      code: 'openings-reset',
+      severity: 'warning',
+      message: 'This project was saved by version 1.0.0 of the app, which took each part of the file for a model of its own. Parts that overlap or touch are one model since version 1.0.1, so the openings it moved and the vents it removed were reset: move or remove them again.',
+    });
+    // Its one body has its own pour and the vent beside it.
+    expect(store.pipeline.placement!.value.placement.openings.map((o) => [o.id, o.pinned])).toEqual([['b0:pour:0', false], ['b0:vent:beside', false]]);
+
+    // The project on screen is no longer the file's, so leaving asks first.
+    expect(store.unsaved()).toBe(true);
+
+    // Saved by 1.0.1, its pins name this numbering, and they stay.
+    const since = new Store(fresh(), () => 0, files);
+    await since.openFile(saved(APP_VERSION));
+    await since.pipeline.idle();
+    expect(since.pipeline.project()).toMatchObject({ pins: old.pins, removed: old.removed });
+    expect(since.pipeline.diagnostics.some((d) => d.code === 'openings-reset')).toBe(false);
+
+    // A model of one part numbers its body the same in every version, so a 1.0.0 project of it keeps them.
+    const jerseyPins: Project = { ...old, pins: [{ id: 'b0:pour:0', kind: 'pour', x: 3, y: 0 }], removed: [] };
+    const q = fresh();
+    q.loadProject(jersey, EXAMPLE_FILES.jersey, jerseyPins, null, null, '1.0.0');
+    await q.idle();
+    expect(q.project().pins).toEqual(jerseyPins.pins);
+    expect(q.diagnostics.some((d) => d.code === 'openings-reset')).toBe(false);
+
+    // Settings from a 1.0.0 project.json, applied to the model on screen, are reset the same way, in the same step.
+    const r = fresh();
+    r.load(hat, 'hat.stl');
+    await r.idle();
+    r.applyProject(old, null, '1.0.0');
+    expect(r.project()).toMatchObject({ pins: [], removed: [] });
+    await r.idle();
+    expect(r.diagnostics.find((d) => d.code === 'openings-reset')?.message).toContain('saved by version 1.0.0 of the app');
+  });
+
   it('a saved plane its choice no longer finds is found under another choice, pins kept; one found nowhere warns and keeps the best guess', async () => {
     const p = fresh();
     p.load(jersey, EXAMPLE_FILES.jersey);

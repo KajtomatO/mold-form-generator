@@ -100,7 +100,7 @@ Manifold's WASM booted in 9 ms. Firefox does not report device memory, so the ap
 ## Running the tests
 
 ```sh
-scripts/ci.sh                  # the quick suite: about 10.5 minutes
+scripts/ci.sh                  # the quick suite: about 11 minutes
 scripts/ci.sh --full           # everything, on all seven example models: about 23 minutes
 scripts/ci.sh --soak           # the long runs: about 35 minutes
 scripts/ci.sh --full --record  # also rewrites docs/BENCHMARKS.md
