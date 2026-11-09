@@ -68,13 +68,15 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D9 with what each changed, and keeps the open items open', () => {
+  it('records the decisions D1 to D9 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d$/.test(cells[0]));
     expect(decisions.map((cells) => cells[0])).toEqual(['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9']);
     for (const cells of decisions) expect(cells[1].length, cells[0]).toBeGreaterThan(20);
     const open = tableRows(section(requirements, 9)!);
-    // The M11a memory deviation and the physical unknowns are the user's to settle, and stay open until they do.
-    expect(open.find((cells) => cells[0].includes('peak RSS'))?.[2]).toMatch(/^open/);
+    // The user settled the M11a memory deviation and the project's licence on 2026-11-09.
+    expect(open.find((cells) => cells[0].includes('peak RSS'))?.[2]).toMatch(/^answered 2026-11-09: accepted/);
+    expect(open.find((cells) => cells[0].includes('Which licence'))?.[2]).toMatch(/^answered 2026-11-09: MIT/);
+    // The physical unknowns are the user's to settle by a test pour, and stay open until they do.
     expect(open.find((cells) => cells[0].includes('Whether 3 mm holds up'))?.[2]).toMatch(/^open/);
   });
 });
@@ -162,12 +164,16 @@ describe('the docs', () => {
     expect(missing(workflow, ['untested for printed molds', 'come through into the silicone', 'fit-test pair', 'for bubbles'])).toEqual([]);
   });
 
-  it('section 7 points to docs/WORKFLOW.md, and README.md names every doc and says no licence is chosen', () => {
+  it('section 7 points to docs/WORKFLOW.md, and README.md names every doc and the MIT licence', () => {
     const seven = section(requirements, 7)!;
     expect(seven).toContain('`docs/WORKFLOW.md` has the full workflow');
     expect(seven).not.toMatch(/will hold/);
     const readme = doc('README.md');
-    expect(missing(readme, ['docs/WORKFLOW.md', 'docs/DEPLOY.md', 'docs/THIRD_PARTY.md', 'docs/REQUIREMENTS.md', 'docs/PLAN.md', 'docs/BENCHMARKS.md', 'No licence has been chosen'])).toEqual([]);
+    expect(missing(readme, ['docs/WORKFLOW.md', 'docs/DEPLOY.md', 'docs/THIRD_PARTY.md', 'docs/REQUIREMENTS.md', 'docs/PLAN.md', 'docs/BENCHMARKS.md', 'MIT licence', '`LICENSE`', '`examples/` are not covered'])).toEqual([]);
+    // The owner chose MIT on 2026-11-09: the licence file, package.json and the docs must agree.
+    expect(doc('LICENSE')).toMatch(/^MIT License\n\nCopyright \(c\) 2026 Tomasz Targiel\n/);
+    expect(JSON.parse(doc('package.json')).license).toBe('MIT');
+    expect(doc('docs/THIRD_PARTY.md')).toContain('under the MIT licence');
     for (const path of ['docs/WORKFLOW.md', 'docs/DEPLOY.md', 'docs/THIRD_PARTY.md', 'docs/BENCHMARKS.md', 'public/third-party-notices.txt']) expect(existsSync(join(root, path)), path).toBe(true);
   });
 

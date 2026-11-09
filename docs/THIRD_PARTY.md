@@ -138,4 +138,4 @@ The original requirements asked for BumpMesh (bumpmesh.com) as the reference for
 
 ## This project's own licence
 
-No licence has been chosen for this project yet. That is the owner's decision, so `package.json` stays `"private": true`, and nothing here grants rights to the project's own code.
+The project's own code and docs are under the MIT licence, chosen by its owner on 2026-11-09: see `LICENSE` at the top of the repository. `package.json` says `"license": "MIT"` and stays `"private": true`, which only keeps it from being published to npm by accident. The example models in `examples/` are not covered: they belong to their authors and keep their own terms.

@@ -1,6 +1,7 @@
 {
   "name": "casting-form-generator",
   "version": "1.0.1",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Browser app that generates a printable base and cover for pouring silicone casting molds",

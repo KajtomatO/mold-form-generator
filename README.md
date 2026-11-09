@@ -68,6 +68,6 @@ The app measures the geometry: the silicone thickness, the closed cavity, the op
 
 ## Licence
 
-No licence has been chosen for this project yet: that is its owner's decision. The software it is built with keeps its own licences, which `docs/THIRD_PARTY.md` lists and the app links to as "Third-party licences" at the foot of the Advanced section.
+The app is released under the MIT licence: see `LICENSE`. The example models in `examples/` are not covered by it: they belong to their authors and keep their own terms. The software the app is built with keeps its own licences, which `docs/THIRD_PARTY.md` lists and the app links to as "Third-party licences" at the foot of the Advanced section.
 
 The app's layout follows the conventions of BumpMesh, as the original requirements asked. BumpMesh is under the AGPL, so it was a layout reference only: nothing was copied from it.
