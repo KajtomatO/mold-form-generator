@@ -39,6 +39,15 @@ else
   "${playwright[@]}" --grep @smoke
 fi
 echo "CI passed."
+# The two test models .gitignore keeps on the maintainer's machine (examples/SOURCES.md): the tests that need
+# them skip without them, which is right in a clone and a loss on the server, so say so either way.
+missing=()
+while read -r line; do
+  if [ "${CFG_WITHOUT_LOCAL_EXAMPLES:-}" = "1" ] || [ ! -e ".${line}" ]; then missing+=("${line#/examples/}"); fi
+done < <(grep '^/examples/' .gitignore)
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "Not in this checkout, so the tests that need them were skipped: ${missing[*]} (examples/SOURCES.md)."
+fi
 if [ -z "${DISPLAY:-}" ] && ! command -v xvfb-run >/dev/null; then
   echo "Firefox WebGL tests were skipped: xvfb is not installed. To run them: WITH_SYSTEM_DEPS=1 scripts/install.sh"
 fi

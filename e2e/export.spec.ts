@@ -13,7 +13,7 @@ import { withArena } from '../src/core/solid/arena';
 import { parseStl } from '../src/core/stl/parse';
 import type { ExportOutputs, ExportReport } from '../src/workers/exportJob';
 import { orientedExample } from '../test/fixtures/fieldRuns';
-import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, loadExample, type ExampleId } from '../test/fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, loadExample, skipWithout, type ExampleId } from '../test/fixtures/loadExamples';
 import { readPart, unpose } from '../test/fixtures/solidChecks';
 import { app, canDraw, canvasPixels, checkLayout, dropAndWait, hooks, idle, openApp, type PageWatch } from './appHarness';
 import { checkPieces } from './fitChecks';
@@ -345,7 +345,7 @@ test.describe('the Export box on index.html', () => {
     expect(Object.keys(files)).toContain('fit_test/groove-0.35-taper-0.20_cover.stl');
   });
 
-  // M11c: the user's own file. Each of its 6 parts was a body with a pour of its own, three of them with no
+  // M11c: the user's file. Each of its 6 parts was a body with a pour of its own, three of them with no
   // room, and their errors kept Export ZIP off in both browsers.
   test('@smoke the chick, 6 parts that overlap as a multi-colour model\'s do: one body, one pour at its peak, Export ZIP on, its ZIP says so, and a cut through its head shows one model', async ({ page }, info) => {
     test.skip(info.project.name === 'dev', 'the build is what the user gets, and the dev server serves the same UI code');
@@ -560,6 +560,7 @@ test.describe('Export ZIP on every example, unzipped and checked in Node', () =>
     test(`${c.name}: the ZIP from the button checks out against a Node build`, async ({ page }, info) => {
       test.skip(!c.projects.includes(info.project.name), `runs in ${c.projects.join(' and ')}`);
       test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+      skipWithout(test, c.id);
       test.setTimeout(420_000);
       const dialogs: string[] = [];
       page.on('dialog', (dialog) => {

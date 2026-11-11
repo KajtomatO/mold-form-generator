@@ -4,7 +4,7 @@ import { countBodies, exteriorMesh, plateSealedAir, sealedDomains } from '../../
 import { windingNumber } from '../../src/core/mesh/shells';
 import { cupAir } from '../fixtures/fieldOracles';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { loadManifold } from '../fixtures/loadExamples';
+import { hasExample, loadManifold } from '../fixtures/loadExamples';
 import { axisRotation, box, cup, engravedBlock, hollowCone, holedBlock, inverted, invertedCup, join, notchedBlock, recessedBlock, ring, rotated, signedVolume, ventedInvertedCup, withoutTriangles } from '../fixtures/synthetic';
 import type { WeldedMesh } from '../../src/core/mesh/weld';
 
@@ -228,6 +228,6 @@ describe('air the plate seals under the model, from its faces', () => {
     const wolf = plateSealedAir(orientedExample('wolf').mesh, [0, 0, 1], 0, 0.05);
     expect(wolf.recesses).toHaveLength(13);
     expect(Math.abs(sum(wolf) - 108.5 * 0.917)).toBeLessThanOrEqual(108.5 * 0.917 * 0.002);
-    for (const id of ['jersey', 'x8', 'barrel', 'goddess', 'vis35'] as const) expect(plateSealedAir(orientedExample(id).mesh, [0, 0, 1], 0, 0.05).recesses, id).toEqual([]);
+    for (const id of (['jersey', 'x8', 'barrel', 'goddess', 'vis35'] as const).filter(hasExample)) expect(plateSealedAir(orientedExample(id).mesh, [0, 0, 1], 0, 0.05).recesses, id).toEqual([]);
   });
 });

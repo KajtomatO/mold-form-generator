@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import type { Store } from '../src/app/store';
 import type { PreviewScene } from '../src/view/scene';
+import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { canDraw, hooks } from './pipelineHarness';
 
 const examples = join(import.meta.dirname, '..', 'examples');
@@ -16,7 +17,8 @@ export interface PageWatch {
 /**
  * Opens the app with the test hooks. Every request goes through a route, so one to any host but the
  * LAN address is refused and recorded: the app must work with no network past this server. The preview
- * server serves only the build, so there the route answers /examples from disk, as pipelineHarness does.
+ * server serves only the build, so there the route answers /examples from disk, as pipelineHarness does,
+ * and on every server it answers an example not in this checkout with a 404, as a clone's server would.
  */
 export async function openApp(page: Page, query = ''): Promise<PageWatch> {
   const watch: PageWatch = { errors: [], foreign: [] };
@@ -27,6 +29,7 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
   });
   const probe = await page.request.get('/examples/jersey-barrier.stl');
   const serveExamples = !probe.ok() || (probe.headers()['content-type'] ?? '').includes('html');
+  const missing = missingExampleFiles();
   await page.route('**/*', async (route) => {
     const url = new URL(route.request().url());
     if (url.protocol !== 'data:' && url.protocol !== 'blob:' && url.hostname !== host) {
@@ -34,10 +37,16 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
       await route.abort();
       return;
     }
-    if (serveExamples && url.pathname.startsWith('/examples/')) {
+    if (url.pathname.startsWith('/examples/')) {
       const name = decodeURIComponent(url.pathname.split('/').pop()!);
-      await route.fulfill({ body: await readFile(join(examples, name)), contentType: 'model/stl' });
-      return;
+      if (missing.includes(name)) {
+        await route.fulfill({ status: 404, body: `${name} is not in this checkout` });
+        return;
+      }
+      if (serveExamples) {
+        await route.fulfill({ body: await readFile(join(examples, name)), contentType: 'model/stl' });
+        return;
+      }
     }
     await route.continue();
   });

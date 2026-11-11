@@ -7,7 +7,7 @@ This is for the owner of the repository. Mold Form Generator is published on Git
 
 Both are built and published by `.github/workflows/pages.yml`, which runs `scripts/build-pages.sh`. Nothing is uploaded to a server of yours: GitHub serves the files, and the app runs in each visitor's browser as it does on the LAN server.
 
-On 2026-11-09 you renamed the app "mold-from-generator", which these files read as Mold Form Generator, `mold-form-generator`. Confirm the spelling before the one-time setup below: the repository's name is the address, and it is hard to change once people use it.
+The name is Mold Form Generator, and the repository `mold-form-generator`, as you confirmed on 2026-11-11. The repository's name is the address, and it is hard to change once people use it.
 
 ## The two branches
 
@@ -148,7 +148,7 @@ Deleting the bad tag alone (`git push origin :refs/tags/v0.2.0`) publishes nothi
 
 ## One-time setup on GitHub
 
-Do these in this order, and only after the decisions in the next section. Runs that start before step 4 is done fail at "Deploy"; they can be ignored.
+Do these in this order. Runs that start before step 4 is done fail at "Deploy"; they can be ignored.
 
 1. On GitHub, create an empty repository named `mold-form-generator` under your account (KajtomatO), with no README, licence or `.gitignore`, so the first push is this history as it is.
 2. Add it as the remote and push `main` alone. A push to `main` starts no workflow:
@@ -181,20 +181,17 @@ Do these in this order, and only after the decisions in the next section. Runs t
 
 7. Open both addresses: the release shows `v0.1.0` and no BETA label, `/beta/` shows BETA and `v0.2.0-beta+...` with a link back, and on each a model loads and exports (U8 in `docs/REQUIREMENTS.md`).
 
-## Before the first push: the name, the source and the example models
+## The source and the example models
 
-Not decided yet, and yours to decide just before the first push:
+The source repository is public, as you decided on 2026-11-11, and so are the example models in `examples/` whose source is known and whose licence allows sharing them. They are other people's work, and `examples/SOURCES.md` gives each one's Printables page, author and licence, and says which were changed; they are not under the project's MIT licence. Two test models with no known source, `VIS-35-skan-skalowany.stl` and `l_medieval_barrel.stl`, are never published: `.gitignore` names them, they stay on the server, and they are taken out of the git history before the first push. In a clone without them, the tests that need them skip, naming the file.
 
-- **The name:** whether Mold Form Generator, `mold-form-generator`, is the spelling you meant.
-- **The source and the example models:** whether the source repository is public, and what happens to the third-party example models in `examples/`, which are also in the git history. They belong to their authors, and only `chick_mc.stl` is yours. Two ways stay open:
-  - **Public without the models:** the repository is public, and the third-party models are taken out of it, history included, before the push. Some tests read them, so those would then need models that may be shared.
-  - **Site only:** the source stays private and only the built site is public. This needs work that is not built yet. `pages.yml` publishes to its own repository's Pages, and a private repository on a free plan has none. The site would have to be pushed to a second, public repository instead, with a token allowed to write to it and a different last step in the workflow. Ask for that before the first push if you choose it.
+To add an example model, put the file in `examples/`, give it a row in `examples/SOURCES.md` and `git add` both: the model's name linked to its Printables page by the model's number alone (`https://www.printables.com/model/<number>`), its author as Printables names them, its licence by its full name linked to the licence's deed, and whether it was changed and how. Add only a model whose source and licence you know and whose licence allows sharing it; a NoDerivatives model must stay unchanged. `test/unit/examples.test.ts`, in the quick suite, fails when a file git tracks in `examples/` has no row, when a row names a file git does not track, or when a row lacks any of these. As you asked on 2026-11-11, no file, file name, address or commit message may name the console maker or its characters, so give such a model a plain name of your own and its file a neutral name; the same test reads every file and commit message for those names.
 
 The site itself never contains the example models: `scripts/build-pages.sh` builds the app's pages and nothing from `examples/`.
 
 ## No tests on GitHub yet
 
-The workflow only builds and publishes. The tests run on the server with `scripts/ci.sh`, as before, because many of them read the example models, whose future is the question above. Once that is settled, the tests can run on GitHub too.
+The workflow only builds and publishes. The tests run on the server with `scripts/ci.sh`, as before, which has the two local test models; a clone of the repository runs them with those tests skipped.
 
 ## What visitors see
 

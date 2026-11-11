@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { OpeningPin } from '../src/core/analysis/placement';
 import { asciiStl, box, engravedBlock, join as joinMeshes, toSoup, withoutTriangles } from '../test/fixtures/synthetic';
-import { EXAMPLE_FILES, loadManifold } from '../test/fixtures/loadExamples';
+import { EXAMPLE_FILES, loadManifold, skipWithout } from '../test/fixtures/loadExamples';
 import { benchyLetterSpots } from './spots';
 import { fixed } from '../src/ui/format';
 import { app, canDraw, canvasPatch, canvasPixels, checkLayout, dropAndWait, dropExample, hooks, idle, openApp, type PageWatch } from './appHarness';
@@ -232,6 +232,7 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
   });
 
   test('@smoke section caps: every tile, a hole for the hidden model, the barrel\'s sealed hollow, air the plate seals, the side kept, a box standing in for the cover, and Mode B exploded', async ({ page }) => {
+    skipWithout(test, 'barrel');
     await hooks(page, (h) => h.setParam('grid.nx', 2));
     await dropAndWait(page, EXAMPLE_FILES.jersey);
     const card = page.getByTestId('software-renderer');
@@ -500,6 +501,7 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
   });
 
   test('@smoke undo and redo: 20 edits come back to the same params and geometry, slider drags group, the shortcuts work outside text boxes, and a new file clears it', async ({ page }) => {
+    skipWithout(test, 'barrel');
     await dropAndWait(page, EXAMPLE_FILES.jersey);
     const start = await hooks(page, (h) => ({ project: JSON.stringify(h.project()), hash: h.geometryHash() }));
     const depth = (): Promise<{ undo: number; redo: number }> => app(page, (a) => a.store.history.depth);

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, type Page } from '@playwright/test';
 import type { TestHooks } from '../src/app/testHooks';
+import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { firefoxHasDisplay } from './firefox';
 
 const examples = join(import.meta.dirname, '..', 'examples');
@@ -13,8 +14,9 @@ export function canDraw(page: Page): boolean {
 
 /**
  * Opens pipeline.html with the test hooks. Vite's dev server serves /examples from the project root, and
- * the preview server serves only the build, so there the test answers /examples itself from disk. Where
- * the browser cannot draw, the page opens without its 3D view, which only the view's own test needs.
+ * the preview server serves only the build, so there the test answers /examples itself from disk. On
+ * every server an example not in this checkout gets a 404, as from a clone's server. Where the browser
+ * cannot draw, the page opens without its 3D view, which only the view's own test needs.
  */
 export async function openPipeline(page: Page, errors: string[] = [], query = ''): Promise<void> {
   if (!canDraw(page) && !query.includes('draw=0')) query += '&draw=0';
@@ -24,10 +26,14 @@ export async function openPipeline(page: Page, errors: string[] = [], query = ''
   });
   // The preview server answers an unknown path with index.html, so a 200 alone does not mean it is served.
   const probe = await page.request.get('/examples/jersey-barrier.stl');
-  if (!probe.ok() || (probe.headers()['content-type'] ?? '').includes('html')) {
+  const serveExamples = !probe.ok() || (probe.headers()['content-type'] ?? '').includes('html');
+  const missing = missingExampleFiles();
+  if (serveExamples || missing.length > 0) {
     await page.route('**/examples/*', async (route) => {
       const name = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop()!);
-      await route.fulfill({ body: await readFile(join(examples, name)), contentType: 'model/stl' });
+      if (missing.includes(name)) await route.fulfill({ status: 404, body: `${name} is not in this checkout` });
+      else if (serveExamples) await route.fulfill({ body: await readFile(join(examples, name)), contentType: 'model/stl' });
+      else await route.continue();
     });
   }
   await page.goto(`/pipeline.html?test=1${query}`);

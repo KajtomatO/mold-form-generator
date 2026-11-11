@@ -18,7 +18,7 @@ import { withArena } from '../../src/core/solid/arena';
 import { entryDef, sliderRange } from '../../src/ui/layout';
 import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { exampleBytes, EXAMPLE_FILES, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, hasExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { FUZZ_REGRESSIONS } from '../fixtures/fuzzSeeds';
 
@@ -170,9 +170,11 @@ describe('parameter fuzz on the pure parts', () => {
   it(`${PURE_SETS} sets on jersey, x8 and the barrel give finite numbers and plain inline errors, never a throw`, () => {
     const failures: string[] = [];
     const codes = new Map<string, number>();
+    // A checkout without the barrel spreads the sets over the other two.
+    const models = (['jersey', 'x8', 'barrel'] as ExampleId[]).filter(hasExample);
     for (let n = 0; n < PURE_SETS; n++) {
       const params = randomParams(seeded(SEED + n));
-      const id = (['jersey', 'x8', 'barrel'] as ExampleId[])[n % 3];
+      const id = models[n % models.length];
       try {
         const problems = pureProblems(params, id);
         if (problems.length > 0) failures.push(`seed ${SEED + n} on ${id}: ${problems.join('; ')}`);
@@ -187,7 +189,7 @@ describe('parameter fuzz on the pure parts', () => {
   });
 
   it('the kept failing seeds stay fixed', () => {
-    for (const seed of FUZZ_REGRESSIONS.pure) {
+    for (const seed of FUZZ_REGRESSIONS.pure.filter((s) => hasExample(s.model))) {
       const params = randomParams(seeded(seed.seed));
       expect(pureProblems(params, seed.model), `seed ${seed.seed}: ${seed.found}`).toEqual([]);
     }

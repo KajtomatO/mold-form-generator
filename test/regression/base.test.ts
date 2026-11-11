@@ -6,7 +6,7 @@ import { determinant, orientSolid, orientToBase, planeTransform, trimToBase } fr
 import { importSolid } from '../../src/core/mesh/shells';
 import { withArena } from '../../src/core/solid/arena';
 import { countHandles } from '../fixtures/handles';
-import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { EXAMPLE_IDS, loadExample, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { box, join, signedVolume } from '../fixtures/synthetic';
 import { GOLDEN } from './golden';
 
@@ -204,7 +204,8 @@ describe('plan facts on the base', () => {
     expect(top.levels).toHaveLength(1);
   });
 
-  it('VIS-35: selects z=0 at 361 mm2 and reports the 764 mm2 level at z=0.41', () => {
+  it('VIS-35: selects z=0 at 361 mm2 and reports the 764 mm2 level at z=0.41', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const { welded, options } = loadExample('vis35');
     const [top] = findBaseCandidates(welded, options);
     expect(-top.support).toBeCloseTo(0, 2);
@@ -257,7 +258,8 @@ describe('plan facts on the base', () => {
     }
   });
 
-  it('VIS-35 upper level: moves the plane to z=0.41 and trims the pad', () => {
+  it('VIS-35 upper level: moves the plane to z=0.41 and trims the pad', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const { welded, audit, options } = loadExample('vis35');
     const [lower] = findBaseCandidates(welded, options);
     const c = candidateAtLevel(welded, lower, upperLevel(lower, options.planeTol)!.offset, options);

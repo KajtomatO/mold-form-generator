@@ -12,7 +12,7 @@ import { parseStl } from '../src/core/stl/parse';
 import { formatCount, formatNumber, formatSize } from '../src/ui/format';
 import { coplanarTriangles } from '../src/view/picking';
 import { orientedExample } from '../test/fixtures/fieldRuns';
-import { exampleBytes, EXAMPLE_FILES, type ExampleId } from '../test/fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, skipWithout, type ExampleId } from '../test/fixtures/loadExamples';
 import { SOLID_GOLDEN } from '../test/regression/golden';
 import { app, canDraw, canvasColour, canvasPatch, canvasPixels, checkLayout, dropAndWait, dropExample, hideParts, hooks, idle, openApp, tealPixels, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
@@ -532,6 +532,7 @@ test.describe('the app on index.html', () => {
   });
 
   test('@smoke VIS-35 warns of its two levels, and "Use upper level" moves the plane to 0.41 mm as Node does', async ({ page }) => {
+    skipWithout(test, 'vis35');
     await dropAndWait(page, EXAMPLE_FILES.vis35);
     const warning = page.getByTestId('upper-level');
     // G2.6: a 764 mm2 face 0.41 mm up. It measures 769 mm2, the M1 golden, within M1's 1%.
@@ -875,7 +876,7 @@ test.describe('the app on index.html', () => {
 
 test.describe('all eight examples, dropped into the app', () => {
   test.skip(!FULL, 'all 8 run with CFG_FULL=1');
-  for (const id of Object.keys(EXAMPLE_FILES) as ExampleId[]) {
+  for (const id of EXAMPLE_IDS) {
     test(`${id}: base confirmed on -z, status strip as Node, geometry as Node`, async ({ page }, info) => {
       test.skip(info.project.name === 'dev', 'the dev server serves the same code; preview and firefox cover it');
       test.skip(!canDraw(page), NO_FIREFOX_WEBGL);

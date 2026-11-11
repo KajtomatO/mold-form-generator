@@ -6,7 +6,7 @@ import { strToU8, unzipSync, zipSync } from 'fflate';
 import { expect, test, type FileChooser, type Page } from '@playwright/test';
 import { MODEL_ENTRY, PROJECT_ENTRY } from '../src/app/projectArchive';
 import { projectJson, type ProjectFile } from '../src/app/project';
-import { exampleBytes, EXAMPLE_FILES } from '../test/fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, skipWithout } from '../test/fixtures/loadExamples';
 import { declaredSize, handMade } from '../test/fixtures/projectFiles';
 import { app, canDraw, dropAndWait, dropExample, hooks, idle, openApp, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
@@ -128,6 +128,7 @@ test.describe('project files on index.html', () => {
   });
 
   test('@smoke Save project and Open: jersey with an edited pocket, a pin and a removed vent comes back whole, by the button and by a drop, and undo after the load keeps the edited flag', async ({ page }) => {
+    skipWithout(test, 'barrel');
     test.setTimeout(240_000);
     // Playwright intercepts file choosers only while a listener asks for them, and switches that on beside
     // the next action rather than before it. With the listener added just before Ctrl+O, as M9 had it, the
@@ -219,6 +220,7 @@ test.describe('project files on index.html', () => {
   });
 
   test('@smoke a corrupt or foreign project file says why under the file row, in sight, and leaves the model as it was; an export ZIP and a version 1 project.json bring their settings back', async ({ page }) => {
+    skipWithout(test, 'barrel');
     test.setTimeout(240_000);
     const jersey = exampleBytes('jersey');
     await dropAndWait(page, EXAMPLE_FILES.jersey);
@@ -385,6 +387,7 @@ test.describe('project files on the heavier examples', () => {
   });
 
   test('VIS-35 on its upper level comes back on it from the project', async ({ page }) => {
+    skipWithout(test, 'vis35');
     test.setTimeout(300_000);
     await dropAndWait(page, EXAMPLE_FILES.vis35);
     await page.getByTestId('upper-level').getByRole('button', { name: 'Use upper level' }).click();

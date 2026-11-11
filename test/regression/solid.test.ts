@@ -1,5 +1,5 @@
 import type { Manifold, ManifoldToplevel, SimplePolygon } from 'manifold-3d';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BaseCandidate } from '../../src/core/base/candidates';
 import { classifyLevels } from '../../src/core/base/footprint';
 import { mapCavities } from '../../src/core/field/cavities';
@@ -27,7 +27,7 @@ import { previewCell as previewCellOf } from '../../src/workers/fieldStages';
 import { recordSection } from '../fixtures/benchmarks';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { countHandles } from '../fixtures/handles';
-import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { EXAMPLE_IDS, hasExample, loadExample, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { buildMold, type Mold, type MoldOptions } from '../fixtures/mold';
 import { boxSolid, cavitySection, clipToBox, compareVoids, contourArea, contourDistance, CRUMB_MM3, holeCentres, insideOutline, mirroredCoverStl, outlineArea, polygonArea, readPart, splitShells, unpose, type ExpectedVoid, type VoidShell } from '../fixtures/solidChecks';
 import { BOX_BOTTOM, BOX_TOP, MUSHROOM, blockOnFeet, box, boxWithTopHole, join, lShape, mushroom, recessedBlock, signedVolume, withoutTriangles } from '../fixtures/synthetic';
@@ -495,15 +495,20 @@ function onModel(id: ExampleId, params: Params, options: MoldOptions, run: (ctx:
   withArena(api, (arena) => run({ arena, m: buildMold(arena, loadExample(id).welded, params, options), params }));
 }
 
-/** Holds one built mold across a describe's tests, as building it again per test would be most of the run. */
+/**
+ * Holds one built mold across a describe's tests, as building it again per test would be most of the run.
+ * Without the model's file nothing is built, and each test skips, naming it.
+ */
 function sharedMold(id: ExampleId, params: Params = paramsWith()): () => Ctx {
-  let ctx: Ctx;
+  let ctx: Ctx | undefined;
   beforeAll(() => {
+    if (!hasExample(id)) return;
     const arena = new Arena(api);
     ctx = { arena, m: buildMold(arena, loadExample(id).welded, params), params };
   });
-  afterAll(() => ctx.arena.dispose());
-  return () => ctx;
+  beforeEach((test) => skipWithout(test, id));
+  afterAll(() => ctx?.arena.dispose());
+  return () => ctx!;
 }
 
 describe.each(FULL ? EXAMPLE_IDS : (['jersey', 'barrel'] as ExampleId[]))('%s at defaults', (id) => {
@@ -719,7 +724,8 @@ describe('plan facts on the examples', () => {
     });
   }, SLOW);
 
-  it('the barrel void is filled in Mode B and reported', () => {
+  it('the barrel void is filled in Mode B and reported', (test) => {
+    skipWithout(test, 'barrel');
     onModel('barrel', paramsWith(), { modes: { merged: true } }, ({ m }) => {
       within(m.imported.report.voidVolume, 3432, 0.01);
       within(m.merged!.filledVoid, 3432, 0.01);
@@ -730,7 +736,8 @@ describe('plan facts on the examples', () => {
     });
   });
 
-  it.runIf(FULL)('VIS-35 on its upper level: solid area at +0.02 is about 1128 mm2, Mode B trims, and every check holds', () => {
+  it.runIf(FULL)('VIS-35 on its upper level: solid area at +0.02 is about 1128 mm2, Mode B trims, and every check holds', (test) => {
+    skipWithout(test, 'vis35');
     onModel('vis35', paramsWith(), { useUpper: true }, (ctx) => {
       const { arena, m } = ctx;
       const { track } = arena;
@@ -749,7 +756,8 @@ describe('plan facts on the examples', () => {
     });
   }, SLOW);
 
-  it.each(FULL ? EXAMPLE_IDS : (['jersey', 'barrel'] as ExampleId[]))('%s: model_oriented.stl comes from the original soup, with its flat face at z=0 and no reflection', (id) => {
+  it.for(FULL ? EXAMPLE_IDS : (['jersey', 'barrel'] as ExampleId[]))('%s: model_oriented.stl comes from the original soup, with its flat face at z=0 and no reflection', { timeout: SLOW }, (id, test) => {
+    skipWithout(test, id);
     onModel(id, paramsWith(), { modes: {} }, ({ m }) => {
       const { parsed, welded } = loadExample(id);
       const { mesh, audit } = readPart(modelOrientedStl(m.oriented, m.model));
@@ -760,9 +768,10 @@ describe('plan facts on the examples', () => {
       expect(min[2]).toBeLessThanOrEqual(m.planeTol);
       within(signedVolume(mesh), signedVolume(welded), 1e-3);
     });
-  }, SLOW);
+  });
 
-  it.runIf(FULL)('VIS-35 on its upper level: model_oriented.stl has the pad trimmed off, from the solid', () => {
+  it.runIf(FULL)('VIS-35 on its upper level: model_oriented.stl has the pad trimmed off, from the solid', (test) => {
+    skipWithout(test, 'vis35');
     onModel('vis35', paramsWith(), { useUpper: true, modes: {} }, ({ m }) => {
       const { mesh, audit } = readPart(modelOrientedStl(m.oriented, m.model));
       expect(audit.openEdges).toBe(0);
@@ -992,6 +1001,7 @@ describe('parameter matrix', () => {
   ];
   const models: ExampleId[] = FULL ? ['jersey', 'barrel', 'wolf'] : ['jersey'];
   describe.each(models)('%s', (id) => {
+    beforeEach((test) => skipWithout(test, id));
     it.each(MATRIX)('%s passes every check', (_, change) => {
       const params = paramsWith(change);
       onModel(id, params, {}, checkAll);
@@ -1024,7 +1034,8 @@ describe('grids', () => {
     ['goddess', 2, 1, 10, 1],
   ];
   const run = FULL ? GRIDS : GRIDS.filter(([id]) => id === 'jersey');
-  it.each(run)('%s %i x %i at spacing %s: every check, with %i cavities', (id, nx, ny, spacing, cavities) => {
+  it.for(run)('%s %i x %i at spacing %s: every check, with %i cavities', { timeout: SLOW }, ([id, nx, ny, spacing, cavities], test) => {
+    skipWithout(test, id);
     const params = paramsWith((p) => {
       p.grid.nx = nx;
       p.grid.ny = ny;
@@ -1037,7 +1048,7 @@ describe('grids', () => {
       else expect(m.built.tilesMerged).toBe(false);
       checkAll(ctx);
     });
-  }, SLOW);
+  });
 });
 
 describe('placing parts: the pitch always comes from the export plan', () => {
@@ -1111,7 +1122,8 @@ describe('placing parts: the pitch always comes from the export plan', () => {
     }
   });
 
-  it('no preview cell moves the box', () => {
+  it('no preview cell moves the box', (test) => {
+    skipWithout(test, 'barrel');
     const params = paramsWith();
     onModel('barrel', params, { modes: {} }, ({ m }) => {
       for (const cell of [0.25, 0.5, 1]) {
@@ -1166,7 +1178,8 @@ describe('placing parts: the pitch always comes from the export plan', () => {
     });
   });
 
-  it.each(['jersey', 'barrel'] as ExampleId[])('%s: the clip does nothing to an export field', (id) => {
+  it.for(['jersey', 'barrel'] as ExampleId[])('%s: the clip does nothing to an export field', (id, test) => {
+    skipWithout(test, id);
     onModel(id, paramsWith(), { modes: {} }, ({ m }) => {
       const clipped = buildToolMesh(m.built.field, { raise: m.plan.raise, tol: 0.05, clip: m.rim.D });
       expect(clipped.clippedNodes).toBe(0);

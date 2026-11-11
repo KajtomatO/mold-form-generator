@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import type { ParamPath } from '../src/app/stages';
 import { heightBlockStl } from '../test/fixtures/heavy';
-import { EXAMPLE_FILES, loadManifold } from '../test/fixtures/loadExamples';
+import { EXAMPLE_FILES, loadManifold, skipWithout, type ExampleId } from '../test/fixtures/loadExamples';
 import { asciiStl, box, patchedL, toSoup } from '../test/fixtures/synthetic';
 import { benchyLetterSpots } from './spots';
 import { app, canDraw, dropAndWait, dropExample, hooks, openApp } from './appHarness';
@@ -16,6 +16,8 @@ import { NO_FIREFOX_WEBGL } from './firefox';
  * CFG_SHOTS=1, so CI does not write them on every run. CFG_SHOTS_DIR says where they go.
  */
 const SHOTS = process.env.CFG_SHOTS === '1';
+/** Every example, missing or not, to find a shot's model by its file. */
+const EXAMPLE_IDS_ALL = Object.keys(EXAMPLE_FILES) as ExampleId[];
 const DIR = process.env.CFG_SHOTS_DIR ?? join(import.meta.dirname, '..', 'test-results', 'shots');
 
 type Theme = 'dark' | 'light';
@@ -167,6 +169,8 @@ test.describe('review screenshots', () => {
           test.skip(browser === 'firefox' && size.width !== 1366, 'Firefox takes the 1366 x 768 sets');
           test.skip(shot.only !== undefined && !shot.only(browser, size.width, theme), 'not in this set');
           test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+          // Its model, and for the replace prompt the barrel dropped onto it.
+          skipWithout(test, ...EXAMPLE_IDS_ALL.filter((id) => EXAMPLE_FILES[id] === shot.file || (shot.project === 'replace' && id === 'barrel')));
           test.setTimeout(240_000);
           mkdirSync(DIR, { recursive: true });
           await page.setViewportSize(size);

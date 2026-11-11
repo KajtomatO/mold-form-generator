@@ -105,15 +105,17 @@ Manifold's WASM booted in 9 ms. Firefox does not report device memory, so the ap
 
 ```sh
 scripts/ci.sh                  # the quick suite: about 11 minutes
-scripts/ci.sh --full           # everything, on all seven example models: about 23 minutes
+scripts/ci.sh --full           # everything, on every example model: about 28 minutes
 scripts/ci.sh --soak           # the long runs: about 35 minutes
 scripts/ci.sh --full --record  # also rewrites docs/BENCHMARKS.md
 ```
 
 - **The quick suite** (`scripts/ci.sh`) runs the type check, the unit tests in Node (Vitest, with 2 workers), and the browser smoke tests in Chromium, on the development server and on the build, and in Firefox on the build.
-- **`scripts/ci.sh --full`** runs every test, the unit tests and the browser tests on all seven example models. Run it before each commit.
+- **`scripts/ci.sh --full`** runs every test, the unit tests and the browser tests on the eight models the goldens were measured on, and takes the other examples through the app in Node. Run it before each commit.
 - **`scripts/ci.sh --soak`** runs 300 rebuilds on two models, the 3 million triangle STL in both browsers, and the large parameter fuzz. It needs about 3.5 GB of free memory for the browser, as above, and is run before a release rather than before every commit. Its 150 MB STL is made by the test in the system's temporary folder and deleted afterwards.
 - **`CFG_SHOTS=1`** adds the review screenshots of the app, written to `test-results/shots`, or to the folder `CFG_SHOTS_DIR` names: `CFG_SHOTS=1 npx playwright test e2e/shots.spec.ts` takes them alone, and `CFG_SHOTS=1 scripts/ci.sh --full` with everything else. The quick suite runs smoke tests only, so it takes none.
+- **Two test models are not published:** `VIS-35-skan-skalowany.stl` and `l_medieval_barrel.stl` have no known source, so they stay on the maintainer's machine and `.gitignore` names them (`examples/SOURCES.md`). In a clone without them, each test that needs one skips, naming the file, the tests over every example leave them out, and `scripts/ci.sh` names them at its end. Any other example that is missing fails the tests that read it. `CFG_WITHOUT_LOCAL_EXAMPLES=1` counts the two as missing where the files are present, and the browser tests' servers then answer them with a 404, as a clone's would: `CFG_WITHOUT_LOCAL_EXAMPLES=1 scripts/ci.sh`.
+- **The catalogue test** (`test/unit/examples.test.ts`) holds `examples/SOURCES.md` to the files git's index holds in `examples/`, which is what the next commit takes. Stage a new model (`git add`) before running it; a model dropped into `examples/` only to try the app is not checked. Before changes to `examples/` or `.gitignore` are staged, `CFG_UNSTAGED=1` counts them as staged: new files added, deleted ones gone, and those `.gitignore` names out of the index, as `git rm --cached` takes them.
 - **Firefox needs a display** for its WebGL tests. When `DISPLAY` is not set and `xvfb` is installed, `scripts/ci.sh` starts the tests under `xvfb-run`. With a virtual display already running, point the tests at it instead, for example `DISPLAY=:97 scripts/ci.sh --full`. Without either, Firefox's WebGL tests skip themselves and `scripts/ci.sh` says so at the end.
 
 The browser tests build the app into `dist-ci/` and serve it on ports 5183 (development server) and 5184 (the build), on the network address `192.168.0.153`. Set `CFG_LAN_IP` if the server's address is another. `e2e/pages.spec.ts` also builds the GitHub Pages layout with `scripts/build-pages.sh` into a temporary folder and serves it under `/mold-form-generator/` on a spare port the system picks. They never touch `dist/` or port 5173, so they can run while the app is being served.

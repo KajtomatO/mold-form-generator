@@ -9,7 +9,7 @@ import { defaultParams } from '../../src/core/params/defaults';
 import type { Rim } from '../../src/core/parts/rim';
 import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
-import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, skipWithout } from '../fixtures/loadExamples';
 
 /** A project that differs from the defaults only in t, so steps can be told apart. */
 function project(t: number): Project {
@@ -207,7 +207,8 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     expect(p.geometryHash().all).toBe(end.hash);
   });
 
-  it('a drag is one step, Esc records nothing, a change that ends where it began is no step, and a new file clears it all', async () => {
+  it('a drag is one step, Esc records nothing, a change that ends where it began is no step, and a new file clears it all', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const { store, tick, advance } = await loaded();
     const p = store.pipeline;
     const openings = p.placement!.value.placement.openings;

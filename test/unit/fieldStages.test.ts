@@ -7,7 +7,7 @@ import { moldBounds } from '../../src/core/parts/rim';
 import type { Params } from '../../src/core/params/schema';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, previewCell } from '../../src/workers/fieldStages';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { exampleBytes, type ExampleId } from '../fixtures/loadExamples';
+import { exampleBytes, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 
 const INPUTS = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview' as const, cellScale: 1, pins: [], removed: [], drag: null };
 
@@ -91,7 +91,8 @@ describe('what S2 brings the section\'s cut (M11)', () => {
     expect(S1!.welded.indices.length).toBeGreaterThan(0);
   });
 
-  it('the barrel\'s triangles less its void shell, and no sealed recess', () => {
+  it('the barrel\'s triangles less its void shell, and no sealed recess', (ctx) => {
+    skipWithout(ctx, 'barrel');
     const { S1, S2 } = s2('barrel');
     expect(S2!.sealedAir).toEqual({ surface: null, recesses: 0 });
     const kept = S2!.exterior!;

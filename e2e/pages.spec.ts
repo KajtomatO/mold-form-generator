@@ -8,6 +8,7 @@ import { unzipSync } from 'fflate';
 import { expect, test, type Page } from '@playwright/test';
 import { shownDate } from '../src/app/buildInfo';
 import type { TestHooks } from '../src/app/testHooks';
+import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { app, canDraw, checkLayout, dropAndWait, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
 
@@ -96,8 +97,9 @@ function serve(out: string, host: string, log: Site['log']): Promise<Server> {
       response.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...headers });
       response.end(body);
     };
-    // The test hooks fetch the examples from the host's root, so they are answered there.
+    // The test hooks fetch the examples from the host's root, so they are answered there, less those not in this checkout.
     let base: string, rest: string;
+    if (path.startsWith('/examples/') && missingExampleFiles().includes(path.slice('/examples/'.length))) return answer(404, 'Not found');
     if (path.startsWith('/examples/')) [base, rest] = [examples, path.slice('/examples/'.length)];
     else if (path.startsWith(PREFIX)) [base, rest] = [out, path.slice(PREFIX.length)];
     else if (path === PREFIX.slice(0, -1)) return answer(301, '', undefined, { location: PREFIX });

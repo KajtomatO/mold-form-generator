@@ -10,7 +10,7 @@ import { clampAdvice, coverLift, fillLevel, MIN_HOLD_N } from '../../src/core/re
 import { bedTurn, fitsBed, partBoxes, plasticDiagnostic, plasticEstimate, printabilityDiagnostics, SPOOL_G } from '../../src/core/report/printability';
 import { bareSettings, orientedExample } from '../fixtures/fieldRuns';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
-import { exampleBytes, EXAMPLE_FILES, type ExampleId } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, hasExample, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { asciiStl, box, inverted, join, toSoup } from '../fixtures/synthetic';
 
 const rimOf = (id: ExampleId, params: Params = defaultParams()) => {
@@ -101,7 +101,8 @@ describe('the cover\'s lift and the tape', () => {
 });
 
 describe('printability', () => {
-  it('VIS-35 does not fit the default bed straight: its cover is about 230 mm long, and its base 224 mm, so both must be turned', () => {
+  it('VIS-35 does not fit the default bed straight: its cover is about 230 mm long, and its base 224 mm, so both must be turned', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const rim = rimOf('vis35');
     const [cover, base] = partBoxes(rim);
     expect(cover.size[1]).toBeCloseTo(230.6, 1);
@@ -154,10 +155,11 @@ describe('printability', () => {
     expect(bed[0].message).toContain('One copy alone would fit, so use fewer copies under Grid, or a larger bed.');
     expect(bed.map((d) => d.also)).toEqual([['grid.nx', 'grid.ny'], ['grid.nx', 'grid.ny']]);
     expect(base.size[2]).toBe(params.base.thickness + params.joint.ridgeHeight);
-    for (const id of ['benchy', 'goddess', 'jersey', 'x8', 'barrel', 'wolf'] as ExampleId[]) expect(printability(id), id).toEqual([]);
+    for (const id of (['benchy', 'goddess', 'jersey', 'x8', 'barrel', 'wolf'] as ExampleId[]).filter(hasExample)) expect(printability(id), id).toEqual([]);
   });
 
-  it('in Mode B the base prints with the model on it, so its height is the base\'s and the model\'s', () => {
+  it('in Mode B the base prints with the model on it, so its height is the base\'s and the model\'s', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const params = defaultParams();
     params.base.mode = 'merged';
     const { bounds } = orientedExample('vis35');

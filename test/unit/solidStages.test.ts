@@ -12,7 +12,7 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 import { auditEdges } from '../../src/core/mesh/audit';
 import { DISPLAY_TRIANGLE_LIMIT } from '../../src/core/mesh/simplify';
 import { meshBounds, weld as weldSoup, type WeldedMesh } from '../../src/core/mesh/weld';
-import { exampleBytes, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { exampleBytes, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 
 let api: ManifoldToplevel;
 beforeAll(async () => {
@@ -120,7 +120,8 @@ function footprintJob(id: ExampleId, plane: PlaneChoice): { keys: Record<StageId
 }
 
 describe('base confirmation in solid.worker', () => {
-  it('S2 places VIS-35\'s 0.41 mm level against the footprint, which "Use upper level" then clears', () => {
+  it('S2 places VIS-35\'s 0.41 mm level against the footprint, which "Use upper level" then clears', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const stages = new SolidStages(api);
     const low = footprintJob('vis35', DEFAULT_PLANE);
     const report = stages.run(low.keys, ['S2'], defaultParams(), low.inputs).S2!;

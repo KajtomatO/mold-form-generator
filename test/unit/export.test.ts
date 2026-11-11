@@ -26,7 +26,7 @@ import { buildField } from '../../src/core/field/build';
 import { moldSilicone } from '../../src/core/field/silicone';
 import { buildBaseBody } from '../../src/core/parts/base';
 import { transformPositions } from '../../src/core/base/orient';
-import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, skipWithout } from '../fixtures/loadExamples';
 import { holeCentres, readPart, unpose } from '../fixtures/solidChecks';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { fieldSettings, planField } from '../../src/core/field/grid';
@@ -49,7 +49,8 @@ describe('names and versions', () => {
   it('a saved file is named after the model, with what Windows refuses replaced', () => {
     expect(downloadName('3dbenchy.stl', '-mold.zip')).toBe('3dbenchy-mold.zip');
     expect(downloadName('Goddess Statue.STL', '-cover.stl')).toBe('Goddess Statue-cover.stl');
-    expect(downloadName('wolfinal(1).stl', '-fit-test.zip')).toBe('wolfinal(1)-fit-test.zip');
+    expect(downloadName('wolfinal.stl', '-fit-test.zip')).toBe('wolfinal-fit-test.zip');
+    expect(downloadName('model(1).stl', '-fit-test.zip')).toBe('model(1)-fit-test.zip');
     expect(downloadName('a:b?<c>.stl', '-base.stl')).toBe('a_b__c_-base.stl');
     expect(downloadName('.stl', '-mold.zip')).toBe('mold-mold.zip');
   });
@@ -605,7 +606,8 @@ describe('the export of jersey in Node', () => {
     expect(solid.spawned()).toBe(1);
   }, 60_000);
 
-  it('a new file while the export waits for the preview ends it, so nothing is made from one model under the name of another', async () => {
+  it('a new file while the export waits for the preview ends it, so nothing is made from one model under the name of another', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const solid = counting();
     const p = await loaded(solid.spawn);
     p.setParams((params) => (params.silicone.t = 3.5));
@@ -910,12 +912,14 @@ describe('the export with bolts, in Node', () => {
 
   // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off and no base layer, which M9
   // had none of, must give the same bytes, past the header's text, which names the app (m9Sha).
-  it.each([
+  // it.for, as it.each gives no test context, which the barrel's row skips by without its file.
+  it.for([
     ['jersey', 'jersey', () => {}],
     ['jersey-merged', 'jersey', (p: Params) => (p.base.mode = 'merged')],
     ['jersey-2x1', 'jersey', (p: Params) => (p.grid.nx = 2)],
     ['barrel', 'barrel', () => {}],
-  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged, the base layer at 0', async (name, id, change) => {
+  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged, the base layer at 0', { timeout: 60_000 }, async ([name, id, change], ctx) => {
+    skipWithout(ctx, id);
     const { files } = await exported(id, (params) => {
       params.silicone.baseLayer = 0;
       change(params);
@@ -928,7 +932,7 @@ describe('the export with bolts, in Node', () => {
     expect(readme).not.toContain('HARDWARE');
     expect(readme).toContain('Take off the tape and lever the base out');
     expect(JSON.parse(text(files['report.json'])).bolts).toBeNull();
-  }, 60_000);
+  });
 
   it('with the bolts on: the parts list, when to fit the nuts, how tight, unscrew to demold, report.json, and the fit test\'s coupon', async () => {
     const { p, outputs, files } = await exported('jersey', (params) => (params.bolts.enabled = true));
@@ -1021,7 +1025,8 @@ describe('the export with bolts, in Node', () => {
     expect(Object.keys(on.files).filter((f) => f.includes('bolt')).sort()).toEqual(['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']);
   }, 60_000);
 
-  it('VIS-35-sized advice: the bolts stand over 100 mm apart, so the README asks for tape across the middle', () => {
+  it('VIS-35-sized advice: the bolts stand over 100 mm apart, so the README asks for tape across the middle', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const params = defaultParams();
     params.bolts.enabled = true;
     const { mesh, bounds } = orientedExample('vis35');

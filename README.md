@@ -70,8 +70,12 @@ The app measures the geometry: the silicone thickness, the closed cavity, the op
 - **Chrome over plain http:** this is about the LAN server only; the web addresses above are HTTPS, where saving works as on any site. Firefox saves the STL and ZIP files without asking. Chrome has not been tried and may ask whether to keep or discard each file: choose Keep. Check with `diag.html` first (Advanced, Developer pages, Browser check). If Chrome blocks the files outright, `docs/DEPLOY.md` says what helps, or use Firefox.
 - **The page looks old after an update:** the version in the header says which build you have. The LAN server serves the build `scripts/serve.sh` made when it was last started: restart it (see `docs/DEPLOY.md`), then reload the page. On the web, a new release shows within a few minutes of its tag; reload the page.
 
+## The example models
+
+`examples/` holds models to try the app with, which its tests use too. They are other people's work, shared on Printables under Creative Commons licences, about half of which allow no commercial use. `examples/SOURCES.md` names each one's author, its page and its licence, and says which were changed.
+
 ## Licence
 
-The app is released under the MIT licence: see `LICENSE`. The example models in `examples/` are not covered by it: they belong to their authors and keep their own terms. The software the app is built with keeps its own licences, which `docs/THIRD_PARTY.md` lists and the app links to as "Third-party licences" at the foot of the Advanced section.
+The app is released under the MIT licence: see `LICENSE`. The example models in `examples/` are not covered by it: they belong to their authors and keep their own terms, as `examples/SOURCES.md` lists them. The software the app is built with keeps its own licences, which `docs/THIRD_PARTY.md` lists and the app links to as "Third-party licences" at the foot of the Advanced section.
 
 The app's layout follows the conventions of BumpMesh, as the original requirements asked. BumpMesh is under the AGPL, so it was a layout reference only: nothing was copied from it.

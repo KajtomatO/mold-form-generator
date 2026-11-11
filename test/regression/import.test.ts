@@ -7,7 +7,7 @@ import { importSolid, type ImportedSolid } from '../../src/core/mesh/shells';
 import { weld } from '../../src/core/mesh/weld';
 import { withArena } from '../../src/core/solid/arena';
 import { parseStl } from '../../src/core/stl/parse';
-import { EXAMPLE_IDS, exampleBytes, loadExample, loadManifold } from '../fixtures/loadExamples';
+import { EXAMPLE_IDS, exampleBytes, loadExample, loadManifold, skipWithout } from '../fixtures/loadExamples';
 import { asciiStl, cracked, inverted, withoutTriangles } from '../fixtures/synthetic';
 import { GOLDEN } from './golden';
 
@@ -93,7 +93,8 @@ describe('plan facts on import', () => {
     expect(withArena(api, (arena) => importSolid(arena, opened, auditEdges(opened)).report.route)).not.toBe('manifold');
   });
 
-  it('the barrel is the only ASCII example', () => {
+  it('the barrel is the only ASCII example', (ctx) => {
+    skipWithout(ctx, 'barrel');
     expect(EXAMPLE_IDS.filter((id) => loadExample(id).parsed.format === 'ascii')).toEqual(['barrel']);
     expect(loadExample('barrel').parsed.rawTriangleCount).toBe(9412);
   });
@@ -109,7 +110,8 @@ describe('plan facts on import', () => {
     expect(weld(again.positions).positions.length / 3).toBe(19135);
   });
 
-  it('the barrel decomposes to +7489 and -3432 within 1%, recording the void', () => {
+  it('the barrel decomposes to +7489 and -3432 within 1%, recording the void', (ctx) => {
+    skipWithout(ctx, 'barrel');
     const { report } = importExample('barrel');
     expect(report.shells.map((s) => s.kind)).toEqual(['solid', 'void']);
     within(report.shells[0].volume, 7489, 0.01);

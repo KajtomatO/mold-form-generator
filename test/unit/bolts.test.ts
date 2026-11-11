@@ -14,7 +14,7 @@ import { buildBoltCoupon, type BoltCoupon } from '../../src/core/parts/fitTest';
 import { withArena, type Arena } from '../../src/core/solid/arena';
 import { outset } from '../../src/core/solid/rect';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { EXAMPLE_IDS, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { EXAMPLE_IDS, hasExample, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { clipToBox, holeCentres } from '../fixtures/solidChecks';
 import { box } from '../fixtures/synthetic';
 
@@ -192,9 +192,12 @@ describe('the rim with bolts', () => {
     // Jersey's box is wider than deep, so the pry notches are on the front and back, and the slots open at the sides.
     expect(on.O.x1 - on.O.x0).toBeGreaterThan(on.O.y1 - on.O.y0);
     expect(b.spots.map((s) => s.exit)).toEqual(['x0', 'x1', 'x0', 'x1']);
-    // A box deeper than wide turns them the other way.
-    const deep = deriveRim(boundsOf('vis35', bolted()), bolted());
-    expect(deep.bolts!.spots.map((s) => s.exit)).toEqual(['y0', 'y0', 'y1', 'y1']);
+    // A box deeper than wide turns them the other way. VIS-35's is the one at hand, kept on the maintainer's
+    // machine only, so a clone checks the rest of this test without it.
+    if (hasExample('vis35')) {
+      const deep = deriveRim(boundsOf('vis35', bolted()), bolted());
+      expect(deep.bolts!.spots.map((s) => s.exit)).toEqual(['y0', 'y0', 'y1', 'y1']);
+    }
     // Each slot runs from the hex round the axis out past its wall.
     const outline = slotOutline(b, b.spots[1]);
     expect(Math.max(...outline.map((p) => p[0]))).toBeCloseTo(on.O.x1 + 1, 9);
@@ -409,7 +412,8 @@ describe('the bolts in place of the tape count', () => {
     expect(advice.spans[0]).toBeCloseTo(2 * 34.805, 2);
   });
 
-  it('VIS-35: tape across the middle where the bolts stand over 100 mm apart', () => {
+  it('VIS-35: tape across the middle where the bolts stand over 100 mm apart', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const advice = boltAdvice(4.26, 10, rim('vis35').bolts!);
     expect(advice.spans[1]).toBeGreaterThan(2 * SEAL_SPACING_MM);
     expect(advice.middle).toEqual([0, 2]);
@@ -529,7 +533,8 @@ describe('the bolts\' cuts on the solids', () => {
 
 // Kept apart from boltClearances' own use, so a clash found there is not just the check agreeing with itself.
 describe('boltClearances on the real rim', () => {
-  it('matches boltWalls', () => {
+  it('matches boltWalls', (ctx) => {
+    skipWithout(ctx, 'barrel');
     const params = bolted();
     const rim = deriveRim(boundsOf('barrel', params), params);
     expect(boltClearances(wallsOf(rim))).toEqual(boltWalls(rim));

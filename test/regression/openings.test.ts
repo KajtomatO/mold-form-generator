@@ -1,5 +1,5 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { boreSilicone, replicateOpenings, type PlacedOpening } from '../../src/core/analysis/placement';
 import { mergeTree, significantLeaves } from '../../src/core/analysis/peaks';
 import { boreRadius, checkOpening, discMinimum, dropOpening, heightAt, isValid, openingSizes, placementSpace, topRadius, type OpeningKind, type OpeningSpot } from '../../src/core/analysis/validate';
@@ -19,7 +19,7 @@ import { Arena, checked, withArena } from '../../src/core/solid/arena';
 import { recordSection } from '../fixtures/benchmarks';
 import { countHandles } from '../fixtures/handles';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { EXAMPLE_IDS, hasExample, loadExample, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { buildMold, type Mold } from '../fixtures/mold';
 import { openMold, planOpenings, type OpenedMold, type PlannedOpenings } from '../fixtures/openings';
 import { boxSolid, clipToBox, compareVoids, CRUMB_MM3, insideOutline, outlineArea, readPart, splitShells, unpose, type ExpectedVoid } from '../fixtures/solidChecks';
@@ -136,7 +136,7 @@ describe('peaks and placement on the 8 examples', () => {
   });
 
   it('the persistence filter matters on real fields: leaves under the limit, on every model with more than a top', () => {
-    for (const id of ['benchy', 'goddess', 'vis35', 'x8'] as ExampleId[]) {
+    for (const id of (['benchy', 'goddess', 'vis35', 'x8'] as ExampleId[]).filter(hasExample)) {
       const tree = mergeTree(plannedAtDefaults(id).tile);
       expect(tree.leaves.length, id).toBeGreaterThan(significantLeaves(tree, 1.5).length);
       // Births at a flat level fold away, so the sweep starts far more basins than it keeps leaves.
@@ -145,7 +145,8 @@ describe('peaks and placement on the 8 examples', () => {
   });
 
   describe('the plan\'s plateau flags', () => {
-    it.each(PEAK_MODELS)('%s has none, so its pour goes within 1 mm of its root peak', (id) => {
+    it.for(PEAK_MODELS)('%s has none, so its pour goes within 1 mm of its root peak', (id, test) => {
+      skipWithout(test, id);
       const p = plannedAtDefaults(id);
       expect(p.placement.bodies.map((b) => b.plateau)).toEqual([false]);
       const peak = highestOf(p.tile);
@@ -169,7 +170,8 @@ describe('peaks and placement on the 8 examples', () => {
       expect(Math.hypot(pour.x - middle[0], pour.y - middle[1])).toBeLessThan(Math.hypot(cornerX - middle[0], cornerY - middle[1]));
     });
 
-    it.each(PLATEAU_MODELS)('%s is flagged, and its pour is on the flat top, as far from the edge as it gets', (id) => {
+    it.for(PLATEAU_MODELS)('%s is flagged, and its pour is on the flat top, as far from the edge as it gets', (id, test) => {
+      skipWithout(test, id);
       const p = plannedAtDefaults(id);
       expect(p.placement.bodies.some((b) => b.plateau)).toBe(true);
       for (const [b, body] of p.search.bodies.entries()) {
@@ -184,7 +186,8 @@ describe('peaks and placement on the 8 examples', () => {
       }
     });
 
-    it('jersey\'s is at the middle of its top, by symmetry, and barrel\'s at the middle of its lid', () => {
+    it('jersey\'s is at the middle of its top, by symmetry, and barrel\'s at the middle of its lid', (test) => {
+      skipWithout(test, 'barrel');
       const jersey = poursOf(plannedAtDefaults('jersey'))[0];
       expect(Math.hypot(jersey.x, jersey.y)).toBeLessThanOrEqual(0.25);
       const barrel = poursOf(plannedAtDefaults('barrel'))[0];
@@ -367,7 +370,8 @@ describe('peaks and placement on the 8 examples', () => {
   });
 
   describe('at a preview cell', () => {
-    it.each([['wolf', 2], ['goddess', 2], ['jersey', 1], ['barrel', 1]] as [ExampleId, number][])('%s places much as at the export cell, in the same box', (id, slack) => {
+    it.for([['wolf', 2], ['goddess', 2], ['jersey', 1], ['barrel', 1]] as [ExampleId, number][])('%s places much as at the export cell, in the same box', ([id, slack], test) => {
+      skipWithout(test, id);
       const { mesh, bounds } = orientedExample(id);
       const preview = planOpenings(mesh, bounds, goldenParams(), { cell: 0.5 });
       const final = plannedAtDefaults(id);
@@ -388,7 +392,7 @@ describe('peaks and placement on the 8 examples', () => {
     });
   });
 
-  // M11c: the user's own file, 6 closed parts of one chick, 5 passing into the largest, which placement took
+  // M11c: the user's file, 6 closed parts of one chick, 5 passing into the largest, which placement took
   // for 6 bodies: pours on 3 of them and errors on the other 3 ("Placed 0 of 1 pours on the body with its
   // peak at (125.0, 104.0)", at (118.5, 83.5) and at (131.5, 83.5)), which kept Export ZIP off.
   describe('the chick, a multi-colour model of 6 parts that overlap', () => {
@@ -791,15 +795,18 @@ function onOpened(id: ExampleId, params: Params, run: (ctx: Ctx) => void, modes:
   });
 }
 
+/** One cut mold across a describe's tests. Without the model's file nothing is built, and each test skips, naming it. */
 function sharedOpened(id: ExampleId, params: Params = paramsWith()): () => Ctx {
-  let ctx: Ctx;
+  let ctx: Ctx | undefined;
   beforeAll(() => {
+    if (!hasExample(id)) return;
     const arena = new Arena(api);
     const m = buildMold(arena, loadExample(id).welded, params);
     ctx = { arena, m, o: openMold(arena, m, params), params };
   });
-  afterAll(() => ctx.arena.dispose());
-  return () => ctx;
+  beforeEach((test) => skipWithout(test, id));
+  afterAll(() => ctx?.arena.dispose());
+  return () => ctx!;
 }
 
 describe.each(FULL ? EXAMPLE_IDS : (['jersey', 'barrel'] as ExampleId[]))('%s, cut, at defaults', (id) => {
@@ -940,6 +947,7 @@ describe('parameter matrix', () => {
   ];
   const models: ExampleId[] = FULL ? ['jersey', 'barrel', 'wolf'] : ['jersey'];
   describe.each(models)('%s', (id) => {
+    beforeEach((test) => skipWithout(test, id));
     it.each(MATRIX)('%s has no parameter error and passes every check', (_, change, codesFor) => {
       const params = paramsWith(change);
       expect(crossParameterErrors(params)).toEqual([]);
@@ -955,7 +963,8 @@ describe('parameter matrix', () => {
     }, SLOW);
   });
 
-  it('barrel at pour 20 refuses the vent beside it and says so once, as the pour covers its peak', () => {
+  it('barrel at pour 20 refuses the vent beside it and says so once, as the pour covers its peak', (test) => {
+    skipWithout(test, 'barrel');
     const p = planWith('barrel', (x) => (x.pour.diameter = 20));
     expect(poursOf(p)).toHaveLength(1);
     expect(ventsOf(p)).toEqual([]);
@@ -1045,7 +1054,8 @@ describe('other routes to a mold', () => {
     expect(ledger.live()).toEqual([]);
   });
 
-  it.runIf(FULL)('VIS-35 on its upper level, with the pad trimmed, passes every check', () => {
+  it.runIf(FULL)('VIS-35 on its upper level, with the pad trimmed, passes every check', (test) => {
+    skipWithout(test, 'vis35');
     withArena(api, (arena) => {
       const params = paramsWith();
       const m = buildMold(arena, loadExample('vis35').welded, params, { useUpper: true });

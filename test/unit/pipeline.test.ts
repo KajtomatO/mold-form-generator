@@ -17,7 +17,7 @@ import type { FromWorker, ToWorker, WorkerLike } from '../../src/workers/protoco
 import { buildField } from '../../src/core/field/build';
 import { exportPlan, fieldSettings, planField } from '../../src/core/field/grid';
 import { orientedExample } from '../fixtures/fieldRuns';
-import { exampleBytes, EXAMPLE_FILES, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { asciiStl, box, inverted, toSoup, withoutTriangles } from '../fixtures/synthetic';
 
@@ -379,7 +379,8 @@ describe('the preview against a build through core alone', () => {
 });
 
 describe('what a coarse preview may say', () => {
-  it('VIS-35 2 x 1: the preview does not pass on its own field\'s wall check (G6), and the export, on the export field, warns of the thin wall at spacing 10', async () => {
+  it('VIS-35 2 x 1: the preview does not pass on its own field\'s wall check (G6), and the export, on the export field, warns of the thin wall at spacing 10', async (ctx) => {
+    skipWithout(ctx, 'vis35');
     const p = pipeline();
     p.setParams((params) => {
       params.grid.nx = 2;
@@ -409,7 +410,8 @@ describe('what a coarse preview may say', () => {
 });
 
 describe('base confirmation', () => {
-  it('VIS-35: the footprint\'s level report comes with the import, ahead of T2, and "Use upper level" clears it', async () => {
+  it('VIS-35: the footprint\'s level report comes with the import, ahead of T2, and "Use upper level" clears it', async (ctx) => {
+    skipWithout(ctx, 'vis35');
     const p = pipeline();
     load(p, 'vis35');
     await p.idle();
@@ -428,7 +430,8 @@ describe('base confirmation', () => {
     expect(p.geometryHash().all).toBe(await fresh(p));
   }, 120_000);
 
-  it('"Use upper level" stands on the level the warning offered, not the largest one: the barrel\'s +Z face', async () => {
+  it('"Use upper level" stands on the level the warning offered, not the largest one: the barrel\'s +Z face', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const p = pipeline();
     load(p, 'barrel');
     await p.idle();
@@ -558,7 +561,8 @@ describe('the export field\'s wall check, once the preview settles (G6)', () => 
     expect(p.diagnostics.filter((d) => d.code === 'thin-tile-wall').map((d) => d.exportCell)).toEqual([true]);
   }, 180_000);
 
-  it('VIS-35 2 x 1 at spacing 10: the thin wall the preview cannot see is reported before any export', async () => {
+  it('VIS-35 2 x 1 at spacing 10: the thin wall the preview cannot see is reported before any export', async (ctx) => {
+    skipWithout(ctx, 'vis35');
     const p = walled(counted());
     p.setParams((params) => {
       params.grid.nx = 2;

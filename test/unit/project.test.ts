@@ -21,7 +21,7 @@ import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import type { WorkerLike } from '../../src/workers/protocol';
 import { HASH_ON_READ_BYTES, runProjectJob, type Opened } from '../../src/workers/projectJob';
 import { inProcessField, inProcessProject, inProcessSolid } from '../fixtures/inProcessWorker';
-import { exampleBytes, EXAMPLE_FILES } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, hasExample, skipWithout } from '../fixtures/loadExamples';
 import { declaredSize, raised, zipDates } from '../fixtures/projectFiles';
 import { asciiStl, box, join as joinMeshes, toSoup } from '../fixtures/synthetic';
 
@@ -411,7 +411,8 @@ describe('project.worker\'s jobs', () => {
     expect(opened.notes).toEqual([]);
   });
 
-  it('a model.stl that is not the one project.json names, a .moldproj without its STL, and malformed JSON are refused, naming the file', () => {
+  it('a model.stl that is not the one project.json names, a .moldproj without its STL, and malformed JSON are refused, naming the file', (ctx) => {
+    skipWithout(ctx, 'barrel');
     const other = exampleBytes('barrel');
     const swapped = zipSync({ [PROJECT_ENTRY]: strToU8(projectJson(file())), [MODEL_ENTRY]: other });
     expect(open(swapped, 'swapped.moldproj')).toBe(`swapped.moldproj is damaged or was changed: the model inside it is not the one its settings were saved for. ${OPEN_AGAIN}`);
@@ -553,7 +554,8 @@ describe('save and open with the real pipeline on jersey', () => {
     return p;
   };
   const jersey = exampleBytes('jersey');
-  const barrel = exampleBytes('barrel');
+  // Read in the tests that use it, which skip in a checkout without the barrel.
+  const barrel = (): Uint8Array => exampleBytes('barrel');
   const moldproj = (f: ProjectFile, stl = jersey): File => new File([packProject(projectJson(f), stl).slice()], 'jersey-barrier.moldproj');
   const settingsJson = (f: ProjectFile): File => new File([projectJson(f)], 'project.json');
 
@@ -571,7 +573,8 @@ describe('save and open with the real pipeline on jersey', () => {
     return saved;
   }
 
-  it('Save project then Open gives the same project, edited flags included, the same STL and geometry, an empty history, and undo after it', async () => {
+  it('Save project then Open gives the same project, edited flags included, the same STL and geometry, an empty history, and undo after it', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const saves = captureSaves();
     let now = 0;
     const store = new Store(fresh(), () => (now += 1000), files);
@@ -605,7 +608,7 @@ describe('save and open with the real pipeline on jersey', () => {
 
     // Another page with work of its own opens it: it asks first, then everything comes back, and the history starts empty.
     const second = new Store(fresh(), () => (now += 1000), files);
-    second.load(barrel, EXAMPLE_FILES.barrel);
+    second.load(barrel(), EXAMPLE_FILES.barrel);
     await second.pipeline.idle();
     second.setParam('silicone.t', 5);
     await second.openFile(new File([zip.slice()], 'jersey-barrier.moldproj'));
@@ -695,7 +698,9 @@ describe('save and open with the real pipeline on jersey', () => {
     for (let k = 0; k < 3; k++) expect(mesh.positions[mesh.indices[t * 3 + k] * 3 + 2]).toBeCloseTo(5, 5);
 
     // VIS-35 on its upper level: the plane kept is the level's, 0.41 mm above its lowest point read from
-    // its bytes, and faces of that level lie on it; the lower plane would not be the one saved.
+    // its bytes, and faces of that level lie on it; the lower plane would not be the one saved. VIS-35 is
+    // kept on the maintainer's machine only, so a clone checks the jersey half alone.
+    if (!hasExample('vis35')) return;
     const vis = fresh();
     const bytes = exampleBytes('vis35');
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -717,7 +722,8 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(Math.abs(zs[0] - minZ)).toBeGreaterThan(0.3);
   });
 
-  it('a corrupt project says why, naming the file, and the model on screen, its settings and its history stay as they were', async () => {
+  it('a corrupt project says why, naming the file, and the model on screen, its settings and its history stay as they were', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const store = new Store(fresh(), () => 0, files);
     const p = store.pipeline;
     store.load(jersey, EXAMPLE_FILES.jersey);
@@ -737,7 +743,7 @@ describe('save and open with the real pipeline on jersey', () => {
       ['typed.json', strToU8(edited('params.silicone.t', 'thick')), /^typed\.json cannot be used: its Silicone thickness must be a number, not "thick"\./],
       ['newer.json', strToU8(edited('schemaVersion', 9)), /^newer\.json was saved by a newer version of the app/],
       ['cut.moldproj', packed.subarray(0, packed.length - 40), /^cut\.moldproj is damaged and cannot be unpacked\./],
-      ['swapped.moldproj', zipSync({ [PROJECT_ENTRY]: strToU8(projectJson(good)), [MODEL_ENTRY]: barrel }), /^swapped\.moldproj is damaged or was changed: the model inside it is not the one its settings were saved for\./],
+      ['swapped.moldproj', zipSync({ [PROJECT_ENTRY]: strToU8(projectJson(good)), [MODEL_ENTRY]: barrel() }), /^swapped\.moldproj is damaged or was changed: the model inside it is not the one its settings were saved for\./],
       ['unreadable.moldproj', zipSync({ [PROJECT_ENTRY]: strToU8(projectJson({ ...good, modelSha256: nodeSha(garbage) })), [MODEL_ENTRY]: garbage }), /^unreadable\.moldproj is damaged: the model inside it cannot be read\./],
       ['bomb.moldproj', declaredSize(packed, MODEL_ENTRY, 0xf0000000), /^bomb\.moldproj is damaged or too large: the model inside it says it unpacks to 3840 MB/],
       ['photo.png', Uint8Array.from([0x89, 0x50, 0x4e, 0x47, ...new Uint8Array(100)]), /^photo\.png is not an STL or a project file, so it was not opened\./],
@@ -801,7 +807,8 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(p.modelSha256).toBe(nodeSha(big));
   }, 120_000);
 
-  it('settings from an export ZIP or a project.json apply to the same model in full and as one step, and count as saved; to another model, its parameters alone; with no model, a note', async () => {
+  it('settings from an export ZIP or a project.json apply to the same model in full and as one step, and count as saved; to another model, its parameters alone; with no model, a note', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const store = new Store(fresh(), () => 0, files);
     const p = store.pipeline;
     // No model yet: a note, and nothing changes.
@@ -839,7 +846,7 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(p.params.silicone.t).toBe(5);
 
     // The same settings saved for another model of the same name, by hash: the parameters only.
-    const other = projectFile({ params, plane: { rank: 2, upper: false }, pins: v1.pins, removed: v1.removed }, EXAMPLE_FILES.jersey, { modelSha256: nodeSha(barrel), basePlane: null });
+    const other = projectFile({ params, plane: { rank: 2, upper: false }, pins: v1.pins, removed: v1.removed }, EXAMPLE_FILES.jersey, { modelSha256: nodeSha(barrel()), basePlane: null });
     const zip = zipSync({ 'cover.stl': new Uint8Array(84), [PROJECT_ENTRY]: strToU8(projectJson(other)) });
     await store.openFile(new File([zip.slice()], 'barrel-mold.zip'));
     expect(store.fileNotice.value).toMatchObject({ severity: 'warning', message: 'barrel-mold.zip was saved for another model of the same name, jersey-barrier.stl, whose contents differ from the one on screen, so only its settings were applied: the model keeps its own base face, pinned openings and removed vents.' });
@@ -1058,7 +1065,8 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(p.diagnostics.some((d) => d.code === 'plane-mismatch' || d.code === 'preview-coarser')).toBe(false);
   });
 
-  it('a newer open or load supersedes a project still being read, and an STL that cannot be read cannot be saved', async () => {
+  it('a newer open or load supersedes a project still being read, and an STL that cannot be read cannot be saved', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const saves = captureSaves();
     // A project worker that holds its job until released, so the load comes while the open waits for it.
     let release = (): void => {};
@@ -1078,7 +1086,7 @@ describe('save and open with the real pipeline on jersey', () => {
     const p = store.pipeline;
     const opening = store.openFile(moldproj(file()));
     await vi.waitFor(() => expect(store.fileBusy.value).toBe('Opening jersey-barrier.moldproj…'));
-    store.load(barrel, EXAMPLE_FILES.barrel);
+    store.load(barrel(), EXAMPLE_FILES.barrel);
     release();
     await opening;
     expect(p.modelName).toBe(EXAMPLE_FILES.barrel);
@@ -1096,7 +1104,8 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(store.fileNotice.value).toMatchObject({ severity: 'error', message: 'broken.stl cannot be saved as a project, as it could not be read. Open an STL that loads, then save.' });
   });
 
-  it('a file that would replace a model with unsaved changes asks first: cancel keeps it, save saves then opens, and opening without saving opens', async () => {
+  it('a file that would replace a model with unsaved changes asks first: cancel keeps it, save saves then opens, and opening without saving opens', async (ctx) => {
+    skipWithout(ctx, 'barrel');
     const saves = captureSaves();
     let now = 0;
     const store = new Store(fresh(), () => (now += 1000), files);
@@ -1104,7 +1113,7 @@ describe('save and open with the real pipeline on jersey', () => {
     store.load(jersey, EXAMPLE_FILES.jersey);
     await p.idle();
     // Nothing changed: an STL replaces it at once.
-    await store.openFile(new File([barrel.slice()], EXAMPLE_FILES.barrel));
+    await store.openFile(new File([barrel().slice()], EXAMPLE_FILES.barrel));
     expect(p.modelName).toBe(EXAMPLE_FILES.barrel);
     await p.idle();
     store.setParam('silicone.t', 4);
@@ -1117,7 +1126,7 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(store.history.depth).toEqual({ undo: 1, redo: 0 });
 
     // Settings alone never ask: they are one step undo takes back.
-    await store.openFile(settingsJson(projectFile({ ...p.project(), params: { ...p.params, silicone: { ...p.params.silicone, t: 4.5 } } }, EXAMPLE_FILES.barrel, { modelSha256: nodeSha(barrel), basePlane: null })));
+    await store.openFile(settingsJson(projectFile({ ...p.project(), params: { ...p.params, silicone: { ...p.params.silicone, t: 4.5 } } }, EXAMPLE_FILES.barrel, { modelSha256: nodeSha(barrel()), basePlane: null })));
     expect(store.replacing.value).toBeNull();
     expect(p.params.silicone.t).toBe(4.5);
     store.setParam('silicone.t', 4);
@@ -1132,9 +1141,9 @@ describe('save and open with the real pipeline on jersey', () => {
     await p.idle();
 
     store.setParam('silicone.t', 5);
-    await store.openFile(new File([barrel.slice()], EXAMPLE_FILES.barrel));
+    await store.openFile(new File([barrel().slice()], EXAMPLE_FILES.barrel));
     // A newer file supersedes the question.
-    await store.openFile(new File([barrel.slice()], 'barrel copy.stl'));
+    await store.openFile(new File([barrel().slice()], 'barrel copy.stl'));
     expect(store.replacing.value).toEqual({ name: 'barrel copy.stl', model: EXAMPLE_FILES.jersey });
     await store.answerReplace('discard');
     expect(p.modelName).toBe('barrel copy.stl');

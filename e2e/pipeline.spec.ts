@@ -5,7 +5,7 @@ import { Pipeline } from '../src/app/pipeline';
 import { hashBytes, hashMesh } from '../src/app/hash';
 import { weld } from '../src/core/mesh/weld';
 import { parseStl } from '../src/core/stl/parse';
-import { exampleBytes, EXAMPLE_FILES, type ExampleId } from '../test/fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, hasExample, LOCAL_ONLY, type ExampleId } from '../test/fixtures/loadExamples';
 import { budgetFromNode, PLAN_TARGETS, tableBudgetMs } from '../src/app/budgets';
 import { withRows } from '../test/fixtures/benchmarks';
 import { NO_FIREFOX_WEBGL } from './firefox';
@@ -300,9 +300,20 @@ test.describe('the worker pipeline on pipeline.html', () => {
   });
 });
 
+test.describe('the examples a clone of the public repository has', () => {
+  // R37: under CFG_WITHOUT_LOCAL_EXAMPLES the local-only files are still on disk, where the development server
+  // and the harness would serve them, so a test that drops one without skipping would pass here and fail in a clone.
+  test('@smoke the servers answer an example not in this checkout with a 404, as a clone\'s would, and one here with its file', async ({ page }) => {
+    await openPipeline(page);
+    const status = (file: string): Promise<number> => page.evaluate(async (f) => (await fetch(`/examples/${encodeURIComponent(f)}`)).status, file);
+    expect(await status(EXAMPLE_FILES.jersey)).toBe(200);
+    for (const id of LOCAL_ONLY) expect(await status(EXAMPLE_FILES[id]), id).toBe(hasExample(id) ? 200 : 404);
+  });
+});
+
 test.describe('every example matches Node', () => {
   test.skip(!FULL, 'all 7 run with CFG_FULL=1');
-  for (const id of Object.keys(EXAMPLE_FILES) as ExampleId[]) {
+  for (const id of EXAMPLE_IDS) {
     test(`${id}: field, openings, cover and base hash as in Node`, async ({ page }) => {
       const errors: string[] = [];
       await openPipeline(page, errors);
@@ -555,7 +566,7 @@ const TIERS: Tier[] = ['t1', 't2', 'first', 'drag', 'cut'];
 test.describe('budgets', () => {
   // The budgets come from the M3 and M4 tables per model, which have no row for the chick, added at M11c:
   // only `--record` measures those tables again.
-  const MODELS: ExampleId[] = FULL ? (Object.keys(EXAMPLE_FILES) as ExampleId[]).filter((id) => id !== 'chick') : ['jersey', 'benchy'];
+  const MODELS: ExampleId[] = FULL ? EXAMPLE_IDS.filter((id) => id !== 'chick') : ['jersey', 'benchy'];
   const GRIDS: [ExampleId, number, number][] = FULL ? [['benchy', 2, 3], ['x8', 3, 3]] : [];
   const RECORD = process.env.CFG_RECORD === '1';
 

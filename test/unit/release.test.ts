@@ -253,7 +253,7 @@ describe('the GitHub Pages build', () => {
     // upload-pages-artifact v4 and later leave out dotfiles unless told, and .nojekyll is one.
     const upload = steps.indexOf('path: ${{ runner.temp }}/site');
     expect(steps[upload + 1]).toBe('include-hidden-files: true');
-    // The tests wait for the owner's decision on the example models (docs/RELEASING.md).
+    // The tests run on the server, which holds the two local-only test models (docs/RELEASING.md).
     expect(steps.filter((line) => /ci\.sh|vitest|playwright|npm (run )?test/.test(line))).toEqual([]);
   });
 

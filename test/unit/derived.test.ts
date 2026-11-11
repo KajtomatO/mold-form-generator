@@ -6,7 +6,7 @@ import { defaultParams } from '../../src/core/params/defaults';
 import { deriveRim, moldBounds, type Rim } from '../../src/core/parts/rim';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
-import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, type ExampleId } from '../fixtures/loadExamples';
+import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, hasExample, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import type { GeometryReports } from '../../src/core/analysis/reports';
 import { OPENING_GOLDEN, REPORT_GOLDEN, SOLID_GOLDEN } from '../regression/golden';
 
@@ -125,7 +125,7 @@ describe('the preview\'s silicone figure', () => {
   });
 
   it('at the export\'s cell and raise, the same sum matches M3\'s solids within 0.5%', async () => {
-    for (const id of ['barrel', 'jersey', 'chick'] as ExampleId[]) {
+    for (const id of (['barrel', 'jersey', 'chick'] as ExampleId[]).filter(hasExample)) {
       const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
       try {
         p.load(exampleBytes(id), EXAMPLE_FILES[id]);
@@ -167,7 +167,8 @@ describe('the preview\'s silicone figure', () => {
     expect(previewSilicone(new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true }))).toBeNull();
   });
 
-  it('the advice on t: a warning under 3 mm, and 4 to 5 mm for a cavity over 100 mm tall such as VIS-35\'s', () => {
+  it('the advice on t: a warning under 3 mm, and 4 to 5 mm for a cavity over 100 mm tall such as VIS-35\'s', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const vis35 = read.get('vis35')!.rim, jersey = read.get('jersey')!.rim;
     // VIS-35's cavity is 134 mm tall, the plan's figure, and jersey's 24.
     expect(vis35.hMax).toBeGreaterThan(130);

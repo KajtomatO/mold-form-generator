@@ -16,7 +16,7 @@ const folded = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ')
 const missing = (text: string, phrases: string[]): string[] => phrases.filter((phrase) => !folded(text).includes(folded(phrase)));
 
 describe('the requirement map in docs/REQUIREMENTS.md', () => {
-  it('maps every requirement R01 to R36 to test files and titles that exist, or to user checks section 10 lists', () => {
+  it('maps every requirement R01 to R37 to test files and titles that exist, or to user checks section 10 lists', () => {
     expect(mapProblems(requirements, read)).toEqual([]);
   });
 
@@ -59,7 +59,7 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(problems((rows) => rows.set('R11', 'U1'))).toEqual(['R11 names U1, but section 10 does not list R11 under it.']);
     expect(problems((rows) => rows.set('R02', '`test/unit/a.test.ts` "the box is closed"'))).toEqual(["Section 10 lists R02 under U1, but R02's row does not name U1."]);
     expect(problems((rows) => rows.set('R12', '`test/unit/a.test.ts` "reads the field"; M3 cover checks'))).toEqual(['R12: "M3 cover checks" is neither a backticked test file with quoted titles nor a user check\'s id.']);
-    expect(problems((rows) => rows.delete('R36'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R35, not R01 to R36 in order\.$/)]);
+    expect(problems((rows) => rows.delete('R37'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R36, not R01 to R37 in order\.$/)]);
   });
 
   it('section 10 is the fixed list of user checks, and every one covers a requirement', () => {
@@ -68,11 +68,12 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D16 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D17 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 16 }, (_, k) => `D${k + 1}`));
-    // R1's, the user's of 2026-11-09, with their date, and the base layer's of the same day.
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 17 }, (_, k) => `D${k + 1}`));
+    // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
+    expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
     for (const cells of decisions) expect(cells[1].length, cells[0]).toBeGreaterThan(20);
     const open = tableRows(section(requirements, 9)!);
     // The user settled the M11a memory deviation and the project's licence on 2026-11-09.
@@ -80,8 +81,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(open.find((cells) => cells[0].includes('Which licence'))?.[2]).toMatch(/^answered 2026-11-09: MIT/);
     // The physical unknowns are the user's to settle by a test pour, and stay open until they do.
     expect(open.find((cells) => cells[0].includes('Whether 3 mm holds up'))?.[2]).toMatch(/^open/);
-    // Publishing the source and the example models waits for the user, before the first push.
-    expect(open.find((cells) => cells[0].startsWith('Source publication and the example models'))?.[2]).toMatch(/^open: decided by the user before the first push/);
+    // The user decided on 2026-11-11: the source is public, with the example models whose source is known, and the name stands.
+    expect(open.find((cells) => cells[0].startsWith('Source publication and the example models'))?.[2]).toMatch(/^answered 2026-11-11: public/);
+    expect(open.find((cells) => cells[0].startsWith('The name\'s spelling'))?.[2]).toMatch(/^answered 2026-11-11: confirmed/);
     // The live memory meter is future work, with what the browser allows.
     expect(section(requirements, 8)).toMatch(/### Future work[\s\S]*live memory meter[\s\S]*measureUserAgentSpecificMemory[\s\S]*cross-origin isolation[\s\S]*meshoptimizer/);
     // So are the user's reset button and the marks on changed settings, after PrusaSlicer.

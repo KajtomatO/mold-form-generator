@@ -22,7 +22,7 @@ import { bruteDilate } from '../fixtures/bruteDilate';
 import { cornerRaster } from '../fixtures/cornerRaster';
 import { ANALYTIC_SHAPES, cupAir, cupSilicone, holedBlockSilicone, invertedCupInterior, invertedCupSilicone, mushroomSilicone, voxelSilicone } from '../fixtures/fieldOracles';
 import { bareSettings, defaultSettings, orientedExample } from '../fixtures/fieldRuns';
-import { EXAMPLE_IDS, loadExample, loadManifold, type ExampleId } from '../fixtures/loadExamples';
+import { EXAMPLE_IDS, loadExample, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { box, cup, HOLED_BLOCK, holedBlock, invertedCup, join, mushroom } from '../fixtures/synthetic';
 import { FIELD_GOLDEN, GOLDEN } from './golden';
 
@@ -269,7 +269,8 @@ describe.each(EXAMPLE_IDS)('field of %s', (id) => {
 });
 
 describe('dilation against brute force on real fields', () => {
-  it.each([['benchy', 0.125], ['goddess', 0.125], ['jersey', 0.25], ['barrel', 0.125]] as const)('%s at cell %s', (id, cell) => {
+  it.for([['benchy', 0.125], ['goddess', 0.125], ['jersey', 0.25], ['barrel', 0.125]] as const)('%s at cell %s', ([id, cell], ctx) => {
+    skipWithout(ctx, id);
     const { mesh, bounds } = orientedExample(id);
     const settings = { ...defaultSettings(bounds, cell), cellFinal: cell };
     const plan = planField(bounds, settings);
@@ -313,7 +314,8 @@ describe('plan facts on the field', () => {
     expect(countBodies(mesh)).toBe(8);
   });
 
-  it('VIS-35 2x1 at spacing 10 warns of a thin wall, which it measures', () => {
+  it('VIS-35 2x1 at spacing 10 warns of a thin wall, which it measures', (ctx) => {
+    skipWithout(ctx, 'vis35');
     const { mesh, bounds } = orientedExample('vis35');
     const thin = { ...defaultSettings(bounds), nx: 2, ny: 1, spacing: 10 };
     const plan = planField(bounds, thin);
@@ -361,7 +363,8 @@ describe('plan facts on the field', () => {
     expect(built.diagnostics.map((d) => d.code)).toEqual(['tiles-merged']);
   });
 
-  it.each(['goddess', 'vis35'] as const)('auto spacing passes on %s 2x1', (id) => {
+  it.for(['goddess', 'vis35'] as const)('auto spacing passes on %s 2x1', (id, ctx) => {
+    skipWithout(ctx, id);
     const { mesh, bounds } = orientedExample(id);
     const auto = { ...defaultSettings(bounds), nx: 2, ny: 1 };
     const autoPlan = planField(bounds, auto);
@@ -395,7 +398,8 @@ describe('plan facts on the field', () => {
     expect(built.cavities.count).toBe(id === 'x8' ? 8 : 4);
   });
 
-  it.each(['jersey', 'barrel'] as const)('spacing 0 merges %s into one cavity', (id) => {
+  it.for(['jersey', 'barrel'] as const)('spacing 0 merges %s into one cavity', (id, ctx) => {
+    skipWithout(ctx, id);
     const { mesh, bounds } = orientedExample(id);
     const settings = { ...defaultSettings(bounds), nx: 2, ny: 2, spacing: 0 };
     const built = buildField(mesh, planField(bounds, settings), settings);
@@ -429,7 +433,8 @@ describe('plan facts on the field', () => {
     expect(worst).toBeLessThanOrEqual(bound);
   });
 
-  it('the barrel void is excluded: its 3.43 ml is neither silicone nor sealed air', () => {
+  it('the barrel void is excluded: its 3.43 ml is neither silicone nor sealed air', (ctx) => {
+    skipWithout(ctx, 'barrel');
     const { mesh, bounds } = orientedExample('barrel');
     const report = solidReport('barrel');
     within(report.voidVolume, 3432, 0.01);
@@ -470,7 +475,8 @@ describe('plan facts on the field', () => {
       expect(Math.abs(ml(stray) - ml(plain))).toBeLessThanOrEqual(1e-4);
     });
 
-    it('VIS-35 on its upper level leaves out the pad below z=0.41, which is about 361 x 0.405 mm3', () => {
+    it('VIS-35 on its upper level leaves out the pad below z=0.41, which is about 361 x 0.405 mm3', (ctx) => {
+      skipWithout(ctx, 'vis35');
       const { welded, options } = loadExample('vis35');
       const [lower] = findBaseCandidates(welded, options);
       const upper = candidateAtLevel(welded, lower, upperLevel(lower, options.planeTol)!.offset, options);
