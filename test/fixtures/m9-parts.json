@@ -1,5 +1,5 @@
 {
-  "note": "SHA-256 of the parts M9 (09df91e) exported in Node at these settings, before any M10 change. Bolts off must give the same bytes.",
+  "note": "SHA-256 of the parts M9 (e5256e0) exported in Node at these settings, before any M10 change. Bolts off must give the same bytes.",
   "parts": {
     "jersey": {
       "cover.stl": "ef507904edd294346edd34880f94e1b26bc636dbec4a54daf6dc404130cf42eb",

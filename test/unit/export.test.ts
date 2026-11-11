@@ -910,7 +910,7 @@ describe('the export with bolts, in Node', () => {
     return { p, outputs, files: unzipSync(outputs.zip) };
   }
 
-  // Captured from M9 (09df91e) before any M10 change: the same settings, bolts off and no base layer, which M9
+  // Captured from M9 (e5256e0) before any M10 change: the same settings, bolts off and no base layer, which M9
   // had none of, must give the same bytes, past the header's text, which names the app (m9Sha).
   // it.for, as it.each gives no test context, which the barrel's row skips by without its file.
   it.for([
