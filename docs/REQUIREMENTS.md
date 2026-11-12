@@ -117,6 +117,12 @@ Follow-up from the user (2026-11-12), the same day, after the backlog was listed
 
 So `beta` was pushed at 47fda0e. The backlog goes into 0.2.0: the three features under section 8's "Future work", the two items left over from run FL there, and mesh remesh repair, brought back from "Removed from version 1". U6 passed. The flicker of U2 is an open item for 0.2.0 (section 9). The plans for 0.3.0 and 0.4.0 are recorded under "Future work" and not started.
 
+Follow-up from the user (2026-11-12), the same day, for 0.3.0, quoted in full:
+
+> + Add to 0.3.0 an "example gallery". It will show a gallery of couple primitives and simple models for user to test. It will be DIFFRENT than the "examples" folder we have now. Those are for testing [maby we should rename this folder]. I will specify the example models for gallery later. One of the models will be "default" and will be loaded on page load. Those models will be relativly simple, and lightweith.
+
+Recorded under section 8's "Future work" for 0.3.0, not started. The models in `examples/` stay the regression set.
+
 ## 3. Requirement table
 
 "Check" names the automated checks that verify each requirement, as test files with the titles of the tests or checks inside them that matter, and the checks only the user can do, by their id in section 10. `test/unit/requirements.test.ts` reads this column: it fails when a requirement names no check, when a file named here is no test file (`.test.ts` or `.spec.ts`) or does not exist, when a test file is named with no title, when a title named here is in no test title or check name of that file (a test's or group's own title, or a name in the table its `.each` reads, and never an assertion's message), and when a user check is not in section 10. Several titles are run only by `scripts/ci.sh --full` (`CFG_FULL=1`), the 150 MB test only by `--soak`. Milestone numbers refer to `docs/PLAN.md`.
@@ -264,6 +270,7 @@ Base-mounted displacers for overhangs, bottom-fill channel, shell-and-rib cover,
 | 2026-11-12, left over from run FL, for 0.2.0 | The funnel flange's outline drawn round each pour in the view, at least in Top view | Being designed for 0.2.0. The rings drawn there are also what a click picks to drag an opening, so the outline must be drawn without catching clicks meant for a vent near it (`docs/PLAN.md`, FL). |
 | 2026-11-12, left over from run FL, for 0.2.0 | With a flange, the vent beside the pour stands lower on peaked models, which an info note (`vent-low`) says; and the 0.5 mm gap between a flange and a vent is fixed rather than worked out from the settings | Being designed for 0.2.0, keeping every placement with no flange as it is (D18). |
 | 2026-11-12, by the user, for 0.3.0; not started | A multi-part mold: the "box" (the cover) split into two or more parts to use less silicone. Good examples: VIS-35 and the Goddess statue. Limitation: grid 1 x 1, one model only (section 2) | Noted only, at the user's request: not designed or started until the user asks. |
+| 2026-11-12, by the user, for 0.3.0; not started | An example gallery: a few primitives and simple, lightweight models a user can open to try the app, apart from the regression models in `examples/` (which may be renamed to say they are for testing). One of them is the default, loaded when the page opens. The user will name the models later (section 2) | Noted only, at the user's request. Like the examples, each gallery model needs a known source and a licence that allows publishing it (R37). The page opens empty today, so the browser tests that start from an empty page will need to allow for the default model. |
 | 2026-11-12, by the user, for 0.4.0; not started | A complex mold for an object whose base face must be copied too, such as a die. The silicone mold will probably have to be made of two pieces cast separately; it needs thorough research first (section 2) | Noted only, at the user's request: not researched or started until the user asks. |
 
 ## 9. Open items
