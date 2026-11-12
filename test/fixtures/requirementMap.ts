@@ -239,8 +239,8 @@ export function testTitles(source: string): string[] {
   return titles;
 }
 
-/** The ids R01 to R37, as section 3 must list them. */
-export const REQUIREMENT_IDS = Array.from({ length: 37 }, (_, k) => `R${String(k + 1).padStart(2, '0')}`);
+/** The ids R01 to R38, as section 3 must list them. */
+export const REQUIREMENT_IDS = Array.from({ length: 38 }, (_, k) => `R${String(k + 1).padStart(2, '0')}`);
 
 /**
  * What is wrong with the map, in words that say what to fix; empty when every requirement maps to

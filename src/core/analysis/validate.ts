@@ -16,6 +16,16 @@ export const LONG_VENT_RATIO = 40;
 export const LONG_POUR_MM = 60;
 /** Room to keep between two funnel rims when suggesting a size, in mm. */
 const FUNNEL_GAP = 1;
+/**
+ * FL: between a flange's edge and a vent's mouth, in mm. The spigot centres the funnel to within about
+ * 0.12 mm (the seat clearance over cos 30 degrees), and the flange's edge prints up to half a line wide
+ * of where it is drawn, about 0.2 mm at a 0.4 mm nozzle; 0.5 covers both, with room so the vent's mouth
+ * shows beside the flange while silicone rises in it. It is fixed, so with a 0.4 mm nozzle it stops
+ * covering both past a seat clearance of 0.26 mm in a 30 degree seat (0.21 at 45); the mouth's 0.3 mm
+ * chamfer is outside the bore, so the bore itself stays clear until they add up to 0.8 mm (a clearance of
+ * 0.52 mm at 30 degrees, 0.42 at 45).
+ */
+export const FLANGE_GAP = 0.5;
 
 /** Everything about an opening's size that placement and validation need. */
 export interface OpeningSizes {
@@ -29,17 +39,25 @@ export interface OpeningSizes {
   funnelTop: number | null;
   /** The smallest top diameter a funnel can have on this seat. */
   funnelMinTop: number;
+  /** FL: radius of the funnel's flange, which rests on the top round each pour; 0 with no funnel, no seat or no flange. */
+  flangeRadius: number;
+  /** The top's chamfered edge, which a flange must stay inside to rest flat. */
+  topChamfer: number;
 }
 
 export function openingSizes(params: Params): OpeningSizes {
+  const funnel = params.funnel.generate && params.seat.enabled;
+  const profile = funnelProfile(params);
   return {
     pourDiameter: params.pour.diameter,
     ventDiameter: params.vents.diameter,
     seatDepth: params.seat.enabled ? params.seat.depth : 0,
     seatHalfAngleDeg: params.seat.halfAngleDeg,
     minLand: params.pour.minLand,
-    funnelTop: params.funnel.generate && params.seat.enabled ? params.funnel.topDiameter : null,
-    funnelMinTop: Math.max(params.pour.diameter + 2 * params.funnel.wall, 2 * funnelProfile(params).rNeck),
+    funnelTop: funnel ? params.funnel.topDiameter : null,
+    funnelMinTop: Math.max(params.pour.diameter + 2 * params.funnel.wall, 2 * profile.rNeck),
+    flangeRadius: funnel ? profile.rFlange : 0,
+    topChamfer: params.cover.topChamfer,
   };
 }
 
@@ -140,7 +158,8 @@ export function heightAt(field: Field, x: number, y: number): number {
   return Math.max(low + (high - low) * fv, 0);
 }
 
-export type HardProblem = 'off-cavity' | 'land' | 'top-edge';
+/** FL: 'flange' is a vent where a funnel's flange would rest on its mouth, which the land alone allows. */
+export type HardProblem = 'off-cavity' | 'land' | 'flange' | 'top-edge';
 
 export interface OpeningCheck {
   valid: boolean;
@@ -166,10 +185,13 @@ export function selfCopyDistance(space: PlacementSpace): number {
   return Math.min(space.tilesX > 1 ? space.pitchX : Infinity, space.tilesY > 1 ? space.pitchY : Infinity);
 }
 
-/** A rectangle holding every position whose copies all stay inside the top by `wall`. It can be empty. */
+/**
+ * A rectangle holding every position whose copies all stay inside the top by `wall`, and a pour's flange
+ * on the flat, inside the top's chamfer. It can be empty.
+ */
 function topRect(space: PlacementSpace, kind: OpeningKind): Rect {
   const { O, wall, sizes, tilesX, tilesY, pitchX, pitchY } = space;
-  const inset = wall + topRadius(sizes, kind);
+  const inset = kind === 'pour' && sizes.flangeRadius > 0 ? Math.max(wall + topRadius(sizes, kind), sizes.flangeRadius + sizes.topChamfer) : wall + topRadius(sizes, kind);
   return {
     x0: O.x0 + inset,
     y0: O.y0 + inset,
@@ -178,15 +200,67 @@ function topRect(space: PlacementSpace, kind: OpeningKind): Rect {
   };
 }
 
-function landOk(space: PlacementSpace, spot: OpeningSpot, others: readonly OpeningSpot[]): boolean {
+/** FL: how far a vent's centre must stay from a pour's for the pour's flange to leave the vent's mouth clear, or 0 with no flange. */
+export function flangeReach(sizes: OpeningSizes): number {
+  return sizes.flangeRadius > 0 ? sizes.flangeRadius + topRadius(sizes, 'vent') + FLANGE_GAP : 0;
+}
+
+/** The land alone between a pour's and a vent's centres, as before FL. */
+export function ventLand(sizes: OpeningSizes): number {
+  return topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand;
+}
+
+/**
+ * FL: whether the flange keeps a vent further from a pour than the land does. A flange no wider than the
+ * land less FLANGE_GAP (1 mm at defaults) does not, so every opening stands where it did with none; the
+ * nm of slack keeps float rounding in the sum from deciding it.
+ */
+export function flangeOutreachesLand(sizes: OpeningSizes): boolean {
+  return flangeReach(sizes) > ventLand(sizes) + 1e-6;
+}
+
+/**
+ * FL: the widest flange, in tenths of a mm, that the land alone keeps clear of the vents: the land less
+ * FLANGE_GAP, 1 mm at defaults. Up to it every opening stands where it does with no flange.
+ */
+export function widestFlangeInLand(minLand: number): number {
+  return Math.max(0, Math.floor((minLand - FLANGE_GAP) * 10) / 10);
+}
+
+/** FL: how far apart two pours' centres must be for neither's flange to come within FLANGE_GAP of the other's seat, or 0 with no flange. */
+export function flangeSpacing(sizes: OpeningSizes): number {
+  return sizes.flangeRadius > 0 ? sizes.flangeRadius + topRadius(sizes, 'pour') + FLANGE_GAP : 0;
+}
+
+/** FL: whether a pour here keeps its flange off every other pour's seat, and theirs off its own, on every copy. A soft rule: placement prefers it. */
+export function clearOfFlanges(space: PlacementSpace, spot: OpeningSpot, others: readonly OpeningSpot[]): boolean {
+  const apart = flangeSpacing(space.sizes);
+  return others.every((other) => other === spot || other.kind !== 'pour' || nearestCopy(space, spot.x, spot.y, other.x, other.y) >= apart);
+}
+
+/**
+ * The land rule against the others, and FL's flange rule between a pour and a vent. Between two pours,
+ * and a pour and its own copies, only the land counts: funnels that would collide there are the soft
+ * rule's, as one funnel at a time still pours.
+ */
+function landProblems(space: PlacementSpace, spot: OpeningSpot, others: readonly OpeningSpot[]): { land: boolean; flange: boolean } {
   const { sizes } = space;
   const own = topRadius(sizes, spot.kind);
-  if (selfCopyDistance(space) < 2 * own + sizes.minLand) return false;
+  const reach = flangeReach(sizes);
+  let land = selfCopyDistance(space) < 2 * own + sizes.minLand;
+  let flange = false;
   for (const other of others) {
     if (other === spot) continue;
-    if (nearestCopy(space, spot.x, spot.y, other.x, other.y) < own + topRadius(sizes, other.kind) + sizes.minLand) return false;
+    const apart = nearestCopy(space, spot.x, spot.y, other.x, other.y);
+    if (apart < own + topRadius(sizes, other.kind) + sizes.minLand) land = true;
+    if (spot.kind !== other.kind && apart < reach) flange = true;
   }
-  return true;
+  return { land, flange };
+}
+
+function landOk(space: PlacementSpace, spot: OpeningSpot, others: readonly OpeningSpot[]): boolean {
+  const { land, flange } = landProblems(space, spot, others);
+  return !land && !flange;
 }
 
 /**
@@ -203,7 +277,9 @@ export function checkOpening(space: PlacementSpace, spot: OpeningSpot, others: r
     if (here < zb) zb = here;
   }
   if (zb < MIN_CEILING) problems.push('off-cavity');
-  if (!landOk(space, spot, others)) problems.push('land');
+  const { land, flange } = landProblems(space, spot, others);
+  if (land) problems.push('land');
+  if (flange) problems.push('flange');
   const rect = topRect(space, spot.kind);
   if (spot.x < rect.x0 || spot.y < rect.y0 || spot.x > rect.x1 || spot.y > rect.y1) problems.push('top-edge');
   return { valid: problems.length === 0, problems, zb };
@@ -359,10 +435,13 @@ export function offPeakWarning(space: PlacementSpace, spot: OpeningSpot, peakHei
 /**
  * The plan's soft rule on funnels, from the rim and the closest pair of pours. Default 40 mm funnels
  * collide at x8's 22 mm pitch, so this says what size would fit. Null if nothing collides. With `only`,
- * one of `pours`, just the pairs it is in count, as a moved opening answers for its own funnel.
+ * one of `pours`, just the pairs it is in count, as a moved opening answers for its own funnel. FL: a
+ * funnel takes the room of the wider of its rim and its flange, and a flange that reaches the other
+ * pour's seat says so.
  */
 export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSpot[], only?: OpeningSpot): Diagnostic | null {
-  const { funnelTop, funnelMinTop } = space.sizes;
+  const { sizes } = space;
+  const { funnelTop, funnelMinTop, flangeRadius } = sizes;
   if (funnelTop === null || pours.length === 0) return null;
   let closest = selfCopyDistance(space);
   for (let a = 0; a < pours.length; a++) {
@@ -371,10 +450,29 @@ export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSp
       closest = Math.min(closest, nearestCopy(space, pours[a].x, pours[a].y, pours[b].x, pours[b].y));
     }
   }
-  if (closest >= funnelTop) return null;
-  const fits = Math.floor(closest - FUNNEL_GAP);
-  const advice = fits >= funnelMinTop ? `A top diameter of ${fits} mm would fit.` : 'No funnel fits between them, so pour them one at a time or move them apart.';
-  return { code: 'funnel-collision', severity: 'warning', message: `Funnels of ${funnelTop} mm collide, as two pours are only ${closest.toFixed(1)} mm apart. ${advice}` };
+  const flange = 2 * flangeRadius;
+  if (closest >= Math.max(funnelTop, flange)) return null;
+  const seat = topRadius(sizes, 'pour');
+  const said = funnelTop >= flange ? `Funnels of ${funnelTop} mm collide` : `Funnels with flanges ${flange.toFixed(1)} mm across collide`;
+  const covers = flangeRadius > 0 && closest < flangeRadius + seat ? " A funnel's flange would also cover part of the other pour's seat, so that seat could not take a funnel at the same time, and silicone rising in it would run out under the flange." : '';
+  const room = closest - FUNNEL_GAP;
+  const fits = Math.floor(room);
+  let advice: string;
+  if (fits < funnelMinTop) advice = 'No funnel fits between them, so pour them one at a time or move them apart.';
+  else if (flange <= room) advice = `A top diameter of ${fits} mm would fit.`;
+  else {
+    const width = Math.floor((room / 2 - seat) * 10) / 10;
+    const narrower = width > 0 ? `a flange width of at most ${width} mm` : 'a flange width of 0, no flange,';
+    advice = funnelTop <= room ? `Funnels with ${narrower} would fit.` : `A top diameter of ${fits} mm with ${narrower} would fit.`;
+  }
+  // One funnel at a time still puts its flange over the next seat, so that advice needs a flange that stays off it.
+  if (covers) {
+    const alone = Math.floor((closest - 2 * seat - FLANGE_GAP) * 10) / 10;
+    advice += alone > 0
+      ? ` To pour through one funnel at a time instead, a flange width of at most ${alone} mm keeps its flange off the other pour's seat.`
+      : " To pour through one funnel at a time instead, use no flange (a flange width of 0), as any would reach the other pour's seat.";
+  }
+  return { code: 'funnel-collision', severity: 'warning', message: `${said}, as two pours are only ${closest.toFixed(1)} mm apart.${covers} ${advice}` };
 }
 
 export interface DropResult {
@@ -385,6 +483,8 @@ export interface DropResult {
   /** False only if no valid place exists at all, and then it stays where it was dropped. */
   valid: boolean;
   problems: HardProblem[];
+  /** What was wrong where it was dropped, so a snap can say why it moved; empty when it was valid there. */
+  refused: HardProblem[];
   warnings: Diagnostic[];
 }
 
@@ -407,5 +507,5 @@ export function dropOpening(space: PlacementSpace, spot: OpeningSpot, others: re
     const collision = funnelCollision(space, [at, ...others.filter((other) => other.kind === 'pour' && other !== spot)], at);
     if (collision) warnings.push(collision);
   }
-  return { x: at.x, y: at.y, snapped: moved !== null, valid: final.valid, problems: final.problems, warnings };
+  return { x: at.x, y: at.y, snapped: moved !== null, valid: final.valid, problems: final.problems, refused: check.problems, warnings };
 }

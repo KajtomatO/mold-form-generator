@@ -271,7 +271,7 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     await page.getByTestId('save-project').click();
     const saved = await download;
     expect(saved.suggestedFilename()).toBe('jersey-barrier.moldproj');
-    expect(JSON.parse(text(unzipSync(new Uint8Array(readFileSync(await saved.path())))['project.json']))).toMatchObject({ schemaVersion: 5, appVersion: pkg.version });
+    expect(JSON.parse(text(unzipSync(new Uint8Array(readFileSync(await saved.path())))['project.json']))).toMatchObject({ schemaVersion: 6, appVersion: pkg.version });
     expect(watch.errors).toEqual([]);
     expect(watch.foreign).toEqual([]);
 
@@ -343,7 +343,7 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     const saved = await download;
     expect(saved.suggestedFilename()).toBe('jersey-barrier-mold.zip');
     const files = unzipSync(new Uint8Array(readFileSync(await saved.path())));
-    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 5, appVersion: version });
+    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 6, appVersion: version });
     expect(JSON.parse(text(files['report.json']))).toMatchObject({ app: 'Mold Form Generator', appVersion: version });
     // README.txt is wrapped at 76 columns, so its lines are joined first.
     expect(text(files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain(`Made by Mold Form Generator ${version} from jersey-barrier.stl.`);

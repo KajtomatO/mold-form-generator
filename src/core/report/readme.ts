@@ -72,6 +72,8 @@ export function exportReadme(input: ReadmeInput): string {
   const glue = params.base.mode === 'glue';
   const t = params.silicone.t;
   const has = (name: string): boolean => files.includes(name);
+  // FL: a funnel with a flange stands on the top, and the steps say how to seat it.
+  const flanged = params.funnel.flangeWidth > 0 && params.seat.enabled;
   const out: string[] = [];
   const para = (text: string): void => {
     out.push('', ...wrap(text));
@@ -110,7 +112,9 @@ export function exportReadme(input: ReadmeInput): string {
   }
   if (has('funnel.stl')) {
     out.push('', 'funnel.stl');
-    out.push(...wrap(`The pour funnel. Print ${input.pours === 1 ? 'one' : `${input.pours}, one for each pour opening`}. Print it as it is saved, wide rim down. Its spigot sits in the cone-shaped seat at the top of a pour opening.`, '  '));
+    // FL: the spigot only centres the funnel, which stands on its flange.
+    const sits = flanged ? 'Its spigot drops into the cone-shaped seat at the top of a pour opening, and its flange rests flat on the cover\'s top.' : 'Its spigot sits in the cone-shaped seat at the top of a pour opening.';
+    out.push(...wrap(`The pour funnel. Print ${input.pours === 1 ? 'one' : `${input.pours}, one for each pour opening`}. Print it as it is saved, wide rim down. ${sits}`, '  '));
   }
   if (files.some((name) => name.startsWith('fit_test/'))) {
     out.push('', 'fit_test/');
@@ -179,11 +183,17 @@ export function exportReadme(input: ReadmeInput): string {
     step(++n, `Tape the joint with at least ${plural(clamp.strips, 'strip')} of tape at ${figure(clamp.stripN)} N each, each running from a side wall of the cover across the base to the opposite wall: at least ${clamp.across[0]} from front to back and ${clamp.across[1]} from left to right, spread evenly, no more than about ${SEAL_SPACING_MM} mm apart along any wall, so the tape presses the seal all round. Liquid silicone ${head} pushes the cover up with about ${lift.forceN.toFixed(1)} N, and the tape should hold twice that, and never less than 10 N: here ${clamp.holdN.toFixed(1)} N, which ${clamp.liftStrips === 1 ? 'one strip holds' : `${clamp.liftStrips} of the strips hold`}.`);
   }
   const collide = input.diagnostics.some((d) => d.code === 'funnel-collision');
+  // FL: the Vaseline goes on before the funnel is seated, and only under the flange.
+  const sealed = ': the Vaseline seals it. Keep the Vaseline out of the seats and the vents.';
   const funnels = !has('funnel.stl')
     ? ''
     : collide
-      ? ' The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.'
-      : ' Push a funnel into the seat of each pour opening.';
+      ? flanged
+        ? ` The funnels would touch at this spacing, so either print them with the smaller size the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat, with a flange no wider than that warning gives where it says a flange would cover the next seat. Smear a thin film of Vaseline on the underside of each funnel's flange before you seat it, and press it down until the flange sits flat on the top all round${sealed}`
+        : ' The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.'
+      : flanged
+        ? ` Smear a thin film of Vaseline on the underside of each funnel's flange, then push a funnel into the seat of each pour opening and press it down until its flange sits flat on the top all round${sealed}`
+        : ' Push a funnel into the seat of each pour opening.';
   step(++n, `Stand the mold on its base on a level surface.${funnels}`);
   step(++n, `Mix the silicone, and degas it in the cup if you have a vacuum chamber. Pour it slowly, in a thin stream, into the pour opening${input.pours === 1 ? '' : 's'}, until silicone shows at every vent. This mold has ${plural(input.pours, 'pour opening')} and ${plural(input.vents, 'vent')}.`);
   step(++n, 'Let it cure for the full time the maker of your silicone gives.');

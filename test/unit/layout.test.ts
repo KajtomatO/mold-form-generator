@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PARAM_SCHEMA, type AutoDef, type NumberDef, type ParamDef } from '../../src/core/params/schema';
-import { defOf, entryDef, parseEntry, SECTION_PARAMS, sliderRange, stepOf } from '../../src/ui/layout';
+import { defOf, entryDef, HINTS, parseEntry, SECTION_PARAMS, sliderRange, stepOf } from '../../src/ui/layout';
 import { formatNormal } from '../../src/ui/format';
 import type { ParamPath } from '../../src/app/stages';
 
@@ -14,6 +14,19 @@ describe('the sidebar layout, driven by the schema', () => {
     expect(PATHS.filter((path) => counts.get(path) !== 1)).toEqual([]);
     expect(placed.filter((path) => !PATHS.includes(path))).toEqual([]);
     expect(placed).toHaveLength(PATHS.length);
+  });
+
+  it('FL: puts Flange width in Pour & funnel\'s main list after Height and Flange thickness under Advanced, with the funnel\'s other sizes, each with a hint that says what it is for', () => {
+    const pour = SECTION_PARAMS.pour;
+    expect(pour[pour.indexOf('funnel.height') + 1]).toBe('funnel.flangeWidth');
+    expect(SECTION_PARAMS.advanced).toContain('funnel.flangeThickness');
+    const advanced = SECTION_PARAMS.advanced;
+    expect(advanced.indexOf('funnel.flangeThickness') - advanced.indexOf('funnel.seatClearance')).toBe(1);
+    expect(HINTS['funnel.flangeWidth']).toMatch(/rests flat on the cover's top, so the funnel stands steady/);
+    expect(HINTS['funnel.flangeThickness']).toMatch(/prints without supports/);
+    // A zero width is how a maker leaves it out, and the control takes it.
+    expect(HINTS['funnel.flangeWidth']).toContain('0 leaves it out');
+    expect(parseEntry('0', entryDef('funnel.flangeWidth') as NumberDef)).toEqual({ value: 0 });
   });
 
   it('gives every number a slider range that holds its default, and a step that divides into it sensibly', () => {

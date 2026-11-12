@@ -203,6 +203,9 @@ describe('the real stages read nothing the table does not name', () => {
     // The lift's level: with no seat a funnel has nowhere to stand, so the silicone stops at the top.
     ['seat.enabled', false, ['S7', 'S9', 'S13', 'S16']],
     ['funnel.height', 40, ['S9', 'S16']],
+    // FL: the flange moves jersey's vent out past its edge, so the cut follows, and the funnel gets its ring.
+    ['funnel.flangeWidth', 0, ['S7', 'S13', 'S16']],
+    ['funnel.flangeThickness', 2, ['S16']],
     // M10: the bolts grow the rim and cut both parts; on jersey the bigger box changes no opening and no report.
     ['bolts.enabled', true, ['S10', 'S13', 'S15']],
   ] as [ParamPath, unknown, StageId[]][])('sees real changes: %s changes %j', (path, value, expected) => {

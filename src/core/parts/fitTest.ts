@@ -1,4 +1,5 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
+import { flangeReach, openingSizes } from '../analysis/validate';
 import { defaultParams } from '../params/defaults';
 import type { Params } from '../params/schema';
 import { EOL, wrap } from '../report/text';
@@ -140,6 +141,31 @@ export interface FitPiece {
   base: Manifold;
 }
 
+/** Where the fit test's pour goes, a third of the way from the box tool's middle to its -x side. */
+export function fitPour(): { x: number; y: number } {
+  return { x: -(TOOL_SIDE / 2) / 3, y: 0 };
+}
+
+/**
+ * Where the fit test's vent goes: towards the box tool's +x, +y corner, as M3 put it, unless the funnel's
+ * flange would rest on it there. Then it moves out along the line from the pour by as little as clears the
+ * flange as the mold's vents do (FL), but never so far that its bore stops opening into the box tool, and
+ * never back in towards the pour, as a wide vent already past that edge at M3's spot would.
+ */
+export function fitVent(params: Params): { x: number; y: number } {
+  const half = TOOL_SIDE / 2;
+  const at = { x: half * 0.72, y: half * 0.72 };
+  const pour = fitPour();
+  const reach = flangeReach(openingSizes(params));
+  const dx = at.x - pour.x, dy = at.y - pour.y;
+  const apart = Math.hypot(dx, dy);
+  if (reach <= apart) return at;
+  const room = half - params.vents.diameter / 2;
+  const along = Math.max(apart, Math.min(reach, (room - pour.x) / (dx / apart), (room - pour.y) / (dy / apart)));
+  if (along === apart) return at;
+  return { x: pour.x + (dx / apart) * along, y: pour.y + (dy / apart) * along };
+}
+
 /** G12: the real builders with a 20 x 20 x 6 box for a tool, and a pour bore, seat and vent, so it also holds water for a leak test. */
 export function buildFitPiece(arena: Arena, params: Params, variant: FitVariant): FitPiece {
   const { track } = arena;
@@ -151,8 +177,8 @@ export function buildFitPiece(arena: Arena, params: Params, variant: FitVariant)
 
   const { pour, seat, vents } = params;
   const openings = [
-    ...pourCutters(arena, rim, { x: -half / 3, y: 0, zb: TOOL_HEIGHT, diameter: pour.diameter, seatDepth: seat.depth, seatHalfAngleDeg: seat.halfAngleDeg }),
-    ...ventCutters(arena, rim, { x: half * 0.72, y: half * 0.72, zb: TOOL_HEIGHT, diameter: vents.diameter }),
+    ...pourCutters(arena, rim, { ...fitPour(), zb: TOOL_HEIGHT, diameter: pour.diameter, seatDepth: seat.depth, seatHalfAngleDeg: seat.halfAngleDeg }),
+    ...ventCutters(arena, rim, { ...fitVent(params), zb: TOOL_HEIGHT, diameter: vents.diameter }),
   ];
   const coverMarks = edgeMarks(arena, variant, rim.O.x1 + 1, rim.O.x1 - NOTCH_DEPTH, -rim.Tb - 1, rim.Zt + 1);
   const cover = checked(track(Manifold.difference([body, ...openings, ...coverMarks])), 'The fit-test cover');
@@ -182,6 +208,10 @@ function readmeLines(variants: FitVariant[], params: Params): string[] {
   step(2, `The best fit is the tightest pair whose base seats fully on the cover's shelf by hand. The base then stands proud of the cover by ${params.joint.baseProud} mm. If it rocks or stands higher, go one step looser. Set Taper clearance per side to that pair's value.`);
   step(3, `Print the groove series. This ZIP builds it at a taper clearance of ${params.joint.taperClearance.toFixed(2)} mm, and a base that is too tight in the taper stops short whatever the groove does. So if step 2 gave you another value, set Taper clearance per side to it under Cover & joint in the app, and save the fit test again with the Fit test button under Export (diag.html offers the same under Printer check). Choose the tightest pair that still seats fully, and set Groove clearance per side to that pair's value.`);
   step(4, 'For a leak test, seat the chosen pair, tape it as for a real pour, and fill it with water through the pour opening until water shows at the vent. The joint should stay dry for several minutes. A little Vaseline in the groove helps.');
+  // FL: the seat here is the mold's, so a printed funnel shows whether its flange will rest flat on the real top.
+  if (params.funnel.generate && params.seat.enabled && params.funnel.flangeWidth > 0) {
+    step(5, `To check the funnel, print one (the Funnel button under Export, or funnel.stl in the mold's ZIP) and press it into the seat of the pour opening: its flange should sit flat on the top all round, and the funnel should stand without rocking. If it stands on its spigot with a gap under the flange, raise Seat clearance under Advanced, Funnel, by 0.05 mm.`);
+  }
   out.push('', 'If no pair seats:');
   item('In the taper series, even the loosest: your printer is printing well over size. Check its flow and first-layer squish, then print the series again.');
   item('In the groove series, when it was built at a taper clearance that seats: clean any stringing from the ridge and groove and try again. If it still stops short, set Groove clearance per side one step past the loosest pair.');

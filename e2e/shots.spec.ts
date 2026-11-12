@@ -27,8 +27,8 @@ interface Shot {
   /** null for the empty app, before any model. */
   file: string | null;
   grid: readonly [number, number];
-  /** The sidebar section scrolled to the top, Advanced opened first; 'bolts' is the Bolts group's heading. */
-  scroll?: 'base' | 'cover' | 'pour' | 'grid' | 'demold' | 'advanced' | 'bolts';
+  /** The sidebar section scrolled to the top, Advanced opened first; 'bolts' is the Bolts group's heading, 'flange' Advanced's Funnel rows. */
+  scroll?: 'base' | 'cover' | 'pour' | 'grid' | 'demold' | 'advanced' | 'bolts' | 'flange';
   /** M10: settings made before the model is dropped, such as the bolts turned on. */
   settings?: [ParamPath, unknown][];
   /** M10: the section across y through the front right bolt's axis, the camera close on that corner and square to the cut. */
@@ -64,6 +64,8 @@ interface Shot {
   m11?: 'bad-file' | 'soup' | 'heavy' | 'lettering' | 'last-tile';
   /** M11c: the view moved clear of the Diagnostics card, which stands bottom-left when it holds no warning. */
   clearCard?: boolean;
+  /** FL: the funnel shown, seated in the first pour, seen close from the front, or cut across y through the pour. */
+  funnel?: 'side' | 'section';
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
@@ -80,6 +82,8 @@ const BOLT_SETS = EXPORT_SETS;
 const M11_SETS = EXPORT_SETS;
 // M11c's: 1366 x 768 in both themes in Chromium, and the user's browser at 1366 x 768, dark.
 const M11C_SETS = (browser: Browser, width: number, theme: Theme): boolean => width === 1366 && (browser === 'chromium' || theme === 'dark');
+// FL's flange: the same sets.
+const FL_SETS = M11C_SETS;
 const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
@@ -127,6 +131,12 @@ const CASES: Shot[] = [
   // opening rows and Export ZIP on; and a cut across x through its head, where the top part passes into the body.
   { name: 'chick-mc', file: EXAMPLE_FILES.chick, grid: [1, 1], scroll: 'pour', clearCard: true, only: M11C_SETS },
   { name: 'chick-mc-section-head', file: EXAMPLE_FILES.chick, grid: [1, 1], section: 'x', faceCut: true, only: M11C_SETS },
+  // FL: the Flange width row under Pour & funnel and Flange thickness under Advanced, Funnel; Benchy's funnel seated on its
+  // flange, from the front, and cut through its pour, so the flange is seen resting on the top.
+  { name: 'benchy-flange-pour', file: EXAMPLE_FILES.benchy, grid: [1, 1], scroll: 'pour', only: FL_SETS },
+  { name: 'benchy-flange-advanced', file: EXAMPLE_FILES.benchy, grid: [1, 1], scroll: 'flange', only: FL_SETS },
+  { name: 'benchy-funnel-side', file: EXAMPLE_FILES.benchy, grid: [1, 1], funnel: 'side', only: FL_SETS },
+  { name: 'benchy-funnel-section', file: EXAMPLE_FILES.benchy, grid: [1, 1], funnel: 'section', only: FL_SETS },
 ];
 
 /** The soup-mode L standing on its underside, or the 3 million triangle block in merged mode, by the Open button's input. */
@@ -206,7 +216,7 @@ test.describe('review screenshots', () => {
               await expect(page.getByTestId('file-notice')).toHaveAttribute('data-severity', 'error');
             } else if (shot.project === 'migrated') {
               await input.setInputFiles({ name: 'project.json', mimeType: 'application/json', buffer: V1_PROJECT });
-              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 5');
+              await expect(page.getByTestId('file-notice')).toContainText('brought up to format 6');
               await hooks(page, (h) => h.idle());
             } else if (shot.m11 === 'bad-file') {
               const cube = new TextDecoder().decode(asciiStl(toSoup(box([0, 0, 0], [20, 20, 20])), 'cube'));
@@ -239,12 +249,14 @@ test.describe('review screenshots', () => {
           }
           if (shot.show === 'hint') await page.locator('.cut-hint').first().getByRole('button', { name: 'Show' }).click();
           else if (shot.show) await page.locator(`.diagnostic[data-code="${shot.show}"]`).first().getByRole('button', { name: 'Show' }).click();
-          if (shot.scroll === 'advanced') await page.locator('.advanced > summary').click();
+          if (shot.scroll === 'advanced' || shot.scroll === 'flange') await page.locator('.advanced > summary').click();
           if (shot.scroll) {
-            await page.locator(shot.scroll === 'bolts' ? '[data-testid="bolts-group"]' : `[data-section="${shot.scroll}"]`).evaluate((section) => {
+            const target = shot.scroll === 'bolts' ? '[data-testid="bolts-group"]' : shot.scroll === 'flange' ? '[data-param="funnel.neckHeight"]' : `[data-section="${shot.scroll}"]`;
+            // Advanced's Funnel rows with their heading above them.
+            await page.locator(target).evaluate((section, lift) => {
               const sections = section.closest('[data-testid="sections"]')!;
-              sections.scrollTop = (section as HTMLElement).offsetTop - (sections as HTMLElement).offsetTop;
-            });
+              sections.scrollTop = (section as HTMLElement).offsetTop - (sections as HTMLElement).offsetTop - lift;
+            }, shot.scroll === 'flange' ? 40 : 0);
           }
           if (shot.section) {
             await page.getByTestId('section').check();
@@ -293,6 +305,25 @@ test.describe('review screenshots', () => {
             await app(page, (a, y: number) => a.store.setSection({ at: y }), at[1]);
             // Seen from -y the screen's right is +x: the view moves right and up, so the cut sits clear of the card.
             await hooks(page, (h, v: number[]) => h.setCamera({ position: [v[0] + 8, v[1] - 110, v[2] + 35], target: [v[0] + 28, v[1], v[2] + 10], fov: 35 }), at);
+          }
+          if (shot.funnel) {
+            await page.locator('[data-part="funnel"] .eye').click();
+            const at = await app(page, (a) => {
+              const p = a.store.pipeline;
+              const pour = p.placement!.value.placement.openings.find((o) => o.kind === 'pour')!;
+              return [pour.x, pour.y, p.field!.value.rim.Zt] as [number, number, number];
+            });
+            if (shot.funnel === 'section') {
+              await page.getByTestId('section').check();
+              await page.locator('[data-cut="y"]').click();
+              await app(page, (a, y: number) => a.store.setSection({ at: y }), at[1]);
+            }
+            // From the front, a little above the top, so the flange is seen lying on it; the cut faces this way.
+            // Diagnostics folded, as the Top view button does, so the funnel stands clear of it.
+            await app(page, (a) => (a.store.diagnosticsFolded.value = true));
+            const far = shot.funnel === 'section' ? 1 : 1.4;
+            await hooks(page, (h, v: number[]) => h.setCamera({ position: [v[0] + 12 * v[3], v[1] - 95 * v[3], v[2] + 22 * v[3]], target: [v[0], v[1], v[2] + 4], fov: 35 }), [...at, far]);
+            await hooks(page, (h) => h.idle());
           }
           if (shot.explode) await page.getByTestId('explode').check();
           if (shot.topView) {

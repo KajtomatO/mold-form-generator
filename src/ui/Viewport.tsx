@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { moldExtent } from '../app/derived';
+import { moldExtent, refusalReason } from '../app/derived';
 import { AXIS_INDEX, sectionPlane, type Store } from '../app/store';
-import type { DropResult } from '../core/analysis/validate';
+import type { DropResult, OpeningKind } from '../core/analysis/validate';
 import type { PreviewScene } from '../view/scene';
 import { useStore } from './context';
 import { DiagnosticsCard } from './DiagnosticsCard';
@@ -98,10 +98,11 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
     scene?.setHandleHot(false);
     if (current.kind === 'opening' && current.started) {
       const label = store.drag.value?.label ?? 'The opening';
+      const kind = store.drag.value?.kind ?? 'vent';
       if (drop) store.dropDrag();
       else store.cancelDrag();
       const moved = drop ? store.lastMove.value : null;
-      const note = moved?.id === current.id ? dropText(label, moved.result) : null;
+      const note = moved?.id === current.id ? dropText(label, kind, moved.result) : null;
       window.clearTimeout(dropNoteTimer.current);
       setDropNote(note);
       if (note) dropNoteTimer.current = window.setTimeout(() => setDropNote(null), DROP_NOTE_MS);
@@ -284,10 +285,13 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
 const DROP_NOTE_MS = 8000;
 
 /** What a drop in the view did, when there is more to it than pinning the opening where it was let go. */
-function dropText(label: string, result: DropResult): { text: string; error: boolean } | null {
+function dropText(label: string, kind: OpeningKind, result: DropResult): { text: string; error: boolean } | null {
   if (!result.valid) return { text: `No valid place was found for ${label}, so it stays where you let it go, marked invalid.`, error: true };
   const soft = result.warnings.map((warning) => units(warning.message)).join(' ');
-  if (result.snapped) return { text: `${label} moved to the nearest valid place, ${fixed(result.x, 1)}, ${fixed(result.y, 1)} mm, as the spot you let it go on was not valid.${soft ? ` ${soft}` : ''}`, error: false };
+  if (result.snapped) {
+    const why = refusalReason(result.refused, kind);
+    return { text: `${label} moved to the nearest valid place, ${fixed(result.x, 1)}, ${fixed(result.y, 1)} mm, as the spot you let it go on was not valid${why ? `: ${why}` : ''}.${soft ? ` ${soft}` : ''}`, error: false };
+  }
   return soft ? { text: `${label} is pinned. ${soft}`, error: false } : null;
 }
 

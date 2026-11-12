@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { assertRigid, determinant, transformPositions } from '../../src/core/base/orient';
 import { defaultParams } from '../../src/core/params/defaults';
 import { buildBaseBody, buildGlueBase, layerDiagnostics, pocketOutline, triangleContour } from '../../src/core/parts/base';
-import { buildFitPiece, fitRim, fitTestFiles, fitVariants } from '../../src/core/parts/fitTest';
+import { buildFitPiece, fitPour, fitRim, fitTestFiles, fitVariants, fitVent } from '../../src/core/parts/fitTest';
 import { grooveResidualVolume, ringArea } from '../../src/core/parts/joint';
 import { basePose, coverPose, inversePose, modelOrientedStl, poseToStl } from '../../src/core/parts/poses';
 import { auditOverhang } from '../../src/core/report/overhang';
@@ -278,6 +278,48 @@ describe('the fit-test piece of G12', () => {
       // Under the top of the box tool it is open all across, and over it plastic starts.
       expect(track(cover.slice(5)).area()).toBeLessThan(track(cover.slice(7)).area() - 200);
     });
+  });
+
+  it('FL: keeps its vent\'s mouth 0.5 mm clear of the funnel\'s flange, moved out along its line as little as that takes, and where M3 put it with no flange', () => {
+    // Where M3 put it, a third of the way from the middle to -x for the pour and 0.72 of the way to the +x, +y corner for the vent.
+    expect(fitPour()).toEqual({ x: -10 / 3, y: 0 });
+    const flat = defaultParams();
+    flat.funnel.flangeWidth = 0;
+    expect(fitVent(flat)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
+    const old = Math.hypot(7.2 + 10 / 3, 7.2);
+    // The default flange, by hand: the seat's 5 + 3 tan 30 and 4 more, the vent's mouth of 1.55 and the 0.5 mm gap.
+    const reach = 5 + 3 * Math.tan(Math.PI / 6) + 4 + 1.55 + 0.5;
+    expect(reach - old).toBeGreaterThan(0.02);
+    expect(reach - old).toBeLessThan(0.03);
+    const at = fitVent(defaultParams());
+    expect(Math.hypot(at.x + 10 / 3, at.y)).toBeCloseTo(reach, 9);
+    // On the same line as before.
+    expect(Math.atan2(at.y, at.x + 10 / 3)).toBeCloseTo(Math.atan2(7.2, 7.2 + 10 / 3), 9);
+    // A flange too wide for a 40 mm piece takes it only as far as its bore still opens into the box tool.
+    const wide = defaultParams();
+    wide.funnel.flangeWidth = 8;
+    expect(fitVent(wide).x).toBeCloseTo(10 - 1.25, 9);
+    // A 6 mm vent where M3 put it already runs past the box tool's top edge (7.2 + 3 over 10), so it stays
+    // there rather than move in, further under the flange that reaches 14.5 mm for it.
+    const thick = defaultParams();
+    thick.vents.diameter = 6;
+    expect(5 + 3 * Math.tan(Math.PI / 6) + 4 + 3.3 + 0.5).toBeGreaterThan(old + 1.7);
+    expect(fitVent(thick)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
+    // No funnel, no flange to keep clear of.
+    const none = defaultParams();
+    none.funnel.generate = false;
+    expect(fitVent(none)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
+    // The cut cover has its vent there, by the hole in a slice through the top.
+    withArena(api, (arena) => {
+      const { rim, cover } = buildFitPiece(arena, params, variants[0]);
+      const contours = arena.polygons(arena.track(cover.slice(rim.Zt - 0.5)));
+      const centres = contours.map((c) => [c.reduce((a, p) => a + (p as [number, number])[0], 0) / c.length, c.reduce((a, p) => a + (p as [number, number])[1], 0) / c.length]);
+      expect(centres.some(([x, y]) => Math.hypot(x - at.x, y - at.y) < 1e-3)).toBe(true);
+    });
+    // Its README says how to check a funnel's fit in the seat, with the flange; with none, it says nothing of it.
+    const readme = new TextDecoder().decode(fitTestFiles(api, params)['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('5. To check the funnel, print one (the Funnel button under Export, or funnel.stl in the mold\'s ZIP) and press it into the seat of the pour opening: its flange should sit flat on the top all round, and the funnel should stand without rocking.');
+    expect(new TextDecoder().decode(fitTestFiles(api, flat)['fit_test/README.txt'])).not.toContain('flange');
   });
 
   it('marks each variant on its own side, with as many notches as its place in the series', () => {

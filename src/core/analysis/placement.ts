@@ -7,7 +7,7 @@ import type { CutOpening } from '../parts/openings';
 import type { Diagnostic } from '../report/diagnostics';
 import { BURIED, type Body, type BodyOptions } from './bodies';
 import { leavesCovered, mergeTree, significantLeaves } from './peaks';
-import { boreLength, boreRadius, checkOpening, discMinimum, funnelCollision, heightAt, isValid, longBoreWarning, MIN_CEILING, offPeakWarning, snapOpening, topRadius, type HardProblem, type OpeningKind, type OpeningSpot, type PlacementSpace } from './validate';
+import { boreLength, boreRadius, checkOpening, clearOfFlanges, discMinimum, flangeOutreachesLand, flangeReach, flangeSpacing, funnelCollision, heightAt, isValid, longBoreWarning, MIN_CEILING, offPeakWarning, snapOpening, topRadius, ventLand, widestFlangeInLand, type HardProblem, type OpeningKind, type OpeningSizes, type OpeningSpot, type PlacementSpace } from './validate';
 
 /** Plan: spread pours sit on a circle this share of the shorter footprint side from the centroid. */
 const SPREAD_RADIUS_SHARE = 0.35;
@@ -164,20 +164,23 @@ function placeFirstPours(work: Work): void {
 
 /**
  * G11: on a circle outside the seat at the point maximising H, and shortest bore on a tie, so on a
- * plateau it stays on the flat top. A further circle only if something is in the way.
+ * plateau it stays on the flat top. A further circle only if something is in the way. FL: the closest
+ * circle is clear of the funnel's flange too, by the rule validation holds it to. No lower than `lowest`.
  */
-function ventBesidePour(work: Work, pour: OpeningSpot): OpeningSpot | null {
+function ventBesidePour(work: Work, pour: OpeningSpot, lowest = -Infinity): OpeningSpot | null {
   const { space } = work;
   const { sizes, field } = space;
-  const closest = topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand + LAND_SLACK;
+  // A flange the land already keeps clear leaves the circle exactly where it was with none.
+  const closest = (flangeOutreachesLand(sizes) ? flangeReach(sizes) : ventLand(sizes)) + LAND_SLACK;
   for (const extra of VENT_CIRCLES) {
     let best: OpeningSpot | null = null;
     let bestHeight = -Infinity, bestFloor = -Infinity;
     for (let k = 0; k < VENT_ANGLES; k++) {
       const angle = (2 * Math.PI * k) / VENT_ANGLES;
       const spot: OpeningSpot = { kind: 'vent', x: pour.x + (closest + extra) * Math.cos(angle), y: pour.y + (closest + extra) * Math.sin(angle) };
-      const height = Math.round(heightAt(field, spot.x, spot.y) * 100);
-      if (height < bestHeight) continue;
+      const exact = heightAt(field, spot.x, spot.y);
+      const height = Math.round(exact * 100);
+      if (height < bestHeight || exact < lowest) continue;
       const floor = discMinimum(field, spot.x, spot.y, boreRadius(sizes, 'vent'));
       if (height === bestHeight && floor <= bestFloor) continue;
       if (!valid(work, spot)) continue;
@@ -190,16 +193,113 @@ function ventBesidePour(work: Work, pour: OpeningSpot): OpeningSpot | null {
   return null;
 }
 
-/** Plan 2: a vent beside the first pour of each body. */
-function placeVentsBeside(work: Work): void {
+/** The same placement work with every funnel's flange this many mm wide, 0 for none. */
+function withFlangeWidth(work: Work, width: number): Work {
+  const { sizes } = work.space;
+  const flanged: OpeningSizes = { ...sizes, flangeRadius: width > 0 ? topRadius(sizes, 'pour') + width : 0 };
+  return { ...work, space: { ...work.space, sizes: flanged } };
+}
+
+/** Flange widths are tried this far apart when a vent beside a pour finds no room clear of the one set. */
+const FLANGE_TRY_STEP = 0.5;
+
+/**
+ * FL: when the flange is what leaves no room for the vent beside a pour, the widest flange that would,
+ * in FLANGE_TRY_STEP below the one set, down to the widest the land alone keeps clear (1 mm at defaults),
+ * where every vent stands as with none; 0 if only no flange would; null if even that has no room.
+ */
+function widestFlangeWithRoom(work: Work, pour: OpeningSpot): number | null {
+  const { sizes } = work.space;
+  if (!flangeOutreachesLand(sizes)) return null;
+  const set = sizes.flangeRadius - topRadius(sizes, 'pour');
+  const plain = widestFlangeInLand(sizes.minLand);
+  for (let width = Math.ceil(set / FLANGE_TRY_STEP - 1e-9) * FLANGE_TRY_STEP - FLANGE_TRY_STEP; width > plain; width -= FLANGE_TRY_STEP) {
+    if (ventBesidePour(withFlangeWidth(work, width), pour)) return width;
+  }
+  return ventBesidePour(withFlangeWidth(work, plain), pour) ? plain : null;
+}
+
+/** Each body's first pour, or undefined where it has none. */
+function firstPours(work: Work): (OpeningSpot | undefined)[] {
+  return work.bodies.map((_, b) => work.openings.find((opening) => opening.body === b && opening.kind === 'pour'));
+}
+
+/**
+ * FL: how high the vent beside each body's first pour would stand before the body's other pours are
+ * placed, or null where there is no room for it even then. Pinned or removed vents count as none.
+ */
+function besideHeights(work: Work): (number | null)[] {
+  const { field } = work.space;
+  return firstPours(work).map((pour, b) => {
+    const id = `b${b}:vent:beside`;
+    if (!pour || work.pinnedIds.has(id) || work.removedIds.has(id)) return null;
+    const spot = ventBesidePour(work, pour);
+    return spot ? heightAt(field, spot.x, spot.y) : null;
+  });
+}
+
+/**
+ * Plan 2: a vent beside the first pour of each body. With `before`, from besideHeights, the body's other
+ * pours are placed already (FL) and open its top too, so the vent goes only where it stands within t / 2
+ * of where it would have without them, not down a flank or into a trench, where it would vent nothing.
+ */
+function placeVentsBeside(work: Work, before?: readonly (number | null)[]): void {
+  const pours = firstPours(work);
+  const crowded: OpeningSpot[] = [];
   work.bodies.forEach((_, b) => {
     const id = `b${b}:vent:beside`;
-    if (work.pinnedIds.has(id) || work.removedIds.has(id)) return;
-    const pour = work.openings.find((opening) => opening.body === b && opening.kind === 'pour');
-    if (!pour) return;
-    const spot = ventBesidePour(work, pour);
-    if (spot) add(work, spot, id, b, 'beside');
-    else work.diagnostics.push({ code: 'vent-refused', severity: 'warning', message: `No room for a vent beside the pour at (${pour.x.toFixed(1)}, ${pour.y.toFixed(1)}).` });
+    const pour = pours[b];
+    if (work.pinnedIds.has(id) || work.removedIds.has(id) || !pour) return;
+    const floor = before?.[b];
+    const spot = ventBesidePour(work, pour, typeof floor === 'number' ? floor - work.settings.coverDrop : -Infinity);
+    if (spot) {
+      // Before it is added, so the vent it is weighed against is not kept off by this one.
+      ventLowNote(work, pour, spot);
+      add(work, spot, id, b, 'beside');
+      return;
+    }
+    if (typeof floor === 'number') {
+      crowded.push(pour);
+      return;
+    }
+    // FL: the flange keeps the vent further out than the land would, which can be why a small model has no
+    // room; the warning says so only where a narrower flange would make room, and names the widest.
+    const width = widestFlangeWithRoom(work, pour);
+    const flange = width === null
+      ? ''
+      : width > 0
+        ? ` clear of its funnel's flange: a Flange width of at most ${width} mm under Pour & funnel leaves room for one`
+        : " clear of its funnel's flange: only with no flange (Flange width 0 under Pour & funnel) is there room for one";
+    work.diagnostics.push({ code: 'vent-refused', severity: 'warning', message: `No room for a vent beside the pour at (${pour.x.toFixed(1)}, ${pour.y.toFixed(1)})${flange}.` });
+  });
+  if (crowded.length > 0) {
+    const at = crowded.map((pour) => `(${pour.x.toFixed(1)}, ${pour.y.toFixed(1)})`).join(', ');
+    const message = crowded.length === 1
+      ? `No vent beside the pour at ${at} on its top: the body's other pours take the room there clear of their funnels' flanges, and let the air out of that top too.`
+      : `No vent beside the pours at ${at} on their tops: each body's other pours take the room there clear of their funnels' flanges, and let the air out of that top too.`;
+    work.diagnostics.push({ code: 'vent-refused', severity: 'info', message });
+  }
+}
+
+/**
+ * FL: on a peaked top the flange's room pushes the vent beside a pour down the slope. Where it then stands
+ * more than t / 2 lower than it would with no flange, a note says so: the air above it there leaves only
+ * up the pour, and a narrower flange lets the vent stand nearer.
+ */
+function ventLowNote(work: Work, pour: OpeningSpot, spot: OpeningSpot): void {
+  const { sizes, field } = work.space;
+  if (!flangeOutreachesLand(sizes)) return;
+  const plain = widestFlangeInLand(sizes.minLand);
+  const near = ventBesidePour(withFlangeWidth(work, plain), pour);
+  if (!near) return;
+  const drop = heightAt(field, near.x, near.y) - heightAt(field, spot.x, spot.y);
+  if (drop <= work.settings.coverDrop) return;
+  const out = (o: OpeningSpot): string => Math.hypot(o.x - pour.x, o.y - pour.y).toFixed(1);
+  const narrower = plain > 0 ? `A Flange width of at most ${plain} mm under Pour & funnel lets the vent stand ${out(near)} mm out` : `Only with no flange (Flange width 0 under Pour & funnel) does the vent stand ${out(near)} mm out`;
+  work.diagnostics.push({
+    code: 'vent-low',
+    severity: 'info',
+    message: `The vent at (${spot.x.toFixed(1)}, ${spot.y.toFixed(1)}) beside the pour stands ${out(spot)} mm from it to clear its funnel's flange, where the ceiling is ${drop.toFixed(1)} mm lower than ${out(near)} mm out, so the air in between leaves only up the pour: pour slowly. ${narrower}.`,
   });
 }
 
@@ -250,15 +350,31 @@ function placeExtraPours(work: Work): void {
     const radius = Math.max(SPREAD_RADIUS_SHARE * body.extent, topRadius(sizes, 'pour') + sizes.minLand);
     // Along the body's longer side first, where there is the most room for the rest.
     const start = body.max[0] - body.min[0] >= body.max[1] - body.min[1] ? 0 : Math.PI / 2;
+    // FL: where the body has room as high up, a spread pour keeps its flange off the other pours' seats, and
+    // theirs off its own, so one funnel at a time leaves the next seat open; else the land alone, as before FL.
+    const roomy = flangeSpacing(sizes) > 2 * topRadius(sizes, 'pour') + sizes.minLand + 1e-6
+      ? (x: number, y: number): boolean => clearOfFlanges(space, { kind: 'pour', x, y }, work.openings)
+      : null;
     for (let k = 0; k < missing; k++) {
       const angle = start + (2 * Math.PI * k) / missing;
       const dx = Math.cos(angle), dy = Math.sin(angle);
-      let spot: { x: number; y: number } | null = null;
       // Further out along the line while something is in the way, and off the body's ceiling it stops.
-      for (let along = radius; !spot && heightAt(body.field, cx + along * dx, cy + along * dy) > 0; along += SPREAD_RAY_STEP) {
-        spot = highestNear(work, body, { x: cx + along * dx, y: cy + along * dy }, SPREAD_SNAP_MM);
+      const alongLine = (accept?: (x: number, y: number) => boolean): { x: number; y: number } | null => {
+        let found: { x: number; y: number } | null = null;
+        for (let along = radius; !found && heightAt(body.field, cx + along * dx, cy + along * dy) > 0; along += SPREAD_RAY_STEP) {
+          found = highestNear(work, body, { x: cx + along * dx, y: cy + along * dy }, SPREAD_SNAP_MM, Infinity, accept);
+        }
+        return found;
+      };
+      const from: OpeningSpot = { kind: 'pour', x: cx + radius * dx, y: cy + radius * dy };
+      const pick = (accept?: (x: number, y: number) => boolean): { x: number; y: number } | null =>
+        alongLine(accept) ?? snapOpening(space, from, work.openings, (x, y) => owns(work, body, x, y) && (!accept || accept(x, y)));
+      let spot = pick();
+      // Not at any cost: a spot clear of the flanges, but down a flank, would trade a short bore for a long one.
+      if (spot && roomy && !roomy(spot.x, spot.y)) {
+        const clear = pick(roomy);
+        if (clear && heightAt(space.field, clear.x, clear.y) >= heightAt(space.field, spot.x, spot.y) - settings.coverDrop) spot = clear;
       }
-      spot ??= snapOpening(space, { kind: 'pour', x: cx + radius * dx, y: cy + radius * dy }, work.openings, (x, y) => owns(work, body, x, y));
       if (spot) claim(spot, 'spread');
     }
   });
@@ -267,9 +383,9 @@ function placeExtraPours(work: Work): void {
 /**
  * The highest valid spot over this body's own ceiling within `radius` of `from`, on a lattice from it,
  * and the nearest on a tie, as a plateau has many. Heights at or over `cap` all count as equally high.
- * Null if none is valid.
+ * `accept` narrows it further. Null if none is valid.
  */
-function highestNear(work: Work, body: Body, from: { x: number; y: number }, radius: number, cap = Infinity): { x: number; y: number } | null {
+function highestNear(work: Work, body: Body, from: { x: number; y: number }, radius: number, cap = Infinity, accept?: (x: number, y: number) => boolean): { x: number; y: number } | null {
   const { field } = work.space;
   // The lattice stays inside the body's extent, as nothing past it is the body's.
   const steps = (low: number, high: number, at: number): [number, number] => [
@@ -289,7 +405,7 @@ function highestNear(work: Work, body: Body, from: { x: number; y: number }, rad
       const x = from.x + dx, y = from.y + dy;
       const height = Math.min(Math.round(heightAt(field, x, y) * 100), capLevel);
       if (height < bestHeight || (height === bestHeight && distance >= bestDistance)) continue;
-      if (!owns(work, body, x, y) || !valid(work, { kind: 'pour', x, y })) continue;
+      if (!owns(work, body, x, y) || !valid(work, { kind: 'pour', x, y }) || (accept && !accept(x, y))) continue;
       best = { x, y };
       bestHeight = height;
       bestDistance = distance;
@@ -387,10 +503,19 @@ export function placeOpenings(input: PlacementInput): Placement {
     add(work, { kind: pin.kind, x: pin.x, y: pin.y }, pin.id, match ? Number(match[1]) : -1, 'pinned', true);
   }
 
+  // FL: where the flange reaches past the land, a vent beside a first pour keeps clear of every flange, so it
+  // takes about 2 x 12.8 mm of a body's top from its other pours: placed first, it leaves x8's barriers at 3
+  // pours room for the third only down a flank, or none, and at 2 pours sends a barrier's second pour into the
+  // trench beside it. So with more than one pour per body the pours go first, and the vent where their flanges
+  // leave room as high up, or none, as the other pours open the top too. A flange the land already keeps
+  // clear (1 mm at defaults) keeps the order of before FL, and with it every opening.
+  const poursFirst = settings.ventsEnabled && settings.perBody > 1 && flangeOutreachesLand(space.sizes);
   placeFirstPours(work);
-  if (settings.ventsEnabled) placeVentsBeside(work);
+  const before = poursFirst ? besideHeights(work) : undefined;
+  if (settings.ventsEnabled && !poursFirst) placeVentsBeside(work);
   if (settings.ventsEnabled) placeLeafVents(work);
   placeExtraPours(work);
+  if (poursFirst) placeVentsBeside(work, before);
   openLeftoverCavities(work);
 
   const byBody = bodies.map((body, b): BodyPlacement => {
@@ -416,7 +541,7 @@ export function placeOpenings(input: PlacementInput): Placement {
       work.diagnostics.push({
         code: 'opening-invalid',
         severity: 'error',
-        message: `The ${opening.kind} at (${opening.x.toFixed(1)}, ${opening.y.toFixed(1)}) is no longer valid: ${check.problems.map(describeProblem).join(', ')}. Move it again.`,
+        message: `The ${opening.kind} at (${opening.x.toFixed(1)}, ${opening.y.toFixed(1)}) is no longer valid: ${check.problems.map((problem) => describeProblem(problem, opening.kind)).join(', ')}. Move it again.`,
       });
     }
     const long = longBoreWarning(space, opening);
@@ -452,10 +577,11 @@ export function firstPourPeak(placement: Pick<Placement, 'openings' | 'bodies'>,
 }
 
 /** A hard rule's breach in a maker's words, for the diagnostics here and the drag's own note on main. */
-export function describeProblem(problem: HardProblem): string {
+export function describeProblem(problem: HardProblem, kind: OpeningKind): string {
   switch (problem) {
     case 'off-cavity': return 'it runs off the cavity';
     case 'land': return 'it is too close to another opening';
+    case 'flange': return kind === 'vent' ? "a funnel's flange would rest on it and close it" : "its funnel's flange would rest on a vent and close it";
     default: return 'it is too close to the edge of the top';
   }
 }

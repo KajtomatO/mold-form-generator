@@ -60,7 +60,7 @@ const RADIUS: ParamPath[] = ['silicone.t', 'silicone.printMargin', 'print.layerH
 const BOLTS: ParamPath[] = ['bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall'];
 
 /** What the funnel is made of, and what the seat it sits in is. */
-const FUNNEL: ParamPath[] = ['funnel.generate', 'funnel.topDiameter', 'funnel.height', 'funnel.neckHeight', 'funnel.wall', 'funnel.tipWall', 'funnel.seatClearance'];
+const FUNNEL: ParamPath[] = ['funnel.generate', 'funnel.topDiameter', 'funnel.height', 'funnel.neckHeight', 'funnel.wall', 'funnel.tipWall', 'funnel.seatClearance', 'funnel.flangeWidth', 'funnel.flangeThickness'];
 
 export const STAGES: readonly StageDef[] = [
   { id: 'S1', label: 'parsed, audited, imported', runs: 'both', deps: [], params: [], inputs: ['file'] },
@@ -79,6 +79,8 @@ export const STAGES: readonly StageDef[] = [
     params: [
       'pour.perModel', 'pour.diameter', 'pour.minLand', 'vents.enabled', 'vents.diameter', 'vents.persistence',
       'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'funnel.generate', 'funnel.topDiameter', 'funnel.wall', 'funnel.seatClearance',
+      // FL: no vent under a flange, and a pour's flange inside the top's chamfer.
+      'funnel.flangeWidth', 'cover.topChamfer',
       // t / 2 is the cover drop, and the vents' persistence until edited. Bodies stand within the plane tolerance.
       'silicone.t', 'base.planeTol',
     ],
@@ -117,7 +119,8 @@ export const STAGES: readonly StageDef[] = [
   { id: 'S13', label: 'cover final', runs: 'solid', deps: ['S12', 'S7'], params: [], inputs: ['drag'] },
   { id: 'S14', label: 'base body', runs: 'solid', deps: ['S10'], params: [], inputs: [] },
   { id: 'S15', label: 'base final', runs: 'solid', deps: ['S14', 'S2'], params: ['base.mode', 'base.pocketDepth', 'base.pocketEnlarge', 'print.layerHeight', 'base.planeTol'], inputs: [] },
-  { id: 'S16', label: 'funnel', runs: 'solid', deps: [], params: [...FUNNEL, 'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'pour.diameter'], inputs: [] },
+  // FL: the spigot's relief under the flange is 2 layers.
+  { id: 'S16', label: 'funnel', runs: 'solid', deps: [], params: [...FUNNEL, 'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'pour.diameter', 'print.layerHeight'], inputs: [] },
 ];
 
 /**

@@ -33,7 +33,7 @@ The Diagnostics card in the view lists what the app found: warnings, notes and e
 
 - `cover.stl`: the cover, turned flat top down, ready to print.
 - `base.stl`: the base, flat side down. In Mode B the model is part of it.
-- `funnel.stl`: one funnel. Print one for each pour opening.
+- `funnel.stl`: one funnel. Print one for each pour opening. Its flange rests flat on the cover's top. A project saved before the funnel had a flange (v0.1.0) opens without one; a Flange width of up to 1 mm still fits the cover printed from it, while a wider one moves the vents beside the pours, so print the cover again too.
 - `model_oriented.stl` (Mode A): your model, turned so its flat face lies at the bottom, ready to print and glue in.
 - `fit_test/` (when you tick "Add the fit-test pieces to the ZIP"): the joint's test pieces, with their own README.
 - `README.txt`: how to print, join, seal, pour and demold this mold, with its own numbers: the tape, the silicone, the places to cut, the air, the warnings and every setting.

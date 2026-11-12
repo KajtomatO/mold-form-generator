@@ -17,7 +17,7 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
     'cover.wall', 'cover.topCap', 'joint.taperDeg', 'joint.taperClearance', 'joint.grooveClearance', 'joint.ridgeWidth', 'joint.ridgeHeight', 'joint.pryNotches',
     'bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall',
   ],
-  pour: ['pour.perModel', 'pour.diameter', 'vents.enabled', 'vents.diameter', 'seat.enabled', 'seat.depth', 'funnel.generate', 'funnel.topDiameter', 'funnel.height'],
+  pour: ['pour.perModel', 'pour.diameter', 'vents.enabled', 'vents.diameter', 'seat.enabled', 'seat.depth', 'funnel.generate', 'funnel.topDiameter', 'funnel.height', 'funnel.flangeWidth'],
   grid: ['grid.nx', 'grid.ny', 'grid.spacing', 'grid.edge'],
   advanced: [
     'base.minIsland', 'base.cornerRadius', 'base.bedReliefHeight', 'base.bedReliefRun',
@@ -25,7 +25,7 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
     'cover.topChamfer',
     'joint.landInner', 'joint.landOuter', 'joint.ridgeDraftDeg', 'joint.grooveExtraDepth', 'joint.baseProud', 'joint.pryWidth', 'joint.pryHeight',
     'pour.minLand', 'vents.persistence', 'seat.halfAngleDeg',
-    'funnel.neckHeight', 'funnel.wall', 'funnel.tipWall', 'funnel.seatClearance',
+    'funnel.neckHeight', 'funnel.wall', 'funnel.tipWall', 'funnel.seatClearance', 'funnel.flangeThickness',
     'print.nozzle', 'print.bedX', 'print.bedY', 'print.bedZ', 'print.infill', 'print.density', 'print.tapeStrip',
     'quality.cellFinal', 'quality.cellPreview', 'quality.analysisCell', 'quality.tinTolFinal', 'quality.tinTolPreview',
     'reports.minVolumeMl', 'reports.undersidePersistence',
@@ -190,4 +190,6 @@ export const HINTS: Partial<Record<ParamPath, string>> = {
   'bolts.holeClearance': 'Added to the screw\'s radius in the holes and countersinks. 0.2 suits a 0.4 mm nozzle, which prints holes about 0.1 mm small per side.',
   'bolts.nutClearance': 'Added to each side of the nut in its slot. 0.15 lets a nut slide in by hand on a 0.4 mm nozzle and stay.',
   'bolts.minWall': 'The least plastic between the bolts\' holes and slots and the cavity, the groove and the outside.',
+  'funnel.flangeWidth': 'A flat ring round the foot of the funnel, this far past the seat\'s edge. It rests flat on the cover\'s top, so the funnel stands steady and seals there. Vents keep clear of it. 0 leaves it out.',
+  'funnel.flangeThickness': 'The height of the flange\'s outer edge. Above it a 45 degree chamfer runs in to the neck, so it prints without supports.',
 };

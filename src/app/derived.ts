@@ -1,5 +1,5 @@
 import { boreSilicone, describeProblem, firstPourPeak, type PlacedOpening } from '../core/analysis/placement';
-import { checkOpening, dropOpening, topRadius, type HardProblem } from '../core/analysis/validate';
+import { checkOpening, dropOpening, topRadius, type HardProblem, type OpeningKind } from '../core/analysis/validate';
 import { siliconeVolume } from '../core/field/silicone';
 import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
@@ -101,6 +101,7 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'funnel-under-neck': 'funnel.topDiameter',
   'funnel-too-flat': 'funnel.topDiameter',
   'funnel-wall': 'funnel.wall',
+  'funnel-flange': 'funnel.flangeWidth',
   // deriveRim
   'edge-raised': 'grid.edge',
   'corner-clamped': 'base.cornerRadius',
@@ -143,6 +144,8 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'thin-tile-wall': 'grid.spacing',
   'pour-shortfall': 'pour.perModel',
   'funnel-collision': 'funnel.topDiameter',
+  // FL: the flange's room is what holds the vent there.
+  'vent-low': 'funnel.flangeWidth',
   // printabilityDiagnostics, worked out on main
   'bed-turn': 'print.bedX',
   'bed-too-small': 'print.bedX',
@@ -197,7 +200,7 @@ export function exportBlocked(pipeline: Pipeline): string | null {
 }
 
 /** Codes whose message names a place on the top as "at (x, y)": these get a Show toggle. */
-const LOCATED = new Set(['vent-refused', 'cavity-without-pour', 'cavity-closed', 'peak-uncovered', 'long-vent', 'long-pour', 'pour-off-peak', 'opening-invalid', 'pour-shortfall', 'export-opening-invalid']);
+const LOCATED = new Set(['vent-refused', 'vent-low', 'cavity-without-pour', 'cavity-closed', 'peak-uncovered', 'long-vent', 'long-pour', 'pour-off-peak', 'opening-invalid', 'pour-shortfall', 'export-opening-invalid']);
 const AT = /\((-?\d+(?:\.\d+)?), (-?\d+(?:\.\d+)?)\)/;
 
 /** Where a diagnostic points, on the flat top of the first tile, or null if it names no place. */
@@ -287,11 +290,21 @@ export function openingLabel(openings: readonly Pick<PlacedOpening, 'id' | 'kind
   return `${kind === 'pour' ? 'Pour' : 'Vent'} ${n}`;
 }
 
+/**
+ * Why an opening may not stand somewhere, in a maker's words, or null if it may: the first problem, and
+ * a flange's too (FL), which reaches further than the land and so is the one to clear.
+ */
+export function refusalReason(problems: readonly HardProblem[], kind: OpeningKind): string | null {
+  if (problems.length === 0) return null;
+  const first = describeProblem(problems[0], kind);
+  return problems[0] !== 'flange' && problems.includes('flange') ? `${first}, and ${describeProblem('flange', kind)}` : first;
+}
+
 /** Where a dragged opening would stand, by the plan's hard rules, with why not in a maker's words. */
 export interface DragCheck {
   valid: boolean;
   problems: HardProblem[];
-  /** The first problem as a sentence part, such as "it is too close to another opening", or null. */
+  /** The first problem as a sentence part, such as "it is too close to another opening", or null, by refusalReason. */
   reason: string | null;
   /** Where a drop now ends up, on the first tile: the spot itself, the nearest valid place, or null if none is valid. */
   lands: { x: number; y: number } | null;
@@ -317,7 +330,7 @@ export function dragCheck(pipeline: Pipeline, id: string, x: number, y: number):
   return {
     valid,
     problems,
-    reason: problems.length > 0 ? describeProblem(problems[0]) : null,
+    reason: refusalReason(problems, opening.kind),
     lands: drop.valid ? { x: drop.x, y: drop.y } : null,
     warnings: drop.valid ? drop.warnings : [],
   };

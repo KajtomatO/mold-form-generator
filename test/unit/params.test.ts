@@ -65,6 +65,9 @@ const PLAN_TABLE: Record<string, [value: unknown, min?: number, max?: number]> =
   'funnel.wall': [1.2],
   'funnel.tipWall': [0.86],
   'funnel.seatClearance': [0.1],
+  // FL: the flange the user's first pour asked for on 2026-11-12; 0 leaves it out.
+  'funnel.flangeWidth': [4, 0, 10],
+  'funnel.flangeThickness': [1.2, 0.6, 5],
   'grid.nx': [1, 1, 20],
   'grid.ny': [1, 1, 20],
   'grid.spacing': [null, 0, 100],

@@ -7,17 +7,27 @@ import { OPENING_SEGMENTS } from './openings';
 import { poseToStl } from './poses';
 
 /**
- * G12: revolved, with no flat ledge, as the neck's outside runs straight into the spigot's wide end.
- * With its axis on the origin and z = 0 at the cover's flat top, which is where it sits in use.
- * The rules in params/rules.ts say which values give a sound profile, and M6 shows those as errors.
+ * G12, revolved, with its axis on the origin and z = 0 at the cover's flat top, which is where it sits in
+ * use. FL: a flange round the spigot's root lies flat on that top, so the funnel stands on it and the
+ * spigot only centres it: its edge rises square, then a 45 degree chamfer runs in to the neck, so the
+ * print pose needs no supports. Over its last 2 layers, or as many as a first layer squashed 0.2 mm into
+ * the seat's mouth needs, the spigot runs straight up, clear of that mouth, which prints in the cover's
+ * first layers and comes out a little narrower, so it does not hold the flange off the top; a seat too
+ * shallow to spare that gets less (funnelProfile). With a flange width of 0 the neck's outside runs
+ * straight into the spigot's wide end, as before FL. The rules in params/rules.ts say which values give
+ * a sound profile, and M6 shows those as errors.
  */
 export function buildFunnel(arena: Arena, params: Params): Manifold {
   const p = funnelProfile(params);
+  const outside: [number, number][] = p.rFlange > 0
+    ? [...(p.relief > 0 ? [[p.rRelief, -p.relief], [p.rRelief, 0]] as [number, number][] : [[p.rNeck, 0]] as [number, number][]), [p.rFlange, 0], [p.rFlange, p.zFlange], [p.rNeck, p.zChamfer]]
+    : [[p.rNeck, 0]];
+  // A chamfer that ends at the neck's top leaves no straight neck between them.
+  if (p.rFlange === 0 || p.zChamfer < p.zNeck) outside.push([p.rNeck, p.zNeck]);
   const outline: SimplePolygon = [
     [p.rThroat, p.zTip],
     [p.rTip, p.zTip],
-    [p.rNeck, 0],
-    [p.rNeck, p.zNeck],
+    ...outside,
     [p.rRim, p.zRim],
     [p.rRimInner, p.zRim],
     [p.rNeckInner, p.zConeInner],

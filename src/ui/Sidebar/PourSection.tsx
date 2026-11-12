@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { openingLabel } from '../../app/derived';
+import { openingLabel, refusalReason } from '../../app/derived';
 import type { PlacedOpening } from '../../core/analysis/placement';
 import { useStore } from '../context';
 import { fixed, units } from '../format';
@@ -7,6 +7,9 @@ import { Cross, Pin, TopView } from '../icons';
 import { SECTION_PARAMS } from '../layout';
 import { ParamRow } from '../ParamRow';
 import { Section } from './Section';
+
+/** Why a typed spot was moved, in brackets, so a maker sees which rule it broke (FL: a flange's, most often). */
+const reasonOf = (reason: string | null): string => (reason ? ` (${reason})` : '');
 
 /** A coordinate box: typing a value and pressing Enter moves the opening there and pins it. */
 function CoordBox({ axis, value, onCommit, onBad }: { axis: 'x' | 'y'; value: number; onCommit: (value: number) => void; onBad: (bad: boolean) => void }) {
@@ -93,7 +96,7 @@ function OpeningRow({ opening, label }: { opening: PlacedOpening; label: string 
       >
         <Cross />
       </button>
-      {last?.snapped && last.valid ? <p class="note">That spot was not valid, so it moved to the nearest place that is.</p> : null}
+      {last?.snapped && last.valid ? <p class="note">That spot was not valid{reasonOf(refusalReason(last.refused, opening.kind))}, so it moved to the nearest place that is.</p> : null}
       {last && !last.valid ? <p class="note error">No valid place was found for it, so it stays where you put it.</p> : null}
       {last?.valid
         ? last.warnings.map((warning) => (

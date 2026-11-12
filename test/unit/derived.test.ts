@@ -18,16 +18,21 @@ import { OPENING_GOLDEN, REPORT_GOLDEN, SOLID_GOLDEN } from '../regression/golde
 
 /**
  * ml at defaults with no base layer, on the preview field, with the bores: the "Silicone figure" note of M6,
- * which M3's solids, all made before the layer, check independently.
+ * which M3's solids, all made before the layer, check independently. Measured again at FL, whose flange moves
+ * the vent beside each first pour 3 mm further out, onto lower ceiling, so its bore holds more: M6's were
+ * goddess 118.39, x8 89.52, barrel 10.52 (its vent now off the lid, 0.23% more) and wolf 207.41; vis35 reads
+ * 530.025 against 530.02, the rest the same, Benchy's too, though its vent goes onto higher ceiling and its
+ * bore is 0.3 mm shorter, as that is under the figure's last digit.
  */
-const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.39, vis35: 530.02, jersey: 11.53, x8: 89.52, barrel: 10.52, wolf: 207.41, chick: 12.25 };
+const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.4, vis35: 530.03, jersey: 11.53, x8: 89.53, barrel: 10.54, wolf: 207.45, chick: 12.25 };
 
 /**
  * The same at defaults, which since 1.0.2 have the silicone base layer, 3 mm with its 2 degree slope, as
  * first measured (docs/PLAN.md, the base layer). It adds 0.8% (jersey, whose cavity already fills most of
- * the plate) to 19% (the chick, small in a box its overhangs set).
+ * the plate) to 19% (the chick, small in a box its overhangs set). Measured again at FL, as above: they were
+ * goddess 122.45, vis35 536.52, x8 92.97, barrel 11.27 and wolf 226.47.
  */
-const LAYER_ML: Record<ExampleId, number> = { benchy: 45.19, goddess: 122.45, vis35: 536.52, jersey: 11.62, x8: 92.97, barrel: 11.27, wolf: 226.47, chick: 14.6 };
+const LAYER_ML: Record<ExampleId, number> = { benchy: 45.19, goddess: 122.46, vis35: 536.53, jersey: 11.62, x8: 92.99, barrel: 11.3, wolf: 226.51, chick: 14.6 };
 
 /**
  * How far the preview may read over M3's solids with the bores: 3% on the seven, whose most is the barrel's

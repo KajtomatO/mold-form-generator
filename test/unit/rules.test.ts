@@ -38,6 +38,7 @@ describe('the plan\'s hard rules between parameters', () => {
 
   it('a pocket that follows the layer height stays within the pocket\'s own range, with its ends allowed', () => {
     expect(codes((p) => (p.print.layerHeight = 0.05))).toEqual([]);
+    // FL: the flange's relief, 2 layers, shortens to what the spigot can spare at layers this thick, so no funnel rule speaks.
     expect(codes((p) => (p.print.layerHeight = 2))).toEqual([]);
     expect(codes((p) => (p.print.layerHeight = 0))).toEqual(['pocket-range']);
     expect(codes((p) => (p.print.layerHeight = 0.04))).toEqual(['pocket-range']);
@@ -95,6 +96,57 @@ describe('the plan\'s hard rules between parameters', () => {
     expect(codes((p) => (p.pour.diameter = 1.5))).toEqual(['funnel-no-throat']);
     expect(codes((p) => (p.funnel.seatClearance = 2))).toEqual(['funnel-no-spigot']);
     expect(codes((p) => (p.funnel.neckHeight = 30))).toEqual(['funnel-no-cone']);
+  });
+
+  it('FL: a flange whose chamfer would run past the neck\'s top is refused, and at the limit it passes, saying what would fit', () => {
+    const p = defaultParams();
+    // The chamfer starts at the flange's thickness and runs in at 45 degrees, from the flange's edge to the neck.
+    const { rNeck } = funnelProfile(p);
+    const seatTop = 5 + 3 * Math.tan(Math.PI / 6);
+    const widest = p.funnel.neckHeight - p.funnel.flangeThickness + rNeck - seatTop;
+    expect(widest).toBeGreaterThan(8.6);
+    expect(codes((x) => (x.funnel.flangeWidth = widest - 0.01))).toEqual([]);
+    expect(codes((x) => (x.funnel.flangeWidth = widest + 0.01))).toEqual(['funnel-flange']);
+    const params = defaultParams();
+    params.funnel.flangeWidth = 10;
+    // The neck it needs, 11.32 mm, is rounded up, so the figure given is always enough.
+    expect(1.2 + 10 + seatTop - rNeck).toBeCloseTo(11.3155, 4);
+    expect(crossParameterErrors(params)[0].message).toBe(`A flange 10 mm wide and 1.2 mm thick needs a neck at least 11.4 mm high for the chamfer that lets it print without supports, over the 10 mm set: make Flange width at most ${Math.floor(widest * 10) / 10} mm, or raise Neck height, or make the flange thinner.`);
+    // Just past the limit it needs 10.02 mm, which rounded to the nearest would read as the 10 mm set.
+    params.funnel.flangeWidth = 8.7;
+    expect(crossParameterErrors(params)[0].message).toContain('needs a neck at least 10.1 mm high');
+    expect(codes((x) => ((x.funnel.flangeWidth = 10), (x.funnel.neckHeight = 12)))).toEqual([]);
+    // No flange, no such rule, however short the neck.
+    expect(codes((x) => ((x.funnel.flangeWidth = 0), (x.funnel.neckHeight = 1)))).toEqual([]);
+    expect(codes((x) => (x.funnel.neckHeight = 1))).toEqual(['funnel-flange']);
+  });
+
+  it('FL: under a flange the spigot runs straight for 2 layers, or as many as clear a squashed mouth, and on a seat too shallow to spare them for less, which is no error', () => {
+    // At defaults 2 layers of 0.2 mm, and the gap across at the foot of the cover's first layer is 0.1 / cos 30 + 0.2 tan 30.
+    const half = Math.PI / 6;
+    expect(funnelProfile(defaultParams()).relief).toBe(0.4);
+    expect(0.1 / Math.cos(half) + 0.2 * Math.tan(half)).toBeGreaterThan(0.2);
+    // At a 10 degree seat 2 layers would leave 0.1 / cos 10 + 0.2 tan 10 = 0.137 mm there, so it runs up to 0.2 mm.
+    const shallow = defaultParams();
+    shallow.seat.halfAngleDeg = 10;
+    const ten = (10 * Math.PI) / 180;
+    expect(0.1 / Math.cos(ten) + 0.2 * Math.tan(ten)).toBeLessThan(0.14);
+    const { relief } = funnelProfile(shallow);
+    expect(0.1 / Math.cos(ten) + (relief - 0.2) * Math.tan(ten)).toBeCloseTo(0.2, 9);
+    expect(codes((x) => (x.seat.halfAngleDeg = 10))).toEqual([]);
+    // A 1 mm seat leaves 0.8 mm of spigot, and 2 layers would leave 0.4 of cone, under the 0.5 a spigot needs:
+    // the relief is 0.3 instead, and the funnel builds, as it did before FL.
+    const low = defaultParams();
+    low.seat.depth = 1;
+    const p = funnelProfile(low);
+    expect(-p.zTip).toBeCloseTo(1 - 0.1 / Math.sin(half), 9);
+    expect(p.relief).toBeCloseTo(-p.zTip - 0.5, 9);
+    expect(p.relief).toBeLessThan(0.4);
+    expect(codes((x) => (x.seat.depth = 1))).toEqual([]);
+    // No flange, no relief.
+    expect(funnelProfile({ ...low, funnel: { ...low.funnel, flangeWidth: 0 } }).relief).toBe(0);
+    // Still refused where the seat leaves too little spigot whatever the flange, as before FL.
+    expect(codes((x) => ((x.seat.depth = 1), (x.funnel.seatClearance = 0.3)))).toEqual(['funnel-no-spigot']);
   });
 
   it('a funnel with no seat to sit in is an error, and nothing else is said about it', () => {

@@ -86,7 +86,7 @@ describe('names and versions', () => {
     const file = projectFile(project, 'x.stl', { modelSha256: 'ab'.repeat(32), basePlane });
     expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
     expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
-    expect(SCHEMA_VERSION).toBe(5);
+    expect(SCHEMA_VERSION).toBe(6);
   });
 
   it('each request counts its own steps, and only the ZIP packs README, report and project', () => {
@@ -242,6 +242,20 @@ describe('README.txt', () => {
     expect(exportReadme(input((i) => (i.pours = 6))).replace(/\r\n\s*/g, ' ')).toContain('Print 6, one for each pour opening.');
   });
 
+  it('FL: the funnel drops into its seat and its flange rests flat on the top, pressed down until it sits flat all round, with Vaseline under it to seal', () => {
+    const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain("Print it as it is saved, wide rim down. Its spigot drops into the cone-shaped seat at the top of a pour opening, and its flange rests flat on the cover's top.");
+    // The Vaseline goes on first, under the flange alone, and the funnel is then seated and pressed flat.
+    expect(readme).toContain("Stand the mold on its base on a level surface. Smear a thin film of Vaseline on the underside of each funnel's flange, then push a funnel into the seat of each pour opening and press it down until its flange sits flat on the top all round: the Vaseline seals it. Keep the Vaseline out of the seats and the vents.");
+    // Vaseline is on the test patch already, so nothing new goes on the silicone untested.
+    expect(readme).toContain('a smear of the Vaseline and a coat of the mold release on them');
+    // With no flange, the funnel of before FL and its words.
+    const plain = exportReadme(input((i) => (i.params.funnel.flangeWidth = 0))).replace(/\r\n\s*/g, ' ');
+    expect(plain).toContain('Print it as it is saved, wide rim down. Its spigot sits in the cone-shaped seat at the top of a pour opening.');
+    expect(plain).toMatch(/Stand the mold on its base on a level surface\. Push a funnel into the seat of each pour opening\. \d+\. Mix/);
+    expect(plain).not.toContain('flange');
+  });
+
   it('has the workflow: fit, tape, Vaseline, pour until every vent shows silicone, cure, the sprue rule and the D2 demold', () => {
     const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
     const order = [
@@ -370,11 +384,14 @@ describe('README.txt', () => {
   it('when funnels collide, the pour step says to print the smaller funnel or pour through one at a time, not to fill every seat', () => {
     const collide: Diagnostic = { code: 'funnel-collision', severity: 'warning', message: 'Funnels of 40 mm collide, as two pours are only 22.0 mm apart. A top diameter of 21 mm would fit.' };
     const apart = exportReadme(input()).replace(/\r\n\s*/g, ' ');
-    expect(apart).toContain('Push a funnel into the seat of each pour opening.');
+    expect(apart).toContain('then push a funnel into the seat of each pour opening and press it down');
     const close = exportReadme(input((i) => (i.diagnostics = [collide, ...i.diagnostics]))).replace(/\r\n\s*/g, ' ');
-    expect(close).not.toContain('Push a funnel into the seat of each pour opening.');
-    expect(close).toContain('The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.');
+    expect(close).not.toContain('push a funnel into the seat of each pour opening');
+    // FL: the warning may ask for a narrower flange too, so it is the funnel's size, and each funnel still goes down on its flange.
+    expect(close).toContain("The funnels would touch at this spacing, so either print them with the smaller size the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat, with a flange no wider than that warning gives where it says a flange would cover the next seat. Smear a thin film of Vaseline on the underside of each funnel's flange before you seat it, and press it down until the flange sits flat on the top all round: the Vaseline seals it.");
     expect(close).toContain('A top diameter of 21 mm would fit.');
+    const plain = exportReadme(input((i) => ((i.params.funnel.flangeWidth = 0), (i.diagnostics = [collide, ...i.diagnostics])))).replace(/\r\n\s*/g, ' ');
+    expect(plain).toContain('The funnels would touch at this spacing, so either print them with the smaller top diameter the funnel warning below suggests, or pour through one funnel at a time, moving it from seat to seat.');
   });
 
   it('gives the thickness, the measured clearance, the silicone, the box, every warning, and that only a test pour confirms the estimates', () => {
@@ -469,7 +486,7 @@ describe('the export of jersey in Node', () => {
     expect(report).toMatchObject({ app: 'Mold Form Generator', appVersion: BUILD.version, schemaVersion: SCHEMA_VERSION, model: { file: EXAMPLE_FILES.jersey, triangles: model.rawTriangleCount }, plane: { choice: { rank: 0, upper: false }, normal: [0, 0, -1] } });
     // README.txt is wrapped at 76 columns, so its lines are joined first.
     expect(text(files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain(`Made by Mold Form Generator ${BUILD.version} from ${EXAMPLE_FILES.jersey}.`);
-    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 5, appVersion: BUILD.version });
+    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 6, appVersion: BUILD.version });
     // STL headers name the app and carry no version, so every build gives the same bytes for the same mold.
     for (const [name, bytes] of Object.entries(files).filter(([f]) => f.endsWith('.stl'))) expect(text(bytes.subarray(0, 80)).replace(/\0+$/, ''), name).toBe('binary STL, mold-form-generator');
     expect(report.params).toEqual(p.params);
@@ -920,10 +937,12 @@ describe('the export with bolts, in Node', () => {
     ['jersey-merged', 'jersey', (p: Params) => (p.base.mode = 'merged')],
     ['jersey-2x1', 'jersey', (p: Params) => (p.grid.nx = 2)],
     ['barrel', 'barrel', () => {}],
-  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged, the base layer at 0', { timeout: 60_000 }, async ([name, id, change], ctx) => {
+  ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged, the base layer at 0 and no flange', { timeout: 60_000 }, async ([name, id, change], ctx) => {
     skipWithout(ctx, id);
+    // FL: and no flange, which M9's funnel had none of either and whose vents it moves.
     const { files } = await exported(id, (params) => {
       params.silicone.baseLayer = 0;
+      params.funnel.flangeWidth = 0;
       change(params);
     });
     expect(m9Sha(files['cover.stl']), 'cover.stl').toBe(M9.parts[name]['cover.stl']);
@@ -1007,7 +1026,10 @@ describe('the export with bolts, in Node', () => {
     // The fit test with the bolts on: the joint pieces as before, and the coupon.
     const fit = Object.keys(files).filter((f) => f.startsWith('fit_test/')).sort();
     expect(fit).toEqual([...Object.keys(M9.fitTest), 'fit_test/README.txt', 'fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl'].sort());
-    for (const name of Object.keys(M9.fitTest)) expect(m9Sha(files[name]), name).toBe(M9.fitTest[name]);
+    // The joint pieces as M9 made them: the bases whole, and the covers but for their vent, which the default
+    // flange moves 0.02 mm out (FL), so they are M9's with no flange, as the test above holds.
+    for (const name of Object.keys(M9.fitTest).filter((f) => f.endsWith('_base.stl'))) expect(m9Sha(files[name]), name).toBe(M9.fitTest[name]);
+    for (const name of Object.keys(M9.fitTest).filter((f) => f.endsWith('_cover.stl'))) expect(m9Sha(files[name]), name).not.toBe(M9.fitTest[name]);
     for (const name of ['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']) expect(readPart(files[name]).audit, name).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
     expect(text(files['fit_test/README.txt']).split('\r\n').filter((line) => line.length > 76)).toEqual([]);
     const fitReadme = text(files['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');

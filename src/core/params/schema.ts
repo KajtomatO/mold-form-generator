@@ -13,9 +13,10 @@ import { BOLT_LENGTHS, BOLT_SIZES } from '../parts/fasteners';
  * Version 1 came with M6b's export ZIP; 2 added the STL's hash and the base plane itself (M9); 3 the bolts
  * (M10); 4 changes no field but says that the pins and removed vents number bodies as joined parts (M11c's
  * rule, R1), which the app once told by the app version; 5 the silicone base layer, which a file of an older
- * format opens without. An older file is migrated one version at a time, by src/app/projectFile.ts.
+ * format opens without; 6 the funnel's flange, which a file of an older format opens without too. An older
+ * file is migrated one version at a time, by src/app/projectFile.ts.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export interface NumberDef {
   kind: 'number';
@@ -142,6 +143,9 @@ export const PARAM_SCHEMA = {
     wall: num('Wall', 1.2),
     tipWall: num('Tip wall', 0.86),
     seatClearance: num('Seat clearance', 0.1),
+    // FL: a flat ring round the spigot's root that rests on the cover's top, so the funnel stands square. 0 leaves it out.
+    flangeWidth: num('Flange width', 4, { min: 0, max: 10 }),
+    flangeThickness: num('Flange thickness', 1.2, { min: 0.6, max: 5 }),
   },
   grid: {
     nx: num('Columns', 1, { unit: '', min: 1, max: 20, integer: true }),

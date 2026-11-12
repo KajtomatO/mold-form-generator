@@ -285,6 +285,14 @@ export const SOLID_GOLDEN: Record<ExampleId, SolidGolden> = {
  * Limits: exact on the counts, 1% on the rest. Measured again after the M4 review, once a peak on a
  * flat went to the middle of that flat: Benchy's bores hold 0.457 -> 0.389 ml, VIS-35's 0.329 -> 0.2745,
  * and x8's 1.705 -> 1.573, with its longest bore 6.2 -> 7.75 mm (a vent beside the broken barrier's pour).
+ * Measured again at FL, whose 4 mm flange takes the vent beside each first pour from 9.79 to 12.79 mm out,
+ * past the flange's edge, onto lower ceiling on all but Benchy: its bore grows, so the bores hold more and
+ * the cover less. Longest bore, bores and cover before FL: goddess 9.4 mm, 0.334 ml, 533995 mm3; VIS-35 6.5,
+ * 0.2745, 1262706; x8 7.75, 1.573, 311767; barrel 5.8 (now its vent is off the lid, down its side), 0.206,
+ * 74644; wolf 147.3, 1.049, 2435148; chick 9.99, 0.344, 133906. Benchy's vent beside goes the other way,
+ * onto higher ceiling, from 42.92 to 43.21 mm, so its bore is shorter, 13.49 to 13.21 mm, its bores hold
+ * less and its cover more: 25.7 (its long vent, not the one beside), 0.389, 244416. Jersey's vent stays on
+ * its flat top, so only its cover moves, by a fraction of a mm3.
  */
 export interface OpeningGolden {
   bodies: number;
@@ -305,14 +313,14 @@ export interface OpeningGolden {
 }
 
 export const OPENING_GOLDEN: Record<ExampleId, OpeningGolden> = {
-  benchy: { bodies: 1, cavities: 1, leaves: 4, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 25.7, boreMl: 0.389, cover: 244416 },
-  goddess: { bodies: 1, cavities: 1, leaves: 4, significant: 3, plateauBodies: 0, pours: 1, vents: 3, longestBore: 9.4, boreMl: 0.334, cover: 533995 },
-  vis35: { bodies: 1, cavities: 1, leaves: 4, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 6.5, boreMl: 0.2745, cover: 1262706 },
+  benchy: { bodies: 1, cavities: 1, leaves: 4, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 25.7, boreMl: 0.3875, cover: 244418 },
+  goddess: { bodies: 1, cavities: 1, leaves: 4, significant: 3, plateauBodies: 0, pours: 1, vents: 3, longestBore: 11.6, boreMl: 0.3486, cover: 533981 },
+  vis35: { bodies: 1, cavities: 1, leaves: 4, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 7.09, boreMl: 0.2848, cover: 1262696 },
   jersey: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 5.1, boreMl: 0.19, cover: 80372 },
-  x8: { bodies: 8, cavities: 2, leaves: 16, significant: 9, plateauBodies: 7, pours: 8, vents: 9, longestBore: 7.75, boreMl: 1.573, cover: 311767 },
-  barrel: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 5.8, boreMl: 0.206, cover: 74644 },
-  wolf: { bodies: 1, cavities: 1, leaves: 2, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 147.3, boreMl: 1.049, cover: 2435148 },
-  chick: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 0, pours: 1, vents: 1, longestBore: 9.99, boreMl: 0.344, cover: 133906 },
+  x8: { bodies: 8, cavities: 2, leaves: 16, significant: 9, plateauBodies: 7, pours: 8, vents: 9, longestBore: 10.88, boreMl: 1.594, cover: 311746 },
+  barrel: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 1, pours: 1, vents: 1, longestBore: 12.98, boreMl: 0.2379, cover: 74612 },
+  wolf: { bodies: 1, cavities: 1, leaves: 2, significant: 2, plateauBodies: 0, pours: 1, vents: 2, longestBore: 147.3, boreMl: 1.127, cover: 2435070 },
+  chick: { bodies: 1, cavities: 1, leaves: 1, significant: 1, plateauBodies: 0, pours: 1, vents: 1, longestBore: 10.85, boreMl: 0.3483, cover: 133902 },
 };
 
 /**

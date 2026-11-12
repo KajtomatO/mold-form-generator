@@ -232,7 +232,8 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     store.dragOpening(pour.id, vent.x, vent.y, { x: 0, y: 0 });
     expect(store.drag.value!.check.valid).toBe(false);
     expect(store.drag.value!.check.problems).toContain('land');
-    expect(store.drag.value!.check.reason).toBe('it is too close to another opening');
+    // FL: and its flange would rest on the vent, which the reason says too, as the flange reaches further.
+    expect(store.drag.value!.check.reason).toBe("it is too close to another opening, and its funnel's flange would rest on a vent and close it");
     expect(dragCheck(p, pour.id, vent.x, vent.y)).toEqual(store.drag.value!.check);
     // Where the drop would go is the drop's own snap, worked out on each move so the view can show it.
     const lands = store.drag.value!.check.lands!;
@@ -277,6 +278,39 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     // A distance set on one model's box starts again at a quarter of the next one's.
     expect(store.explode.value).toEqual({ on: true, distance: null });
     await p.idle();
+  });
+
+  it('FL: a vent dragged under the pour\'s flange is refused for the flange, in a maker\'s words, and the drop snaps it out clear of it', async () => {
+    const { store } = await loaded();
+    const p = store.pipeline;
+    const openings = p.placement!.value.placement.openings;
+    const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+    // Half way between where the land would let it go and where the flange does: the seat 6.73, the mouth 1.55
+    // and the land 1.5 against the flange 10.73, the mouth and its 0.5 mm gap, by hand.
+    const seat = 5 + 3 * Math.tan(Math.PI / 6);
+    const reach = seat + 4 + 1.55 + 0.5;
+    const along = (seat + 1.55 + 1.5 + reach) / 2;
+    const ux = (vent.x - pour.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), uy = (vent.y - pour.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y);
+    store.dragOpening(vent.id, pour.x + ux * along, pour.y + uy * along, { x: 0, y: 0 });
+    const check = store.drag.value!.check;
+    expect(check).toMatchObject({ valid: false, problems: ['flange'], reason: "a funnel's flange would rest on it and close it" });
+    expect(Math.hypot(check.lands!.x - pour.x, check.lands!.y - pour.y)).toBeGreaterThanOrEqual(reach);
+    store.dropDrag();
+    await p.idle();
+    const dropped = p.placement!.value.placement.openings.find((o) => o.id === vent.id)!;
+    expect(dropped).toMatchObject({ pinned: true, valid: true, x: check.lands!.x, y: check.lands!.y });
+    expect(store.lastMove.value!.result).toMatchObject({ snapped: true, valid: true, refused: ['flange'] });
+    // Nearer, inside the land too, it is refused for both, and the reason names the flange's as well, the one to clear.
+    store.dragOpening(vent.id, pour.x + ux * 8, pour.y + uy * 8, { x: 0, y: 0 });
+    expect(store.drag.value!.check).toMatchObject({ valid: false, problems: ['land', 'flange'], reason: "it is too close to another opening, and a funnel's flange would rest on it and close it" });
+    store.cancelDrag();
+    // With no flange the same spot is fine, as the land alone allows it.
+    store.cancelDrag();
+    store.setParam('funnel.flangeWidth', 0);
+    await p.idle();
+    store.dragOpening(vent.id, pour.x + ux * along, pour.y + uy * along, { x: 0, y: 0 });
+    expect(store.drag.value!.check).toMatchObject({ valid: true, problems: [], reason: null });
+    store.cancelDrag();
   });
 
   it('a change of base plane undoes to the old plane with the pins and removed vents it had, and redoes to the new one without them', async () => {

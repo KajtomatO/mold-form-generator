@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { boreSilicone, replicateOpenings, type PlacedOpening } from '../../src/core/analysis/placement';
 import { mergeTree, significantLeaves } from '../../src/core/analysis/peaks';
-import { boreRadius, checkOpening, discMinimum, dropOpening, heightAt, isValid, openingSizes, placementSpace, topRadius, type OpeningKind, type OpeningSpot } from '../../src/core/analysis/validate';
+import { boreRadius, checkOpening, discMinimum, dropOpening, flangeReach, heightAt, isValid, openingSizes, placementSpace, topRadius, type OpeningKind, type OpeningSpot } from '../../src/core/analysis/validate';
 import { connectedPieces } from '../../src/core/mesh/shells';
 import { crossParameterErrors } from '../../src/core/params/rules';
 import type { Params } from '../../src/core/params/schema';
@@ -245,20 +246,23 @@ describe('peaks and placement on the 8 examples', () => {
     it.each(EXAMPLE_IDS)('%s: each body has a vent beside its first pour, on a circle outside the seat', (id) => {
       const p = plannedAtDefaults(id);
       const { sizes } = p.space;
+      // FL: and outside the funnel's flange, which at defaults is the further.
+      const closest = Math.max(topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand, flangeReach(sizes));
+      expect(closest).toBeGreaterThan(topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand + 2.9);
       for (const [b] of p.search.bodies.entries()) {
         const pour = poursOf(p).find((o) => o.body === b)!;
         const beside = ventsOf(p).find((o) => o.body === b && o.role === 'beside')!;
         expect(beside, `body ${b}`).toBeDefined();
         const apart = Math.hypot(beside.x - pour.x, beside.y - pour.y);
-        expect(apart).toBeGreaterThanOrEqual(topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand);
-        expect(apart).toBeLessThanOrEqual(topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand + 4.1);
+        expect(apart).toBeGreaterThanOrEqual(closest);
+        expect(apart).toBeLessThanOrEqual(closest + 4.1);
       }
     });
 
     it.each(EXAMPLE_IDS)('%s: that vent is at the highest valid point of the nearest circle that has one, by a scan of its own', (id) => {
       const p = plannedAtDefaults(id);
       const { sizes, field } = p.space;
-      const closest = topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand;
+      const closest = Math.max(topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand, flangeReach(sizes));
       for (const beside of ventsOf(p).filter((o) => o.role === 'beside')) {
         const pour = poursOf(p).find((o) => o.body === beside.body)!;
         const others = p.placement.openings.filter((o) => o !== beside);
@@ -295,6 +299,16 @@ describe('peaks and placement on the 8 examples', () => {
       for (const pour of pours) expectOverOwnBody(p, pour);
       const copies = replicateOpenings(p.placement.openings, p.space);
       expect(copies.filter((c) => c.kind === 'pour')).toHaveLength(24);
+      // FL: with the pours placed first, a vent beside a first pour stands on the barrier's top or not at all,
+      // never down in the trench beside it, about 20 mm under the tops, where it would vent nothing.
+      for (const beside of ventsOf(p).filter((o) => o.role === 'beside')) {
+        const pour = poursOf(p).find((o) => o.body === beside.body)!;
+        // The tops stand at 24 mm, the trenches at about 4.
+        expect(heightAt(p.space.field, pour.x, pour.y) - heightAt(p.space.field, beside.x, beside.y), beside.id).toBeLessThan(10);
+      }
+      const crowded = p.placement.diagnostics.filter((d) => d.code === 'vent-refused');
+      expect(crowded.map((d) => d.severity)).toEqual(['info']);
+      expect(ventsOf(p).filter((o) => o.role === 'beside').length + (crowded[0].message.match(/\(/g) ?? []).length).toBe(8);
     });
 
     it.each([[10, false], [0, true]])('grid 2 x 3 Benchy at spacing %i, merged %s, gives 6 pours and at least 6 vents', (spacing, merged) => {
@@ -330,7 +344,8 @@ describe('peaks and placement on the 8 examples', () => {
       const warning = p.placement.diagnostics.find((d) => d.code === 'funnel-collision')!;
       expect(warning.severity).toBe('warning');
       expect(warning.message).toContain('22.0 mm apart');
-      expect(warning.message).toMatch(/top diameter of 2\d mm would fit/);
+      // FL: the 21 mm a top would need leaves no room for a 21.5 mm flange either, so the flange is sized too.
+      expect(warning.message).toMatch(/top diameter of 21 mm with a flange width of at most 3\.7 mm would fit/);
       const fits = planWith('x8', (x) => (x.funnel.topDiameter = 21));
       expect(codes(fits)).not.toContain('funnel-collision');
       for (const id of ['benchy', 'wolf', 'jersey'] as ExampleId[]) expect(codes(plannedAtDefaults(id))).not.toContain('funnel-collision');
@@ -430,8 +445,9 @@ describe('peaks and placement on the 8 examples', () => {
       expect(poursOf(p).every((o) => o.body === 0)).toBe(true);
       expect(p.placement.bodies).toMatchObject([{ requested: count, placed: count }]);
       expect(codes(p)).not.toContain('pour-shortfall');
-      // 40 mm funnels do not fit side by side on a 40 mm chick, which the soft rule says.
-      expect(codes(p)).toEqual(['funnel-collision']);
+      // 40 mm funnels do not fit side by side on a 40 mm chick, which the soft rule says. FL: at 3 the pours
+      // go first, and the vent beside the first then stands 1.7 mm lower than 9.8 mm out, past t / 2, which a note says.
+      expect(codes(p)).toEqual(count === 3 ? ['vent-low', 'funnel-collision'] : ['funnel-collision']);
       expectAllValid(p);
     });
   });
@@ -472,6 +488,175 @@ describe('peaks and placement on the 8 examples', () => {
 
 /** Each model's drop times at the export cell. A preview's field is 16 times smaller. */
 const dropRows: string[] = [];
+
+/**
+ * FL: no vent under a flange, by a check of its own: every copy of every vent against every copy of every
+ * pour, by plain distance, with the flange's radius worked out by hand from the parameters.
+ */
+function expectNoVentUnderAFlange(p: PlannedOpenings, params: Params): void {
+  const half = (params.seat.halfAngleDeg * Math.PI) / 180;
+  const flange = params.pour.diameter / 2 + params.seat.depth * Math.tan(half) + params.funnel.flangeWidth;
+  const mouth = params.vents.diameter / 2 + VENT_CHAMFER;
+  const copies = replicateOpenings(p.placement.openings, p.space);
+  const pours = copies.filter((c) => c.kind === 'pour'), vents = copies.filter((c) => c.kind === 'vent');
+  expect(pours.length).toBeGreaterThan(0);
+  expect(vents.length).toBeGreaterThan(0);
+  let nearest = Infinity;
+  for (const pour of pours) for (const vent of vents) nearest = Math.min(nearest, Math.hypot(pour.x - vent.x, pour.y - vent.y));
+  expect(nearest).toBeGreaterThanOrEqual(flange + mouth + 0.5 - 1e-9);
+}
+
+describe('FL: no vent under a funnel\'s flange', () => {
+  it.each(EXAMPLE_IDS)('%s: no vent\'s mouth within a flange\'s radius and 0.5 mm of any pour, and every body still gets its pours', (id) => {
+    const p = plannedAtDefaults(id);
+    expectNoVentUnderAFlange(p, goldenParams());
+    expectAllValid(p);
+    for (const body of p.placement.bodies) expect(body.placed).toBe(body.requested);
+  });
+
+  const GRIDS: [string, ExampleId, (x: Params) => void][] = [
+    ['Benchy 2 x 3', 'benchy', (x) => ((x.grid.nx = 2), (x.grid.ny = 3))],
+    ['jersey 3 x 3', 'jersey', (x) => ((x.grid.nx = 3), (x.grid.ny = 3))],
+    ['x8 at perModel 3', 'x8', (x) => (x.pour.perModel = 3)],
+    ['the wolf with the base layer', 'wolf', (x) => (x.silicone.baseLayer = null)],
+  ];
+  it.each(GRIDS)('%s: the same, on every copy', (_, id, change) => {
+    const p = planWith(id, change);
+    expectNoVentUnderAFlange(p, paramsWith(change));
+    expectAllValid(p);
+    for (const body of p.placement.bodies) expect(body.placed).toBe(body.requested);
+    expect(p.placement.diagnostics.map((d) => d.code)).not.toContain('pour-shortfall');
+    if (id === 'x8') expect(poursOf(p)).toHaveLength(24);
+  });
+
+  it('negative control: with no flange, the vent beside jersey\'s pour is under where a default flange would rest', () => {
+    const p = planWith('jersey', (x) => (x.funnel.flangeWidth = 0));
+    expect(() => expectNoVentUnderAFlange(p, goldenParams())).toThrow();
+    expectNoVentUnderAFlange(p, paramsWith((x) => (x.funnel.flangeWidth = 0)));
+  });
+
+  it('a vent dragged under the flange on jersey is refused for the flange, and snaps out clear of it', () => {
+    const p = plannedAtDefaults('jersey');
+    const pour = poursOf(p)[0], vent = ventsOf(p)[0];
+    const others = p.placement.openings.filter((o) => o !== vent);
+    // Between the land and the flange's edge, towards the pour.
+    const { sizes } = p.space;
+    const land = topRadius(sizes, 'pour') + topRadius(sizes, 'vent') + sizes.minLand;
+    const along = (land + flangeReach(sizes)) / 2;
+    const unit = [(vent.x - pour.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), (vent.y - pour.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y)];
+    const spot: OpeningSpot = { kind: 'vent', x: pour.x + unit[0] * along, y: pour.y + unit[1] * along };
+    expect(checkOpening(p.space, spot, others).problems).toEqual(['flange']);
+    const drop = dropOpening(p.space, spot, others);
+    expect(drop).toMatchObject({ snapped: true, valid: true, problems: [] });
+    expect(Math.hypot(drop.x - pour.x, drop.y - pour.y)).toBeGreaterThanOrEqual(flangeReach(sizes));
+  });
+
+  it('barrel at t = 1: no room for the vent beside its pour clear of the flange, and the warning names the widest flange that makes room', (test) => {
+    skipWithout(test, 'barrel');
+    const p = planWith('barrel', (x) => (x.silicone.t = 1));
+    expect(ventsOf(p)).toEqual([]);
+    const refused = p.placement.diagnostics.find((d) => d.code === 'vent-refused')!;
+    expect(refused.message).toBe("No room for a vent beside the pour at (0.0, 0.0) clear of its funnel's flange: a Flange width of at most 2.5 mm under Pour & funnel leaves room for one.");
+    expect(p.placement.uncovered).toEqual([]);
+    // And it is so: at 2.5 mm the vent stands beside the pour, and half a mm wider it does not.
+    expect(ventsOf(planWith('barrel', (x) => ((x.silicone.t = 1), (x.funnel.flangeWidth = 2.5))))).toHaveLength(1);
+    expect(ventsOf(planWith('barrel', (x) => ((x.silicone.t = 1), (x.funnel.flangeWidth = 3))))).toEqual([]);
+    // With no flange the vent stands beside it, as before FL.
+    const plain = planWith('barrel', (x) => ((x.silicone.t = 1), (x.funnel.flangeWidth = 0)));
+    expect(ventsOf(plain)).toHaveLength(1);
+    expect(codes(plain)).not.toContain('vent-refused');
+  });
+
+  it('no default pour moves for the flange\'s room on the top: at each, the top\'s edge is further than the flange and the chamfer', () => {
+    for (const id of EXAMPLE_IDS) {
+      const p = plannedAtDefaults(id);
+      // Where they stand with no flange, which is before FL.
+      const plain = planWith(id, (x) => (x.funnel.flangeWidth = 0));
+      expect(poursOf(p).map(({ id: o, x, y }) => [o, x, y]), id).toEqual(poursOf(plain).map(({ id: o, x, y }) => [o, x, y]));
+      const { O } = p.rim;
+      const reach = p.space.sizes.flangeRadius + p.space.sizes.topChamfer;
+      for (const copy of replicateOpenings(poursOf(p), p.space)) {
+        const edge = Math.min(copy.x - O.x0, O.x1 - copy.x, copy.y - O.y0, O.y1 - copy.y);
+        // The wall and the seat set the inset as before FL, which the flange's needs stay under by a margin.
+        expect(edge, id).toBeGreaterThan(reach + 1);
+        expect(edge, id).toBeGreaterThan(p.rim.wall + topRadius(p.space.sizes, 'pour'));
+      }
+    }
+  });
+});
+
+/** SHA-256 of a placement's openings, ids and positions, in order: what S7 gives, to the last bit. */
+const placementHash = (p: PlannedOpenings): string => createHash('sha256').update(JSON.stringify(p.placement.openings.map((o) => [o.id, o.x, o.y]))).digest('hex');
+
+describe('FL: more than one pour per body', () => {
+  /** At the goldens' settings, as 7a35b00 placed them, before any change of FL: its own code, run from a copy of that commit. */
+  const BEFORE_FL: [string, ExampleId, (x: Params) => void, string][] = [
+    ['jersey at 2 pours', 'jersey', (x) => (x.pour.perModel = 2), '7c82a37d4500df34ef29921b8a1aeb93ce4f0929a8334488639dc6c123949b3b'],
+    ['Benchy at 2 pours', 'benchy', (x) => (x.pour.perModel = 2), '483e40e799625c4d4f72f987edb24145f43dd20874598fd8d669e982fdc05908'],
+    ['x8 at 3 pours', 'x8', (x) => (x.pour.perModel = 3), '920abc9336809579e1d6cbd4eb7feea9cb69b75aca590e47c79490f007504386'],
+  ];
+  it.each(BEFORE_FL)('%s: with no flange, and with one the land keeps clear (1 mm), every opening stands where it did before FL', (_, id, change, hash) => {
+    expect(placementHash(planWith(id, (x) => (change(x), (x.funnel.flangeWidth = 0))))).toBe(hash);
+    expect(placementHash(planWith(id, (x) => (change(x), (x.funnel.flangeWidth = 1))))).toBe(hash);
+    // And the default flange does move them, so the hash is no constant.
+    expect(placementHash(planWith(id, change))).not.toBe(hash);
+  });
+
+  it.each([['jersey', 'jersey'], ['Benchy', 'benchy']] as [string, ExampleId][])('%s at 2 pours: the second pour keeps its flange off the first\'s seat, as there is room for it as high up', (_, id) => {
+    const p = planWith(id, (x) => (x.pour.perModel = 2));
+    const [first, second] = poursOf(p);
+    // The flange's radius, the seat's 5 + 3 tan 30 and 4 more, then the other seat and the 0.5 mm gap, by hand.
+    const seat = 5 + 3 * Math.tan(Math.PI / 6);
+    expect(Math.hypot(second.x - first.x, second.y - first.y)).toBeGreaterThanOrEqual(seat + 4 + seat + 0.5);
+    // As high as with no flange, give or take t / 2.
+    const plain = poursOf(planWith(id, (x) => ((x.pour.perModel = 2), (x.funnel.flangeWidth = 0))))[1];
+    expect(heightAt(p.space.field, second.x, second.y)).toBeGreaterThanOrEqual(heightAt(p.space.field, plain.x, plain.y) - 1.5);
+    const collision = p.placement.diagnostics.find((d) => d.code === 'funnel-collision')!;
+    expect(collision.message).not.toContain("other pour's seat");
+    expectAllValid(p);
+    expectNoVentUnderAFlange(p, paramsWith((x) => (x.pour.perModel = 2)));
+    expect(ventsOf(p).filter((o) => o.role === 'beside')).toHaveLength(1);
+  });
+
+  it('jersey at 3 pours: clear of each other\'s seats, and the vent beside the first gives way to them, with a note', () => {
+    const seat = 5 + 3 * Math.tan(Math.PI / 6);
+    const p = planWith('jersey', (x) => (x.pour.perModel = 3));
+    // Three pours on jersey's one top, spread along it clear of each other's seats too.
+    const pours = poursOf(p);
+    expect(pours).toHaveLength(3);
+    for (const a of pours) for (const b of pours) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(seat + 4 + seat + 0.5);
+    // There is then no room for the vent beside the first on the top, and a note says why, as the pours open it.
+    expect(ventsOf(p)).toEqual([]);
+    expect(p.placement.diagnostics.find((d) => d.code === 'vent-refused')).toMatchObject({ severity: 'info' });
+    expect(p.placement.uncovered).toEqual([]);
+  });
+});
+
+describe('FL: the vent beside a pour on a peaked top', () => {
+  it('the wolf: the flange keeps it 12.8 mm out, lower down its dome than 9.8 mm, and a note says so and what would let it stand nearer', () => {
+    const p = plannedAtDefaults('wolf');
+    const note = p.placement.diagnostics.find((d) => d.code === 'vent-low')!;
+    expect(note.severity).toBe('info');
+    const beside = ventsOf(p).find((o) => o.role === 'beside')!;
+    const pour = poursOf(p)[0];
+    expect(note.message).toContain(`The vent at (${beside.x.toFixed(1)}, ${beside.y.toFixed(1)}) beside the pour stands 12.8 mm from it`);
+    expect(note.message).toContain('A Flange width of at most 1 mm under Pour & funnel lets the vent stand 9.8 mm out.');
+    // The drop it gives is the drop to the vent with no flange, by a placement of its own.
+    const plain = ventsOf(planWith('wolf', (x) => (x.funnel.flangeWidth = 0))).find((o) => o.role === 'beside')!;
+    const drop = heightAt(p.space.field, plain.x, plain.y) - heightAt(p.space.field, beside.x, beside.y);
+    expect(drop).toBeGreaterThan(goldenParams().silicone.t / 2);
+    expect(note.message).toContain(`the ceiling is ${drop.toFixed(1)} mm lower than 9.8 mm out`);
+    expect(Math.hypot(plain.x - pour.x, plain.y - pour.y)).toBeCloseTo(9.79, 2);
+    // At 1 mm the vent is back where it stands with none, and nothing is said.
+    const narrow = planWith('wolf', (x) => (x.funnel.flangeWidth = 1));
+    expect(ventsOf(narrow).find((o) => o.role === 'beside')).toMatchObject({ x: plain.x, y: plain.y });
+    expect(codes(narrow)).not.toContain('vent-low');
+  });
+
+  it('jersey, Benchy and the chick: no note where the flange costs the vent no height', () => {
+    for (const id of ['jersey', 'benchy', 'chick'] as ExampleId[]) expect(codes(plannedAtDefaults(id)), id).not.toContain('vent-low');
+  });
+});
 
 describe('drag validation on real fields', () => {
   /** The plan's random drops: anywhere over the box and a little past it. */
@@ -653,9 +838,14 @@ function checkTopSection({ arena, o, m }: Ctx): void {
   expect(track(o.cover.slice(rim.Zt - under)).numContour()).toBe(o.copies.length + 1);
 }
 
-/** Plastic left in a thin column at an opening, on the cover and before it was cut. */
+/**
+ * Plastic left in a thin column at an opening, on the cover and before it was cut. FL put the wolf's vent on an
+ * 88 degree cliff of its ceiling (10 mm across a quarter of a mm), where a column 0.02 mm wide averaged the TIN
+ * across the crease at a node and read it 0.09 mm high; 0.002 mm reads it within 0.01 there, and within
+ * 0.001 mm of the wider column at the wolf's other openings.
+ */
 function columnLength(arena: Arena, solid: Manifold, x: number, y: number, top: number): number {
-  const side = 0.02;
+  const side = 0.002;
   const column = boxSolid(arena, [x - side / 2, y - side / 2, 0], [x + side / 2, y + side / 2, top]);
   return arena.track(solid.intersect(column)).volume() / (side * side);
 }
@@ -687,13 +877,27 @@ function checkBoreLengths({ arena, m, o }: Ctx): void {
   }
   // The length placement reports, which its warnings and goldens read, against the solid at each copy's
   // own centre, the longest of them. Between nodes on a slope the TIN may sit 0.24 lower than the field.
+  // On a cell whose corners do not lie in a plane, a TIN through them, split along either diagonal, parts
+  // from the field's bilinear surface by up to the larger of the two splits' gaps at that very point: on a
+  // plane none, and 0.80 mm where FL's flange put the wolf's vent at the goldens' settings, on a cliff of
+  // its ceiling (152.4 to 142.1 mm across a quarter of a mm), against 0.75 measured. Elsewhere 0.34 holds.
+  const splitGap = (x: number, y: number): number => {
+    const u = (x - x0) / cell, v = (y - y0) / cell;
+    const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
+    const a = values[i + j * nx], b = values[i + 1 + j * nx], c = values[i + 1 + (j + 1) * nx], d = values[i + (j + 1) * nx];
+    const bilinear = a * (1 - fu) * (1 - fv) + b * fu * (1 - fv) + c * fu * fv + d * (1 - fu) * fv;
+    const ac = fu >= fv ? a + (b - a) * fu + (c - b) * fv : a + (c - d) * fu + (d - a) * fv;
+    const bd = fu + fv <= 1 ? a + (b - a) * fu + (d - a) * fv : c + (c - d) * (fu - 1) + (c - b) * (fv - 1);
+    return Math.max(Math.abs(bilinear - ac), Math.abs(bilinear - bd));
+  };
   o.planned.placement.openings.forEach((opening, k) => {
-    let longest = 0;
+    let longest = 0, gap = 0;
     for (let tile = 0; tile < n; tile++) {
       const copy = o.copies[k * n + tile];
       longest = Math.max(longest, columnLength(arena, m.cover, copy.x, copy.y, Zt + 1));
+      gap = Math.max(gap, splitGap(copy.x, copy.y));
     }
-    expect(Math.abs(opening.boreLength - longest), `${opening.id}: ${opening.boreLength} against ${longest} on the solid`).toBeLessThanOrEqual(0.1 + 0.24);
+    expect(Math.abs(opening.boreLength - longest), `${opening.id}: ${opening.boreLength} against ${longest} on the solid, a split's gap ${gap}`).toBeLessThanOrEqual(0.1 + Math.max(0.24, gap));
   });
 }
 
@@ -923,27 +1127,35 @@ describe('on x8, with cavities apart: each must be opened', () => {
   }, SLOW);
 });
 
-/** What placement says on jersey, barrel and wolf at defaults: only wolf's 147 mm vent is worth a word. */
-const MATRIX_CODES: Partial<Record<ExampleId, string[]>> = { jersey: [], barrel: [], wolf: ['long-vent'] };
+/**
+ * What placement says on jersey, barrel and wolf at defaults: wolf's 147 mm vent, and (FL) on the barrel's
+ * lid and the wolf's dome the note that the flange keeps the vent beside the pour lower down.
+ */
+const MATRIX_CODES: Partial<Record<ExampleId, string[]>> = { jersey: [], barrel: ['vent-low'], wolf: ['vent-low', 'long-vent'] };
 
 describe('parameter matrix', () => {
   /** Each case, and where its diagnostics differ from MATRIX_CODES, what they are instead and why. */
   const MATRIX: [string, (p: Params) => void, Partial<Record<ExampleId, string[]>>][] = [
-    ['pour 6', (p) => (p.pour.diameter = 6), {}],
+    // FL: a 6 mm pour's seat leaves the barrel's vent on its lid, within t / 2.
+    ['pour 6', (p) => (p.pour.diameter = 6), { barrel: [] }],
     // The barrel's 14.8 mm cavity has no room for a vent beside an 11.73 mm seat, and the pour covers its leaf.
     ['pour 20', (p) => (p.pour.diameter = 20), { barrel: ['vent-refused'] }],
-    ['t=1', (p) => (p.silicone.t = 1), {}],
-    // Vent persistence follows t / 2, so at 5 wolf's 3.8 mm leaf is no longer one that needs a vent.
-    ['t=10', (p) => (p.silicone.t = 10), { wolf: [] }],
+    // FL: at these the barrel's cavity, about 25 mm across, ends inside the reach of a default flange round its
+    // middle pour (seat 30: 12.8 mm; seat 45: 14.1; vent 6: 14.5), so its vent beside is refused; the pour covers its leaf.
+    ['t=1', (p) => (p.silicone.t = 1), { barrel: ['vent-refused'] }],
+    // Vent persistence follows t / 2, so at 5 wolf's 3.8 mm leaf is no longer one that needs a vent, and the
+    // vents beside the pours stand within that t / 2 of where they would with no flange.
+    ['t=10', (p) => (p.silicone.t = 10), { wolf: [], barrel: [] }],
     ['seat depth 4, its limit under the 5 mm cap', (p) => (p.seat.depth = 4), {}],
     ['seat depth 2 at the thinnest cap, also its limit', (p) => ((p.cover.topCap = 3), (p.seat.depth = 2)), {}],
-    ['seat half angle 45', (p) => (p.seat.halfAngleDeg = 45), {}],
-    ['no seat, so a plain bore', (p) => ((p.seat.enabled = false), (p.funnel.generate = false)), {}],
+    ['seat half angle 45', (p) => (p.seat.halfAngleDeg = 45), { barrel: ['vent-refused'] }],
+    // No funnel, no flange.
+    ['no seat, so a plain bore', (p) => ((p.seat.enabled = false), (p.funnel.generate = false)), { barrel: [], wolf: ['long-vent'] }],
     // A 6 mm vent of 147 mm is under 40 diameters.
-    ['vent 6', (p) => (p.vents.diameter = 6), { wolf: [] }],
+    ['vent 6', (p) => (p.vents.diameter = 6), { wolf: ['vent-low'], barrel: ['vent-refused'] }],
     // Two pours on jersey's one top are closer than two 40 mm funnels; the barrel fits only one; wolf's
     // second pour takes the leaf of its 147 mm vent, and a pour's limit is 60 mm.
-    ['2 pours per body', (p) => (p.pour.perModel = 2), { jersey: ['funnel-collision'], barrel: ['pour-shortfall'], wolf: ['long-pour'] }],
+    ['2 pours per body', (p) => (p.pour.perModel = 2), { jersey: ['funnel-collision'], barrel: ['vent-low', 'pour-shortfall'], wolf: ['vent-low', 'long-pour'] }],
   ];
   const models: ExampleId[] = FULL ? ['jersey', 'barrel', 'wolf'] : ['jersey'];
   describe.each(models)('%s', (id) => {
@@ -969,6 +1181,9 @@ describe('parameter matrix', () => {
     expect(poursOf(p)).toHaveLength(1);
     expect(ventsOf(p)).toEqual([]);
     expect(p.placement.diagnostics.map((d) => [d.code, d.severity])).toEqual([['vent-refused', 'warning']]);
+    // FL: no flange would make room here, so the warning names none.
+    expect(p.placement.diagnostics[0].message).toBe('No room for a vent beside the pour at (0.0, 0.0).');
+    expect(ventsOf(planWith('barrel', (x) => ((x.pour.diameter = 20), (x.funnel.flangeWidth = 0))))).toEqual([]);
     expect(p.placement.uncovered).toEqual([]);
   });
 
@@ -1011,7 +1226,15 @@ describe('the funnel on real seats', () => {
       for (const pour of pours) {
         const inPlace = arena.track(funnel.translate([pour.x, pour.y, m.rim.Zt]));
         expect(arena.track(inPlace.intersect(o.cover)).volume(), `at ${pour.x}, ${pour.y}`).toBeLessThan(1e-3);
-        expect(Math.abs(inPlace.minGap(o.cover, 1) - params.funnel.seatClearance), `at ${pour.x}, ${pour.y}`).toBeLessThanOrEqual(0.02);
+        // FL: it stands on its flange, on the real top, and its spigot, cut a hair under the top, keeps the gap set.
+        expect(inPlace.minGap(o.cover, 1), `at ${pour.x}, ${pour.y}`).toBeLessThan(1e-6);
+        expect(inPlace.boundingBox().min[2]).toBeLessThan(m.rim.Zt - 1);
+        const spigot = arena.track(inPlace.trimByPlane([0, 0, -1], -(m.rim.Zt - 1e-3)));
+        expect(Math.abs(spigot.minGap(o.cover, 1) - params.funnel.seatClearance), `at ${pour.x}, ${pour.y}`).toBeLessThanOrEqual(0.02);
+        const ring = arena.polygons(arena.track(inPlace.slice(m.rim.Zt + 1e-3))).flat() as [number, number][];
+        expect(Math.max(...ring.map(([x, y]) => Math.hypot(x - pour.x, y - pour.y)))).toBeCloseTo(funnelProfile(params).rFlange, 3);
+        // Lowered by a layer, the flange would cut into the top: it is down on it, not over it.
+        expect(arena.track(arena.track(inPlace.translate([0, 0, -params.print.layerHeight])).intersect(o.cover)).volume()).toBeGreaterThan(10);
       }
       // Through it to the bore, with the throat the narrower.
       expect(funnelProfile(params).rThroat).toBeLessThan(params.pour.diameter / 2);

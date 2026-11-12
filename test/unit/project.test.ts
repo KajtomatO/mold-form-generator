@@ -40,6 +40,16 @@ const fixture = (name: string): string => readFileSync(join(fixtures, name), 'ut
 const V3_BOLTS = { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 };
 /** What format 5 adds to an older file: the base layer off, at the slope 5 started with. */
 const V5_LAYER = { baseLayer: 0, baseLayerSlopeDeg: 2 };
+/** What format 6 adds to an older file: no flange on the funnel, at the thickness 6 started with (FL). */
+const V6_FLANGE = { flangeWidth: 0, flangeThickness: 1.2 };
+/**
+ * And what it says when that file has a funnel: the flange is off, where to turn it on, and that up to the
+ * land of 1.5 less the flange's 0.5 mm gap to a vent's mouth, 1 mm, the cover already printed still fits.
+ */
+const V6_NOTE = {
+  severity: 'info',
+  message: "This mold was made before the funnel had a flange, so it opens with Flange width 0 and the funnel it had. To stand the funnel on a flat flange on the cover's top, set Flange width under Pour & funnel. A width of up to 1 mm leaves every vent where it is, so a cover you have printed takes the new funnel; a wider flange moves the vent beside each pour out from under it, so print the cover again too.",
+} as const;
 const nodeSha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 
@@ -174,31 +184,31 @@ describe('pack and unpack', () => {
 });
 
 describe('migration', () => {
-  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 5 with the hash and plane unknown, the bolts off and no base layer', () => {
+  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 6 with the hash and plane unknown, the bolts off, no base layer and no flange', () => {
     const read = readProjectJson(fixture('v1-jersey-export.json'));
     const v1 = JSON.parse(fixture('v1-jersey-export.json'));
     expect(v1.schemaVersion).toBe(1);
     expect(read.from).toBe(1);
-    expect(SCHEMA_VERSION).toBe(5);
-    expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER } } });
+    expect(SCHEMA_VERSION).toBe(6);
+    expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE } } });
     // The pocket's edited flag is its value, 0.4, where an unedited one is null.
     expect(read.file.params.base.pocketDepth).toBe(0.4);
     expect(read.file.params.silicone.printMargin).toBeNull();
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 5.' }]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
   });
 
-  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 5 with the bolts off, no base layer and nothing else changed', () => {
+  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 6 with the bolts off, no base layer, no flange and nothing else changed', () => {
     const read = readProjectJson(fixture('v2-jersey-export.json'));
     const v2 = JSON.parse(fixture('v2-jersey-export.json'));
     expect(v2).toMatchObject({ schemaVersion: 2, appVersion: '0.2.0' });
     expect(v2.params.bolts).toBeUndefined();
     expect(read.from).toBe(2);
-    expect(read.file).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, params: { ...v2.params, bolts: V3_BOLTS, silicone: { ...v2.params.silicone, ...V5_LAYER } } });
+    expect(read.file).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, params: { ...v2.params, bolts: V3_BOLTS, silicone: { ...v2.params.silicone, ...V5_LAYER }, funnel: { ...v2.params.funnel, ...V6_FLANGE } } });
     expect(read.file.params.bolts).toEqual(defaultParams().bolts);
     // The hash and the plane came with format 2, and stay as saved.
     expect(read.file.modelSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(read.file.basePlane).toEqual(v2.basePlane);
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 5.' }]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
   });
 
   it('a project of format 4 opens without the base layer, and one that holds its settings, as the 1.0.2 test build wrote, keeps them', () => {
@@ -207,12 +217,32 @@ describe('migration', () => {
     const plain = readProjectJson(JSON.stringify(v4));
     expect(plain.from).toBe(4);
     expect(plain.file.params.silicone).toEqual({ ...v2.params.silicone, ...V5_LAYER });
-    expect(plain.notes).toEqual([{ severity: 'info', message: 'Saved in project format 4 by an earlier version of the app, and brought up to format 5.' }]);
+    expect(plain.notes).toEqual([{ severity: 'info', message: 'Saved in project format 4 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
     const tested = { ...v4, appVersion: '1.0.2', params: { ...v4.params, silicone: { ...v4.params.silicone, baseLayer: 4.5, baseLayerSlopeDeg: 0 } } };
     expect(readProjectJson(JSON.stringify(tested)).file.params.silicone).toMatchObject({ baseLayer: 4.5, baseLayerSlopeDeg: 0 });
     // Following t, as a new project does, survives as well.
     const following = { ...v4, params: { ...v4.params, silicone: { ...v4.params.silicone, baseLayer: null, baseLayerSlopeDeg: 2 } } };
     expect(readProjectJson(JSON.stringify(following)).file.params.silicone.baseLayer).toBeNull();
+  });
+
+  it('a project of format 5 opens without the flange, so its funnel and its vents come back as they were', () => {
+    const v2 = JSON.parse(fixture('v2-jersey-export.json'));
+    const v5 = { ...v2, schemaVersion: 5, appVersion: '0.1.0', params: { ...v2.params, bolts: V3_BOLTS, silicone: { ...v2.params.silicone, ...V5_LAYER } } };
+    const read = readProjectJson(JSON.stringify(v5));
+    expect(read.from).toBe(5);
+    expect(read.file.params.funnel).toEqual({ ...v2.params.funnel, ...V6_FLANGE });
+    // Everything else as saved.
+    expect({ ...read.file, params: { ...read.file.params, funnel: v5.params.funnel } }).toEqual({ ...v5, schemaVersion: 6 });
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 5 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
+    // With no funnel there is nothing to say of its flange; with a land of 2 mm, a flange of 1.5 still fits the cover.
+    const bare = { ...v5, params: { ...v5.params, funnel: { ...v5.params.funnel, generate: false } } };
+    expect(readProjectJson(JSON.stringify(bare)).notes).toHaveLength(1);
+    const wide = { ...v5, params: { ...v5.params, pour: { ...v5.params.pour, minLand: 2 } } };
+    expect(readProjectJson(JSON.stringify(wide)).notes[1].message).toContain('A width of up to 1.5 mm leaves every vent where it is');
+    // A new project has the flange, and a format 6 file keeps what it says.
+    expect(defaultParams().funnel.flangeWidth).toBe(4);
+    const v6 = { ...v5, schemaVersion: 6, params: { ...v5.params, funnel: { ...v5.params.funnel, flangeWidth: 2.5, flangeThickness: 1.6 } } };
+    expect(readProjectJson(JSON.stringify(v6)).file.params.funnel).toMatchObject({ flangeWidth: 2.5, flangeThickness: 1.6 });
   });
 
   it('runs one step per version, in order, so a version 0 with renamed fields and no pins or removed vents reaches the current one, with its gaps filled', () => {
@@ -242,16 +272,22 @@ describe('migration', () => {
       seen.push(f.schemaVersion as number);
       return MIGRATIONS[4](f, notes);
     };
-    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5 });
-    expect(seen).toEqual([0, 1, 2, 3, 4]);
+    const v5ToV6: Migration = (f, notes) => {
+      seen.push(f.schemaVersion as number);
+      return MIGRATIONS[5](f, notes);
+    };
+    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6 });
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5]);
     expect(read.file.params.silicone).toMatchObject(V5_LAYER);
+    expect(read.file.params.funnel).toMatchObject(V6_FLANGE);
     expect(read.file.params.bolts).toEqual(V3_BOLTS);
     expect(read.from).toBe(0);
     expect(read.file).toMatchObject({ schemaVersion: SCHEMA_VERSION, model: 'jersey-barrier.stl', appVersion: '0.0.1', pins: [], removed: [], modelSha256: null, basePlane: null });
     expect(read.file.params.grid.nx).toBe(2);
     expect(read.file.params.reports).toEqual(defaultParams().reports);
     expect(read.notes).toEqual([
-      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 5.' },
+      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 6.' },
+      V6_NOTE,
       { severity: 'warning', message: 'Not in the file, so as for a new model: moved openings, so none; removed vents, so none.' },
       { severity: 'warning', message: 'Not in the file, so at their defaults: Smallest reported volume, Smallest air pocket depth.' },
     ]);
@@ -260,10 +296,10 @@ describe('migration', () => {
   });
 
   it('a version newer than the app knows, and a file with no version, say so plainly, naming the file', () => {
-    expect(reason(() => readProjectJson(edited('schemaVersion', 6), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${BUILD.version}), in project format 6; this one reads formats up to 5. Open it in the version of the app that saved it.`);
+    expect(reason(() => readProjectJson(edited('schemaVersion', 7), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${BUILD.version}), in project format 7; this one reads formats up to 6. Open it in the version of the app that saved it.`);
     // A visitor cannot update a web page, and a new format reaches the beta site first, so a file from beta says where to open it.
-    const fromBeta = JSON.stringify({ ...JSON.parse(edited('schemaVersion', 6)), appVersion: '0.2.0-beta+a1b2c3d' });
-    expect(reason(() => readProjectJson(fromBeta, MIGRATIONS, 'next.moldproj'))).toBe("next.moldproj was saved by a newer version of the app (app version 0.2.0-beta+a1b2c3d), in project format 6; this one reads formats up to 5. Open it on the beta site that saved it, at the app's web address with beta/ at the end.");
+    const fromBeta = JSON.stringify({ ...JSON.parse(edited('schemaVersion', 7)), appVersion: '0.2.0-beta+a1b2c3d' });
+    expect(reason(() => readProjectJson(fromBeta, MIGRATIONS, 'next.moldproj'))).toBe("next.moldproj was saved by a newer version of the app (app version 0.2.0-beta+a1b2c3d), in project format 7; this one reads formats up to 6. Open it on the beta site that saved it, at the app's web address with beta/ at the end.");
     expect(reason(() => readProjectJson(edited('schemaVersion', undefined)))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => readProjectJson(edited('schemaVersion', '2')))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => migrate([1, 2]))).toBe(`project.json holds no settings this app can read. ${OPEN_AGAIN}`);
@@ -308,7 +344,7 @@ describe('validation', () => {
       'Wall draft (silicone.wallDraftDeg) was -2 deg, but must be from 0 to 5 deg, so it is 0 deg.',
       'Pours per body (pour.perModel) was 2.4, but must be a whole number, so it is 2.',
       'Layer height (print.layerHeight) was 0 mm, but must be at least 0.05 mm, so it is 0.05 mm.',
-      'Not in the file, so at their defaults: Top chamfer, Generate funnel, Top diameter, Height, Neck height, Wall, Tip wall, Seat clearance.',
+      'Not in the file, so at their defaults: Top chamfer, Generate funnel, Top diameter, Height, Neck height, Wall, Tip wall, Seat clearance, Flange width, Flange thickness.',
       'Settings this version does not know, left out: silicone.glitter, lighting.',
     ]);
     expect(read.notes.every((n) => n.severity === 'warning')).toBe(true);
@@ -573,6 +609,34 @@ describe('save and open with the real pipeline on jersey', () => {
     return saved;
   }
 
+  it('FL: a format 5 project of jersey opens with its vent where format 5 put it and no flange on its funnel, and the flange then moves the vent out', async () => {
+    const raw = JSON.parse(projectJson(file())) as { schemaVersion: number; params: { funnel: Record<string, unknown> } };
+    delete raw.params.funnel.flangeWidth;
+    delete raw.params.funnel.flangeThickness;
+    raw.schemaVersion = 5;
+    const read = readProjectJson(JSON.stringify(raw)).file;
+    const p = fresh();
+    p.loadProject(jersey, EXAMPLE_FILES.jersey, { params: read.params, plane: read.plane, pins: read.pins, removed: read.removed }, read.basePlane, read.modelSha256, { format: 5, appVersion: '0.1.0' });
+    await p.idle();
+    expect(p.params.funnel).toMatchObject(V6_FLANGE);
+    const apart = (): number => {
+      const openings = p.placement!.value.placement.openings;
+      const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+      return Math.hypot(vent.x - pour.x, vent.y - pour.y);
+    };
+    // Where every build before FL put it: the seat, 5 + 3 tan 30, the vent's mouth, 1.25 + 0.3, the land, 1.5, and 0.01 of slack.
+    expect(apart()).toBeCloseTo(5 + 3 * Math.tan(Math.PI / 6) + 1.55 + 1.5 + 0.01, 6);
+    // At the 1 mm the note says still fits a printed cover, the vent stands exactly where it did.
+    const before = p.placement!.value.placement.openings.map(({ id, x, y }) => ({ id, x, y }));
+    p.setParams((params) => (params.funnel.flangeWidth = 1));
+    await p.idle();
+    expect(p.placement!.value.placement.openings.map(({ id, x, y }) => ({ id, x, y }))).toEqual(before);
+    // Turned on, the flange takes the vent out past its edge: 4 mm more of flange, less the land, and its 0.5 mm gap.
+    p.setParams((params) => (params.funnel.flangeWidth = 4));
+    await p.idle();
+    expect(apart()).toBeCloseTo(5 + 3 * Math.tan(Math.PI / 6) + 4 + 1.55 + 0.5 + 0.01, 6);
+  });
+
   it('Save project then Open gives the same project, edited flags included, the same STL and geometry, an empty history, and undo after it', async (ctx) => {
     skipWithout(ctx, 'barrel');
     const saves = captureSaves();
@@ -827,12 +891,13 @@ describe('save and open with the real pipeline on jersey', () => {
       severity: 'info',
       message: 'Applied the settings of project.json to jersey-barrier.stl.',
       notes: [
-        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 5.' },
+        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 6.' },
+        V6_NOTE,
         { severity: 'info', message: 'project.json does not record its model\'s contents, so it was matched to jersey-barrier.stl by the file name alone.' },
       ],
     });
-    // Migrated, so with the bolts off and no base layer, as version 1 molds were.
-    const params = { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER } } as ProjectFile['params'];
+    // Migrated, so with the bolts off, no base layer and no flange, as version 1 molds were.
+    const params = { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE } } as ProjectFile['params'];
     expect(p.project()).toEqual({ params, plane: v1.plane, pins: v1.pins, removed: v1.removed });
     // The file opens again to just this, so leaving the page now loses nothing.
     expect(store.unsaved()).toBe(false);
@@ -915,8 +980,8 @@ describe('save and open with the real pipeline on jersey', () => {
     // A format 3 file that names 0.1.0, which never wrote format 3, is reset as any other format 3 one.
     expect((await opened(saved(3, '0.1.0'))).pipeline.project().pins).toEqual([]);
 
-    // What a save writes now is the current format, 5, with this build's version, and it opens with its pins.
-    expect(JSON.parse(projectJson(projectFile(old, 'hat.stl', { modelSha256: null, basePlane: null })))).toMatchObject({ schemaVersion: 5, appVersion: BUILD.version });
+    // What a save writes now is the current format, 6, with this build's version, and it opens with its pins.
+    expect(JSON.parse(projectJson(projectFile(old, 'hat.stl', { modelSha256: null, basePlane: null })))).toMatchObject({ schemaVersion: 6, appVersion: BUILD.version });
 
     // A model of one part numbers its body the same in every version, so a 1.0.0 project of it keeps them.
     const jerseyPins: Project = { ...old, pins: [{ id: 'b0:pour:0', kind: 'pour', x: 3, y: 0 }], removed: [] };

@@ -1,4 +1,4 @@
-import { funnelProfile } from '../parts/funnelProfile';
+import { funnelProfile, MIN_SPIGOT } from '../parts/funnelProfile';
 import type { Diagnostic } from '../report/diagnostics';
 import { PARAM_SCHEMA, type Params } from './schema';
 
@@ -7,8 +7,6 @@ import { PARAM_SCHEMA, type Params } from './schema';
  * Zt is Hmax + topCap at least, so this holds over all of the cavity.
  */
 const SEAT_ROOF = 1;
-/** A shorter spigot than this cannot hold a funnel upright in its seat, in mm. */
-const MIN_SPIGOT = 0.5;
 /** G12: the print pose has no wall past this from vertical. */
 const FUNNEL_LIMIT_DEG = 45;
 /** A rim so narrow at its top would be nothing to pour into. Square to the wall, as the wall itself is. */
@@ -50,6 +48,13 @@ function funnelProblems(params: Params): Diagnostic[] {
   }
   if (p.zConeInner >= funnel.height || p.rRimInner < p.rNeckInner || p.rRim - p.rRimInner < MIN_RIM || p.zNeckInner > p.zConeInner || p.rNeckInner <= 0) {
     error('funnel-wall', `A funnel wall of ${funnel.wall} mm does not fit in a funnel of ${funnel.topDiameter} by ${funnel.height} mm over a neck of ${funnel.neckHeight} mm.`);
+    return problems;
+  }
+  // FL: the flange's 45 degree chamfer runs in to the neck, and must reach it before the cone widens out again.
+  if (p.rFlange > 0 && p.zChamfer > funnel.neckHeight + 1e-9) {
+    const widest = Math.floor((funnel.neckHeight - funnel.flangeThickness - (p.rFlange - funnel.flangeWidth - p.rNeck)) * 10) / 10;
+    const fits = widest > 0 ? `make Flange width at most ${widest} mm, or ` : '';
+    error('funnel-flange', `A flange ${funnel.flangeWidth} mm wide and ${funnel.flangeThickness} mm thick needs a neck at least ${(Math.ceil(p.zChamfer * 10 - 1e-9) / 10).toFixed(1)} mm high for the chamfer that lets it print without supports, over the ${funnel.neckHeight} mm set: ${fits}raise Neck height, or make the flange thinner.`);
   }
   return problems;
 }

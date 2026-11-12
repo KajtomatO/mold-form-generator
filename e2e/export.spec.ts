@@ -540,16 +540,20 @@ interface ZipCase {
 }
 
 /**
- * The silicone at defaults, per example, with the base layer, as BL measured it in the browser's export. M6b's
- * before the layer were benchy 43.1771, goddess 118.0047, vis35 541.4064, jersey 11.3591, x8 87.5913, barrel
- * 10.2682 and wolf 203.5269, and M11c's chick 11.807.
+ * The silicone at defaults, per example, with the base layer, as FL measured it in Node's export, which BL found
+ * the browser's to the digit. FL's flange moves the vent beside each first pour from 9.79 to 12.79 mm out, onto
+ * lower ceiling, where its longer bore holds more, but on Benchy onto higher ceiling, where its shorter bore
+ * holds less; only the vents' bores change it: BL's were benchy 45.1881, goddess 122.3068, vis35 548.0961,
+ * jersey 11.6832 (its vent stays on the flat top), x8 91.7855, barrel 11.1166, wolf 223.2889 and chick 14.336.
+ * M6b's before the layer were benchy 43.1771, goddess 118.0047, vis35 541.4064, jersey 11.3591, x8 87.5913,
+ * barrel 10.2682 and wolf 203.5269, and M11c's chick 11.807.
  */
-const ML: Record<ExampleId, number> = { benchy: 45.1881, goddess: 122.3068, vis35: 548.0961, jersey: 11.6832, x8: 91.7855, barrel: 11.1166, wolf: 223.2889, chick: 14.336 };
+const ML: Record<ExampleId, number> = { benchy: 45.1867, goddess: 122.3214, vis35: 548.1078, jersey: 11.6832, x8: 91.8051, barrel: 11.1491, wolf: 223.3299, chick: 14.3402 };
 
 // All 8 in Chromium on the build; in the user's browser, jersey and the heaviest field, wolf.
 const CASES: ZipCase[] = [
   ...EXAMPLE_IDS.map((id): ZipCase => ({ name: id, id, settings: [], projects: id === 'jersey' || id === 'wolf' ? ['preview', 'firefox'] : ['preview'], ml: ML[id] })),
-  { name: 'barrel in Mode B', id: 'barrel', settings: [['base.mode', 'merged']], projects: ['preview'], ml: 11.1166 },
+  { name: 'barrel in Mode B', id: 'barrel', settings: [['base.mode', 'merged']], projects: ['preview'], ml: ML.barrel },
   // 68.1545 before the base layer, which also fills the plate between the six copies.
   { name: 'jersey on a 2 x 3 grid', id: 'jersey', settings: [['grid.nx', 2], ['grid.ny', 3]], projects: ['preview'], ml: 72.2966 },
 ];
