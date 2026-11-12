@@ -77,7 +77,8 @@ const PLAN_TABLE: Record<string, [value: unknown, min?: number, max?: number]> =
   'print.bedX': [220],
   'print.bedY': [220],
   'print.bedZ': [250],
-  'print.infill': [0.35],
+  // D19: 5 percent, after the user's note of 2026-11-12; it was 0.35.
+  'print.infill': [0.05],
   'print.density': [1.24],
   'print.tapeStrip': [10],
   'quality.cellFinal': [0.125, 0.05, 0.5],

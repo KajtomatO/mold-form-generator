@@ -68,14 +68,17 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D18 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D19 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 18 }, (_, k) => `D${k + 1}`));
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 19 }, (_, k) => `D${k + 1}`));
     // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
     expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
     // FL's, from the user's report of 2026-11-12 after the first pour.
     expect(section(requirements, 4)).toContain('D18 records how the funnel\'s flange the user\'s first pour asked for on 2026-11-12 was built');
+    // The Infill default, from the user's note of the same day, quoted as they wrote it.
+    expect(section(requirements, 4)).toContain('D19 records the Infill default the user\'s note of the same day changed');
+    expect(section(requirements, 2)).toContain('"Note: I use 5% of infill or less, as the printed part are not uder high stress."');
     for (const cells of decisions) expect(cells[1].length, cells[0]).toBeGreaterThan(20);
     const open = tableRows(section(requirements, 9)!);
     // The user settled the M11a memory deviation and the project's licence on 2026-11-09.

@@ -144,7 +144,9 @@ function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
     reportsError: null,
     tape: { lift: sampleReports().lift, clamp: sampleReports().clamp },
     bolts: null,
-    plastic: { solid: 312, printed: 160 },
+    // At 5 percent infill (D19). The 312 g solid is 78 g of skin, three nozzle lines over the surface, and
+    // 234 g inside it, which printed 160 g at 35 percent; at 5 it is 78 + 0.05 x 234 = 90 g.
+    plastic: { solid: 312, printed: 90 },
     diagnostics: [warning, note],
     parts: { count: 1, bodies: 1 },
   };
@@ -210,7 +212,7 @@ describe('README.txt', () => {
       expect(settings, group).toContain(` ${GROUP_TITLES[group]} -`);
       for (const def of Object.values(defs)) expect(settings, def.label).toContain(`- ${def.label}: `);
     }
-    for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.35 (35 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Base layer: auto, 3 mm', '- Base layer slope: 2 deg', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only', '- Nuts and bolts: off', '- Bolt size: M3', '- Bolt length: auto, 12 mm', '- Nut clearance per side: 0.15 mm']) {
+    for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.05 (5 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Base layer: auto, 3 mm', '- Base layer slope: 2 deg', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only', '- Nuts and bolts: off', '- Bolt size: M3', '- Bolt length: auto, 12 mm', '- Nut clearance per side: 0.15 mm']) {
       expect(settings).toContain(line);
     }
     // Every auto setting but the preview's own cell gets a figure from the export.
@@ -238,8 +240,21 @@ describe('README.txt', () => {
     expect(readme).toContain('Print it as it is saved: it is already turned flat top down on the bed.');
     expect(readme).toContain('glue its flat face into the pocket');
     expect(readme).toContain('Print one. Print it as it is saved, wide rim down.');
-    expect(readme).toContain('About 35 percent infill is enough.');
+    expect(readme).toContain('About 5 percent infill is enough, as the printed parts carry little load.');
     expect(exportReadme(input((i) => (i.pours = 6))).replace(/\r\n\s*/g, ' ')).toContain('Print 6, one for each pour opening.');
+  });
+
+  it('D19: Infill is 5 percent by default, and README.txt says so and why: the parts carry little load, and the walls and layers keep the silicone out', () => {
+    // The user's note of 2026-11-12: "I use 5% of infill or less, as the printed part are not uder high stress."
+    expect(defaultParams().print.infill).toBe(0.05);
+    const advice = 'About 5 percent infill is enough, as the printed parts carry little load. The walls and the top and bottom layers are what keep the silicone out: use at least 3 walls (perimeters) and 4 top and bottom layers, so the surfaces that touch silicone are solid and nothing seeps through.';
+    const readme = exportReadme(input());
+    notepad(readme);
+    expect(readme.replace(/\r\n\s*/g, ' ')).toContain(advice);
+    // The figure is the setting's, so a mold made at 35 percent says 35, with the same walls and layers.
+    expect(exportReadme(input((i) => (i.params.print.infill = 0.35))).replace(/\r\n\s*/g, ' ')).toContain(advice.replace('About 5 percent', 'About 35 percent'));
+    // docs/WORKFLOW.md gives the same figure and reason.
+    expect(readFileSync(join(root, 'docs', 'WORKFLOW.md'), 'utf8')).toContain('about 5 percent infill is enough, as the printed parts carry little load. The walls and the top and bottom layers are what keep the silicone out, not the infill: use at least 3 walls (perimeters) and 4 top and bottom layers');
   });
 
   it('FL: the funnel drops into its seat and its flange rests flat on the top, pressed down until it sits flat all round, with Vaseline under it to seal', () => {
@@ -307,7 +322,7 @@ describe('README.txt', () => {
   it('says the demold estimate and where the silicone holds, the air, the tape to hold the cover and the plastic, all as estimates', () => {
     const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
     const order = [
-      'Plastic: about 160 g at that infill, or 312 g printed solid. This is an estimate',
+      'Plastic: about 90 g at that infill, or 312 g printed solid. This is an estimate',
       // One strip holds the lift, and one each way presses the seal all round.
       'Tape the joint with at least 2 strips of tape at 10 N each, each running from a side wall of the cover across the base to the opposite wall: at least 1 from front to back and 1 from left to right',
       'no more than about 100 mm apart along any wall',
@@ -939,7 +954,8 @@ describe('the export with bolts, in Node', () => {
     ['barrel', 'barrel', () => {}],
   ] as [string, 'jersey' | 'barrel', (p: Params) => void][])('with the bolts off, %s exports M9\'s cover and base byte for byte, with M9\'s header text, and its fit test unchanged, the base layer at 0 and no flange', { timeout: 60_000 }, async ([name, id, change], ctx) => {
     skipWithout(ctx, id);
-    // FL: and no flange, which M9's funnel had none of either and whose vents it moves.
+    // FL: and no flange, which M9's funnel had none of either and whose vents it moves. Infill stays at its
+    // default, 0.05 since D19 where M9 had 0.35: it changes no STL byte, and only STLs are hashed here.
     const { files } = await exported(id, (params) => {
       params.silicone.baseLayer = 0;
       params.funnel.flangeWidth = 0;

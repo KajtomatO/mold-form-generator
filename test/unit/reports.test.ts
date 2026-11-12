@@ -88,9 +88,12 @@ describe('the cover\'s lift and the tape', () => {
     expect(figure!.holdN).toBeCloseTo(Math.max(2 * figure!.liftN, 10), 6);
     expect(figure!.liftStrips).toBe(Math.ceil(figure!.holdN / 10));
     expect(figure!.coverWeightN).toBeGreaterThan(0);
+    // The cover's weight as printed at the default 5 percent infill (D19): 3.65 N, where 35 percent gave 11.76 N.
+    // The tape advice does not count it, so it moves nothing else here.
+    expect(figure!.coverWeightN).toBeCloseTo(3.65, 1);
     // Measured at M7: 11.0 N of lift from 197.4 mm, 22.0 N to hold, which 3 strips did, before the base layer.
     // The layer's wide, low ceiling all but doubles the lift, as measured with it: 20.6 N, more than the cover's
-    // own 11.8 N, so 41.1 N to hold, which takes 5 strips. Its 121.2 x 142.4 mm box takes 2 strips each way to
+    // own weight, so 41.1 N to hold, which takes 5 strips. Its 121.2 x 142.4 mm box takes 2 strips each way to
     // press the seal all round, which the 5 already cover.
     expect(figure!.liftN).toBeCloseTo(20.57, 1);
     expect(figure!.liftN).toBeGreaterThan(figure!.coverWeightN!);
@@ -184,6 +187,11 @@ describe('printability', () => {
     const params = defaultParams();
     expect(plasticDiagnostic({ solid: 328, printed: 165 }, params).severity).toBe('info');
     expect(plasticDiagnostic({ solid: 2000, printed: SPOOL_G }, params).severity).toBe('info');
+    // The wolf at defaults, at 5 percent infill (D19), as measured below: a note.
+    const wolf = plasticDiagnostic({ solid: 3072, printed: 428 }, params);
+    expect(wolf).toEqual({ code: 'plastic-mass', severity: 'info', message: 'The printed parts take about 428 g of plastic at 5 percent infill, or 3.07 kg printed solid, as an estimate at 1.24 g/cm3.' });
+    // The wolf as M7 measured it at 35 percent, the default before D19: more than a spool, so a warning.
+    params.print.infill = 0.35;
     const heavy = plasticDiagnostic({ solid: 3100, printed: 1270 }, params);
     expect(heavy.severity).toBe('warning');
     expect(heavy.message).toContain('about 1.27 kg of plastic at 35 percent infill, or 3.10 kg printed solid');
@@ -197,12 +205,13 @@ describe('printability', () => {
     expect(solid).toBeCloseTo(((1e6 + 3000) * 1.24) / 1000, 6);
     // Three lines of 0.4 mm over the surface print solid; a part thinner than that is solid through.
     const skin = 6e4 * 3 * 0.4, small = Math.min(1000, 600 * 3 * 0.4);
-    expect(printed).toBeCloseTo(((skin + 0.35 * (1e6 - skin) + 3 * (small + 0.35 * (1000 - small))) * 1.24) / 1000, 6);
+    // At the default 5 percent infill (D19).
+    expect(printed).toBeCloseTo(((skin + 0.05 * (1e6 - skin) + 3 * (small + 0.05 * (1000 - small))) * 1.24) / 1000, 6);
     params.print.infill = 1;
     expect(plasticEstimate([cube], params).printed).toBeCloseTo(plasticEstimate([cube], params).solid, 6);
   });
 
-  it('wolf takes about 3.1 kg printed solid, from the volumes of its cover, base and funnel, and warns as that is more than a spool', async () => {
+  it('wolf takes about 3.1 kg printed solid, from the volumes of its cover, base and funnel: 428 g at the default 5 percent infill, a note, and 1.26 kg at 35 percent, more than a spool, a warning', async () => {
     const read = await withPipeline(exampleBytes('wolf'), EXAMPLE_FILES.wolf, () => {}, (p) => {
       const rim = p.field!.value.rim, cover = p.cover!.value;
       // The cover's volume from its mesh, as the estimate reads it, against the box less what the box loses.
@@ -219,7 +228,11 @@ describe('printability', () => {
       for (const h of field.values) if (h > 0) cavity += (h + p.params.quality.tinTolPreview) * field.cell * field.cell;
       const block = (rim.O.x1 - rim.O.x0) * (rim.O.y1 - rim.O.y0) * (rim.Zt + rim.Tb - rim.proud);
       const rebate = (rim.B.x1 - rim.B.x0) * (rim.B.y1 - rim.B.y0) * (rim.Tb - rim.proud);
-      return { plastic: plasticOnScreen(p)!, rows: allDiagnostics(p).filter((d) => d.code === 'plastic-mass'), volume, expected: block - rebate - cavity };
+      const plastic = plasticOnScreen(p)!, rows = allDiagnostics(p).filter((d) => d.code === 'plastic-mass');
+      // Infill is main's alone (MAIN_ONLY), so the parts on screen stay, and only the estimate moves.
+      p.setParams((q) => (q.print.infill = 0.35));
+      const at35 = { plastic: plasticOnScreen(p)!, rows: allDiagnostics(p).filter((d) => d.code === 'plastic-mass') };
+      return { plastic, rows, at35, volume, expected: block - rebate - cavity };
     });
     // The plan estimated about 2 kg. The cover alone is 2.43 l, its 121.2 x 142.4 x 171.4 mm box less the
     // cavity: the rebate's taper, the groove, the chamfers, the notches and the bores make up the rest.
@@ -228,9 +241,17 @@ describe('printability', () => {
     expect(read.volume / 1e6).toBeCloseTo(2.41, 2);
     expect(read.plastic.solid / 1000).toBeCloseTo(3.1, 1);
     expect(read.plastic.printed).toBeLessThan(read.plastic.solid);
+    // At the default 5 percent infill (D19) the print takes 428 g, under a spool, so the row is a note.
+    expect(read.plastic.printed).toBeCloseTo(428, 0);
     expect(read.rows).toHaveLength(1);
-    expect(read.rows[0].message).toContain('3.07 kg printed solid');
-    expect(read.rows[0].severity).toBe('warning');
+    expect(read.rows[0].message).toContain('about 428 g of plastic at 5 percent infill, or 3.07 kg printed solid');
+    expect(read.rows[0].severity).toBe('info');
+    // At 35 percent, the default before D19, it takes 1.26 kg, more than a spool, so it warns. The solid figure stays.
+    expect(read.at35.plastic.solid).toBe(read.plastic.solid);
+    expect(read.at35.plastic.printed).toBeCloseTo(1263, 0);
+    expect(read.at35.rows).toHaveLength(1);
+    expect(read.at35.rows[0].message).toContain('about 1.26 kg of plastic at 35 percent infill, or 3.07 kg printed solid');
+    expect(read.at35.rows[0].severity).toBe('warning');
   });
 
   it('a pocket of 0.1 mm at 0.2 mm layers warns under its control, as soon as the base is built', async () => {

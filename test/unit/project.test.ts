@@ -205,6 +205,9 @@ describe('migration', () => {
     expect(read.from).toBe(2);
     expect(read.file).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, params: { ...v2.params, bolts: V3_BOLTS, silicone: { ...v2.params.silicone, ...V5_LAYER }, funnel: { ...v2.params.funnel, ...V6_FLANGE } } });
     expect(read.file.params.bolts).toEqual(defaultParams().bolts);
+    // D19: a file keeps the Infill it was saved with, 0.35 here, though a new project starts at 0.05.
+    expect(read.file.params.print.infill).toBe(0.35);
+    expect(defaultParams().print.infill).toBe(0.05);
     // The hash and the plane came with format 2, and stay as saved.
     expect(read.file.modelSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(read.file.basePlane).toEqual(v2.basePlane);

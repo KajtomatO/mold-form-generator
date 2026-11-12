@@ -191,7 +191,7 @@ Units are mm unless noted. Every value is editable; rarely used ones sit in a co
 | Seat | enabled; `depth` ds (3, 1 to 10); `halfAngleDeg` (30, 10 to 45) |
 | Funnel | generate; `topDiameter` (40); `height` (30); `neckHeight` (10); `wall` (1.2); `tipWall` (0.86); `seatClearance` (0.10); `flangeWidth` (4, 0 to 10, FL); `flangeThickness` (1.2, 0.6 to 5, FL) |
 | Grid | `nx`, `ny` (1, 1, up to 20); `spacing` between model bounding boxes (auto: 2 r_eff + 2 Hmax tan(draft) + a wall of 2 lines plus 1.2 mm, or the closing span plus a cell if wider, + 3 cells of rounding, editable, 0 to 100); `edge`, distance from model bounding box to the outer box (auto minimum, 0 to 100) |
-| Print | `layerHeight` (0.2); `nozzle` (0.4); bed X, Y, Z (220, 220, 250); infill (0.35); density (1.24); tape strip N (10) |
+| Print | `layerHeight` (0.2); `nozzle` (0.4); bed X, Y, Z (220, 220, 250); infill (0.05; 0.35 until the user's note of 2026-11-12, `docs/REQUIREMENTS.md` section 2 and D19); density (1.24); tape strip N (10) |
 | Quality | `cellFinal` (0.125, 0.05 to 0.5); `cellPreview` (auto `max(0.5, L/1024)`); `analysisCell` (0.25); `tinTolFinal` (0.05); `tinTolPreview` (0.1) |
 | Reports | `minVolumeMl` (0.05); underside persistence (0.3) |
 

@@ -159,7 +159,8 @@ export const PARAM_SCHEMA = {
     bedX: num('Bed X', 220),
     bedY: num('Bed Y', 220),
     bedZ: num('Bed Z', 250),
-    infill: num('Infill', 0.35, { unit: '' }),
+    // D19: the user prints these parts at 5 percent or less, as they carry little load (2026-11-12).
+    infill: num('Infill', 0.05, { unit: '' }),
     density: num('Plastic density', 1.24, { unit: 'g/cm3' }),
     tapeStrip: num('Tape strip holds', 10, { unit: 'N' }),
   },
