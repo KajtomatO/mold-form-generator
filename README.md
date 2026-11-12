@@ -55,7 +55,8 @@ The app measures the geometry: the silicone thickness, the closed cavity, the op
 
 - **Print the fit test** (the Fit test button under Export, once a model is open) and set the clearances it gives you, then export the mold. With the bolts on, it adds a bolt coupon: fit a screw and a nut in it first.
 - **Leak test:** fill the assembled mold with water before the first pour. The joint should stay dry.
-- **Cure-inhibition test patch:** some print materials, glues, tapes and sealants stop silicone from curing where they touch it. Pour a small patch of your silicone onto printed scraps with your glue, tape and petroleum jelly first.
+- **Cure-inhibition test patch:** some print materials, glues, tapes and sealants stop silicone from curing where they touch it. Pour a small patch of your silicone onto printed scraps with your glue, tape, petroleum jelly and mold release first.
+- **Mold release:** coat everything the silicone will touch with a release made for silicone before you close the mold for the pour. Without one, the silicone can stick to the printed plastic: the first test pour with a mold from this app was hard to demold.
 - **A full pour,** from printing the model to a recast. Only that shows whether 3 mm of silicone holds up for you, how the pour fills, whether the seal holds, and whether the demold estimate is right.
 - **In your slicer:** the parts need no supports in the poses they are saved in, and the base and pocket come out in whole layers.
 - **How it feels on your screen:** whether the preview follows a slider quickly enough on your computer, whether dragging the openings' rings with your own mouse works well, and whether the layout reads well. The server's tests run on software graphics, so tell whoever runs it what feels slow or unclear.

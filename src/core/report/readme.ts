@@ -142,7 +142,7 @@ export function exportReadme(input: ReadmeInput): string {
   const taped = !bolts || bolts.advice.strips > 0;
   const underside = input.reports?.air.underside.length ?? 0;
   out.push(...heading('Before the first pour'));
-  const touches = [glue ? 'a dab of the glue you will use' : '', taped ? 'a strip of the tape' : '', 'a smear of the Vaseline'].filter(Boolean);
+  const touches = [glue ? 'a dab of the glue you will use' : '', taped ? 'a strip of the tape' : '', 'a smear of the Vaseline', 'a coat of the mold release'].filter(Boolean);
   const touching = touches.length === 1 ? touches[0] : `${touches.slice(0, -1).join(', ')} and ${touches[touches.length - 1]}`;
   const scraps = glue
     ? 'Print a small scrap in the material of your model, a resin if you print it on a resin printer, and one in the material of the base and the cover.'
@@ -153,6 +153,8 @@ export function exportReadme(input: ReadmeInput): string {
   out.push(...heading('Pouring'));
   let n = 0;
   if (glue) step(++n, copies === 1 ? 'Glue the model into the pocket of the base, flat face down, and let the glue cure.' : `Glue a model into each of the ${copies} pockets of the base, flat face down, and let the glue cure.`);
+  // After the glue, so none gets between the model and the pocket, and before any brushed first coat of silicone.
+  step(++n, `Coat every surface the silicone will touch with a thin, even coat of a mold release made for silicone: the cavity of the cover, the top of the base and the model${glue ? ', now that the glue has cured' : ''}. Let it dry as its maker says. Without one, silicone can stick to the printed plastic and tear as you demold.`);
   // The coat goes on while the model can still be reached, before the mold is closed.
   if (underside > 0) step(++n, `Air would stay in ${underside === 1 ? 'a pocket' : `${underside} pockets`} under an overhang of the model, as AIR below says. Mix a small batch of silicone and brush a thin first coat onto the model there now, then close the mold and pour the rest within the time your silicone's data sheet gives for a second coat to bond.`);
   step(++n, 'Spread a thin film of Vaseline in the groove of the cover: it helps the joint seal.');

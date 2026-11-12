@@ -246,11 +246,13 @@ describe('README.txt', () => {
     const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
     const order = [
       'Cure-inhibition test',
-      'Put a dab of the glue you will use, a strip of the tape and a smear of the Vaseline on them',
+      'Put a dab of the glue you will use, a strip of the tape, a smear of the Vaseline and a coat of the mold release on them',
       'Leak test, before you glue the model in: seal the mold as below, with the Vaseline in the groove and the tape',
       'take the mold apart, and let the parts dry fully. Seal it the same way again for the pour',
       'POURING',
       'Glue the model into the pocket of the base',
+      // The release goes on after the glue has cured, and before any brushed first coat of silicone.
+      'Coat every surface the silicone will touch with a thin, even coat of a mold release made for silicone: the cavity of the cover, the top of the base and the model, now that the glue has cured',
       // The first coat where air would stay goes on while the model can still be reached.
       'brush a thin first coat onto the model there now, then close the mold',
       'Spread a thin film of Vaseline in the groove of the cover',
@@ -277,7 +279,7 @@ describe('README.txt', () => {
     }
     // Mode B has no glue and no model of its own to print, and no pocket of air means no first coat.
     const merged = exportReadme(input((i) => (i.params.base.mode = 'merged'))).replace(/\r\n\s*/g, ' ');
-    expect(merged).toContain('Print a small scrap in the material of the base, which carries your model, and the cover. Put a strip of the tape and a smear of the Vaseline on them');
+    expect(merged).toContain('Print a small scrap in the material of the base, which carries your model, and the cover. Put a strip of the tape, a smear of the Vaseline and a coat of the mold release on them');
     expect(merged).not.toContain('dab of the glue');
     expect(merged).not.toContain('before you glue the model in');
     expect(merged).toContain('Leak test: seal the mold as below');
@@ -956,7 +958,7 @@ describe('the export with bolts, in Node', () => {
     expect(readme).toContain('the bolts pull the base against the shelf');
     expect(readme).toContain('Leak test, before you glue the model in: seal the mold as below, with the Vaseline in the groove and the bolts');
     // Four bolts hold jersey's lift with no tape, so its test patch needs none.
-    expect(readme).toContain('Put a dab of the glue you will use and a smear of the Vaseline on them');
+    expect(readme).toContain('Put a dab of the glue you will use, a smear of the Vaseline and a coat of the mold release on them');
     // Demolding: unscrew, not untape.
     expect(readme).toContain('Unscrew the 4 bolts from under the base, leaving the nuts in their slots, take off any tape, and lever the base out at the pry notches');
     expect(readme).not.toContain('Take off the tape and lever');

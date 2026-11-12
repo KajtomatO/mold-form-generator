@@ -22,6 +22,7 @@ The steps at a glance:
 - Two-part silicone rubber made for molds, with its data sheet: mixing ratio, working time, cure time and what it must not touch.
 - Scales or measuring cups, a mixing cup with room for the silicone to rise, and a stirring stick.
 - Adhesive tape, and petroleum jelly (Vaseline) for the groove. Or, with the bolts turned on, four countersunk screws and four hex nuts: README.txt lists the size and length. The app counts the strips of tape from what one strip holds, 10 N by default; if your tape holds more or less, set Tape strip holds under Advanced, Printer.
+- A mold release made for silicone, a spray or a liquid to brush on. Your silicone's maker names ones that work with it.
 - A glue for Mode A that you have tested with your silicone.
 - A sharp blade, such as a scalpel or hobby knife.
 - If you have one: a vacuum chamber and pump for degassing.
@@ -109,7 +110,7 @@ Some materials stop silicone from curing where they touch it. The silicone then 
 
 FDM plastics cause trouble less often, but additives, colours and coatings vary, so test those too.
 
-**The test patch:** print a small scrap in each material you will use, the model's and the base's and cover's, with the same settings. Put a dab of the glue you will use on it (Mode A), a strip of the tape, and a smear of the petroleum jelly or sealant. Pour a small patch of your silicone over all of it and let it cure for the full time its maker gives. If it stays sticky or soft anywhere it touches, do not use that material as it is. Seal the surface, for example with a clear coat, or choose another material, and test again: a coat needs its own test.
+**The test patch:** print a small scrap in each material you will use, the model's and the base's and cover's, with the same settings. Put a dab of the glue you will use on it (Mode A), a strip of the tape, a smear of the petroleum jelly or sealant, and a coat of the mold release. Pour a small patch of your silicone over all of it and let it cure for the full time its maker gives. If it stays sticky or soft anywhere it touches, do not use that material as it is. Seal the surface, for example with a clear coat, or choose another material, and test again: a coat needs its own test.
 
 Resin prints: wash and post-cure them fully, as the resin's maker says, before the test and before the pour.
 
@@ -130,8 +131,9 @@ Water is lighter than silicone, and it is not poured up into the funnels, so the
 ## 6. Glue the model in (Mode A), and close the mold for the pour
 
 1. **Mode A:** glue the model's flat face into the pocket of the base, using a glue that passed the test patch. The pocket is 0.2 mm larger than the model's footprint all round, by default, so the model drops in. A grid has one pocket for each copy, and README.txt says how many models to print. Let the glue cure fully. Wipe off any glue that squeezes out, as the silicone will copy it.
-2. **Air the vents cannot reach.** The app places a vent at each high point of the cover's ceiling. But air can also stay in a pocket under an overhang of the model, where no vent in the top reaches. The Demold report and README.txt's AIR section list each such pocket, with where it is. For those, while the model can still be reached: mix a small batch of silicone and brush a first coat of silicone onto the model there. Then close the mold and pour the rest within the time your silicone's data sheet gives for a second coat to bond to the first.
-3. **Close the mold** as in step 5: petroleum jelly in the groove, the base fitted, and the tape or the bolts.
+2. **Mold release.** Coat every surface the silicone will touch with a thin, even coat of a mold release made for silicone: the cavity of the cover, as far into the pour openings and vents as you can reach, the top of the base, and the model. Let it dry as its maker says. Printed surfaces have layer lines the silicone grips, and without a release it can stick to the plastic and tear as it comes off: the first test pour with a mold from this app was hard to demold without one. Spray or brush it thin, as the silicone copies any drop or brush mark on the model. In Mode A, coat after the glue has cured, so no release gets between the model and the pocket.
+3. **Air the vents cannot reach.** The app places a vent at each high point of the cover's ceiling. But air can also stay in a pocket under an overhang of the model, where no vent in the top reaches. The Demold report and README.txt's AIR section list each such pocket, with where it is. For those, while the model can still be reached: mix a small batch of silicone and brush a first coat of silicone onto the model there. Then close the mold and pour the rest within the time your silicone's data sheet gives for a second coat to bond to the first.
+4. **Close the mold** as in step 5: petroleum jelly in the groove, the base fitted, and the tape or the bolts.
 
 ## 7. Mix, degas and pour the silicone
 
@@ -167,6 +169,8 @@ First take the base off: take off the tape, or unscrew the four bolts from under
 
 The report shows the first six places, the places to cut among them first, each with a Show button that marks it on the model in the view, and says how many smaller ones there are besides. README.txt lists every place in words, measured from the middle of the model, with the front being the side you face in the app's first view.
 
+If the silicone holds to the plastic all over, and not only at the places the report names, it has stuck to the print: work it free slowly with a blunt tool, and use more mold release next time (step 6).
+
 Putting the silicone back into the cover matters: the cover holds the flexible silicone in shape when you cast into it.
 
 ## 11. Use the finished mold
@@ -184,7 +188,7 @@ The app measures the geometry: the silicone thickness, the closed cavity, the op
 - **Whether the joint seals** on your print, with tape, petroleum jelly or bolts. The leak test in step 5 shows it before any silicone is spent, though with less push than the silicone gives.
 - **Whether your tape holds** what Tape strip holds says, 10 N a strip unless you set another figure.
 - **Whether a vacuum on the filled mold** pulls air through the printed walls. A filled fit-test pair under vacuum shows it, as step 7 says.
-- **Cure inhibition** with your silicone, print material, glue, tape and sealant. The test patch in step 4 shows it.
+- **Cure inhibition** with your silicone, print material, glue, tape, sealant and mold release. The test patch in step 4 shows it.
 - **Whether the demold estimate holds** for your model.
 
 Make a test pour before you rely on a mold. The fit-test pieces are small enough to try a pour on first.
