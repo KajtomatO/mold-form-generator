@@ -13,7 +13,7 @@ import type { Params } from '../../src/core/params/schema';
 import { withArena } from '../../src/core/solid/arena';
 import { loadManifold } from '../fixtures/loadExamples';
 import { planOpenings, type PlanOptions, type PlannedOpenings } from '../fixtures/openings';
-import { arch, box, channel, inverted, join, ring, sphere as sphereMesh, SPIKES, spikes, toSoup, TOWERS, towers } from '../fixtures/synthetic';
+import { arch, box, channel, inverted, join, ring, sphere as sphereMesh, sphereOnPad, SPIKES, spikes, toSoup, TOWERS, towers } from '../fixtures/synthetic';
 
 type V3 = [number, number, number];
 
@@ -615,6 +615,46 @@ describe('the plan\'s cover drop of t / 2', () => {
     const p = plan(mesh(), () => {}, { pins: [{ id: 'b0:pour:0', kind: 'pour', x: peak[0], y }] });
     expect(p.placement.openings.find((o) => o.id === 'b0:pour:0')!.valid).toBe(true);
     expect(codes(p).includes('pour-off-peak')).toBe(warned);
+  });
+});
+
+describe('VN: the vent beside a pour on a dome, and the note on how low the flange puts it', () => {
+  /** The highest node within a vent's radius of its centre, by a scan of the whole field: how high the air it lets out reaches. */
+  function reachOf(p: PlannedOpenings): number {
+    const vent = vents(p).find((o) => o.role === 'beside')!;
+    const { nx, ny, cell, x0, y0, values } = p.space.field;
+    const r = p.space.sizes.ventDiameter / 2;
+    let best = -Infinity;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (Math.hypot(x0 + i * cell - vent.x, y0 + j * cell - vent.y) <= r) best = Math.max(best, values[i + j * nx]);
+    return best;
+  }
+  const at = (radius: number, width: number): PlannedOpenings => plan(sphereOnPad(api, radius, 180), (p) => (p.funnel.flangeWidth = width));
+  const t = defaultParams().silicone.t;
+
+  it('on a dome the note names the widest flange, in half mm, that keeps the vent within t / 2 of where 1 mm would, and that width does', () => {
+    // A ball of 11 mm, whose ceiling is a dome about 14.5 mm round: by its own scan, 1.27 mm of drop at a flange of
+    // 2.5 mm against 1 mm, 1.81 at 3, each at least 0.1 mm off t / 2, so the width the note names is 2.5.
+    const plain = reachOf(at(11, 1));
+    const drop = (width: number): number => plain - reachOf(at(11, width));
+    expect(drop(2.5)).toBeLessThan(t / 2 - 0.1);
+    expect(drop(3)).toBeGreaterThan(t / 2 + 0.1);
+    const four = at(11, 4);
+    const note = four.placement.diagnostics.find((d) => d.code === 'vent-low')!;
+    expect(note.severity).toBe('info');
+    const vent = vents(four).find((o) => o.role === 'beside')!;
+    expect(note.message).toBe(`The vent at (${vent.x.toFixed(1)}, ${vent.y.toFixed(1)}) beside the pour stands 12.8 mm from it to clear its funnel's flange, where the highest ceiling under it is ${drop(4).toFixed(1)} mm lower than under a vent 9.8 mm out, so the air above that height leaves only up the pour: pour slowly. A Flange width of at most 2.5 mm under Pour & funnel keeps that drop within 1.5 mm, and one of at most 1 mm lets the vent stand 9.8 mm out.`);
+    // It is so: at 2.5 mm there is no note, and at 3 there is, which names 2.5 again.
+    expect(codes(at(11, 2.5))).not.toContain('vent-low');
+    expect(at(11, 3).placement.diagnostics.find((d) => d.code === 'vent-low')!.message).toContain('A Flange width of at most 2.5 mm under Pour & funnel keeps that drop within 1.5 mm');
+    // And at the default 2 mm, nothing.
+    expect(codes(plan(sphereOnPad(api, 11, 180)))).not.toContain('vent-low');
+    expectAllValid(four);
+  });
+
+  it('negative control: on a wider dome, a ball of 22 mm, even a 4 mm flange keeps the vent within t / 2, so there is no note', () => {
+    const plain = reachOf(at(22, 1));
+    expect(plain - reachOf(at(22, 4))).toBeLessThan(t / 2 - 0.1);
+    expect(codes(at(22, 4))).not.toContain('vent-low');
   });
 });
 

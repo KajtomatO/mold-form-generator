@@ -387,6 +387,46 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
     }
   });
 
+  test('@smoke the cursor: grab over an opening\'s ring, the default off every ring, grabbing while one is held, and the crosshair while picking a face', async ({ page }) => {
+    await dropAndWait(page, EXAMPLE_FILES.jersey);
+    await page.getByTestId('top-view').click();
+    const canvas = page.locator('[data-testid="viewport"] canvas');
+    const cursor = (): Promise<string> => canvas.evaluate((c) => getComputedStyle(c).cursor);
+    // The canvas has no cursor of its own: OrbitControls' constructor connects through disconnect(), which left
+    // an inline 'auto' on it, and an inline style beats the stylesheet's grab (.viewport.grab canvas), since M8.
+    expect(await canvas.evaluate((c) => (c as HTMLCanvasElement).style.cursor)).toBe('');
+    const openings = await hooks(page, (h) => h.openings());
+    const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+    const ring = await ringOnScreen(page, pour.id, 0);
+    // On the top 15 mm from the pour, away from the vent: no ring there.
+    const u = { x: (pour.x - vent.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), y: (pour.y - vent.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y) };
+    const off = await topOnScreen(page, pour.x + 15 * u.x, pour.y + 15 * u.y);
+    expect(await app(page, (a, at: { x: number; y: number }) => a.scene.markerAt(at.x, at.y), off)).toBeNull();
+    await page.mouse.move(off.x, off.y);
+    await expect.poll(cursor).toBe('auto');
+    await page.mouse.move(ring.x, ring.y, { steps: 4 });
+    await expect.poll(cursor).toBe('grab');
+    await page.mouse.move(off.x, off.y, { steps: 4 });
+    await expect.poll(cursor).toBe('auto');
+    // Pressed on the ring, grabbing until the release; Esc puts it back.
+    await page.mouse.move(ring.x, ring.y, { steps: 4 });
+    await expect.poll(cursor).toBe('grab');
+    await page.mouse.down();
+    await expect.poll(cursor).toBe('grabbing');
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await expect.poll(cursor).not.toBe('grabbing');
+    // Picking a face, the crosshair, which the same inline style hid.
+    await page.mouse.move(off.x, off.y, { steps: 4 });
+    await expect.poll(cursor).toBe('auto');
+    await page.getByTestId('pick-face').click();
+    await page.mouse.move(off.x + 5, off.y + 5, { steps: 2 });
+    await expect.poll(cursor).toBe('crosshair');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => app(page, (a) => a.store.pickMode.value)).toBe(false);
+    await expect.poll(cursor).toBe('auto');
+  });
+
   test('@smoke opening drag in 3D on a 2 x 1 grid: valid and invalid by the hard rules, T2b lands, every copy moves, the drop snaps and pins, the pin keeps through t, and Esc puts it back', async ({ page }) => {
     await hooks(page, (h) => h.setParam('grid.nx', 2));
     await dropAndWait(page, EXAMPLE_FILES.jersey);
@@ -502,13 +542,15 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
   });
 
   test('@smoke the flange outline: a dashed circle at the flange\'s radius round every copy of every pour, red where a vent is under it, never a press target, and gone with no flange', async ({ page }) => {
-    await hooks(page, (h) => h.setParam('grid.nx', 2));
+    // FL's flange of 4 mm, as VF drew it: wider than VN's default of 2 mm (D21), so a vent fits between the land
+    // and the circle, and a press there can be tried.
+    await hooks(page, (h) => (h.setParam('grid.nx', 2), h.setParam('funnel.flangeWidth', 4)));
     await dropAndWait(page, EXAMPLE_FILES.jersey);
     await page.getByTestId('top-view').click();
     const openings = await hooks(page, (h) => h.openings());
     const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
     const Zt = await app(page, (a) => a.store.pipeline.field!.value.rim.Zt);
-    // FL's flange at defaults, by hand, and the 24 dashes round it, dash k centred on 2 pi k / 24.
+    // FL's flange at 4 mm, by hand, and the 24 dashes round it, dash k centred on 2 pi k / 24.
     const flange = 5 + 3 * Math.tan(Math.PI / 6) + 4, n = 24;
     const rings = await app(page, (a) => a.scene.markerPositions());
     const outlines = await app(page, (a) => a.scene.flangeOutlines());

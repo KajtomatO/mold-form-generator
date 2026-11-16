@@ -1,5 +1,5 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
-import { flangeReach, openingSizes } from '../analysis/validate';
+import { FLANGE_GAP, flangeReach, openingSizes } from '../analysis/validate';
 import { defaultParams } from '../params/defaults';
 import type { Params } from '../params/schema';
 import { EOL, wrap } from '../report/text';
@@ -9,7 +9,7 @@ import { buildBaseBody } from './base';
 import { baseBoltCutters, boltNeeds, coverBoltCutters, type BoltLayout } from './bolts';
 import { buildCoverBody } from './cover';
 import { threadPast } from './fasteners';
-import { pourCutters, ventCutters } from './openings';
+import { pourCutters, VENT_CHAMFER, ventCutters } from './openings';
 import { basePose, coverPose, poseToStl } from './poses';
 import { deriveRim, type Rim } from './rim';
 
@@ -150,7 +150,8 @@ export function fitPour(): { x: number; y: number } {
  * Where the fit test's vent goes: towards the box tool's +x, +y corner, as M3 put it, unless the funnel's
  * flange would rest on it there. Then it moves out along the line from the pour by as little as clears the
  * flange as the mold's vents do (FL), but never so far that its bore stops opening into the box tool, and
- * never back in towards the pour, as a wide vent already past that edge at M3's spot would.
+ * never back in towards the pour, as a wide vent already past that edge at M3's spot would. VN: by the gap
+ * the seat clearance and nozzle need, through flangeReach; a default flange of 2 mm leaves M3's spot clear.
  */
 export function fitVent(params: Params): { x: number; y: number } {
   const half = TOOL_SIDE / 2;
@@ -210,7 +211,12 @@ function readmeLines(variants: FitVariant[], params: Params): string[] {
   step(4, 'For a leak test, seat the chosen pair, tape it as for a real pour, and fill it with water through the pour opening until water shows at the vent. The joint should stay dry for several minutes. A little Vaseline in the groove helps.');
   // FL: the seat here is the mold's, so a printed funnel shows whether its flange will rest flat on the real top.
   if (params.funnel.generate && params.seat.enabled && params.funnel.flangeWidth > 0) {
-    step(5, `To check the funnel, print one (the Funnel button under Export, or funnel.stl in the mold's ZIP) and press it into the seat of the pour opening: its flange should sit flat on the top all round, and the funnel should stand without rocking. If it stands on its spigot with a gap under the flange, raise Seat clearance under Advanced, Funnel, by 0.05 mm.`);
+    // VN: past where FLANGE_GAP covers the funnel's play and half a line (flangeGap), the vents keep further off
+    // the flange; a cover printed before still keeps each bore clear until they reach its mouth's chamfer too.
+    const cos = Math.cos((params.seat.halfAngleDeg * Math.PI) / 180);
+    const past = Math.max(0, (FLANGE_GAP - params.print.nozzle / 2) * cos);
+    const bore = Math.max(0, (FLANGE_GAP + VENT_CHAMFER - params.print.nozzle / 2) * cos);
+    step(5, `To check the funnel, print one (the Funnel button under Export, or funnel.stl in the mold's ZIP) and press it into the seat of the pour opening: its flange should sit flat on the top all round, and the funnel should stand without rocking. If it stands on its spigot with a gap under the flange, raise Seat clearance under Advanced, Funnel, by 0.05 mm. Past about ${past.toFixed(2)} mm of Seat clearance the funnel has enough play in its seat that the app keeps each vent a little further from the flange: a cover printed before still takes the funnel up to about ${bore.toFixed(2)} mm, its flange then at most over a vent's chamfer and not its bore, and the next export keeps each vent's mouth clear.`);
   }
   out.push('', 'If no pair seats:');
   item('In the taper series, even the loosest: your printer is printing well over size. Check its flow and first-layer squish, then print the series again.');

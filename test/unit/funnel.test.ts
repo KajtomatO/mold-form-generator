@@ -211,7 +211,10 @@ describe('the funnel of G12, at defaults', () => {
       expect(arena.track(funnel.intersect(block)).volume()).toBeLessThan(1e-6);
       // The flange's underside is the top's plane: the lowest point outside the seat is Zt, and the two touch.
       expect(lowestOutside(funnel, seatTopOf(params))).toBe(ZT);
-      expect(flatArea(funnel, ZT, true)).toBeGreaterThan(200);
+      // The whole ring from the spigot's root out to the flange's edge, by hand: 111 mm2 at the default 2 mm (D21), 233 at
+      // FL's 4 (D21's 97 and 219 are the ring outside the seat's edge only).
+      expect(flatArea(funnel, ZT, true)).toBeCloseTo(polygon(seatTopOf(params) + params.funnel.flangeWidth) - polygon(radii(arena, funnel, ZT - 1e-3).outer), 2);
+      expect(flatArea(funnel, ZT, true)).toBeGreaterThan(100);
       expect(funnel.minGap(block, 2)).toBeLessThan(1e-6);
       // Below the top, the spigot stands the seat clearance off the seat's cone.
       const spigot = spigotOf(arena, funnel);

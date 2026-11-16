@@ -205,6 +205,11 @@ describe('the real stages read nothing the table does not name', () => {
     ['funnel.height', 40, ['S9', 'S16']],
     // FL: the flange moves jersey's vent out past its edge, so the cut follows, and the funnel gets its ring.
     ['funnel.flangeWidth', 0, ['S7', 'S13', 'S16']],
+    // VN: past 0.26 mm in a 30 degree seat a funnel pushed to one side and half a line need more than the 0.5 mm
+    // gap, so the vent beside the pour moves out with the funnel's own change.
+    ['funnel.seatClearance', 0.3, ['S7', 'S13', 'S16']],
+    // VN: and a 1 mm nozzle, whose half line takes the gap past 0.5 mm.
+    ['print.nozzle', 1, ['S7', 'S13']],
     ['funnel.flangeThickness', 2, ['S16']],
     // M10: the bolts grow the rim and cut both parts; on jersey the bigger box changes no opening and no report.
     ['bolts.enabled', true, ['S10', 'S13', 'S15']],
@@ -215,6 +220,12 @@ describe('the real stages read nothing the table does not name', () => {
     // And the table says so, or a cached stage would keep its old result.
     expect(changed.filter((id) => !invalidatedBy(path).has(id)), `${path} is missing from the rows of`).toEqual([]);
   }, 60_000);
+
+  it('VN: S7 reads the nozzle itself, as the gap between a flange and a vent takes half a printed line, not only through S5 and S10', () => {
+    expect(STAGES.find((stage) => stage.id === 'S7')!.params).toContain('print.nozzle');
+    expect(STAGES.find((stage) => stage.id === 'S7')!.params).toContain('funnel.seatClearance');
+    expect(STAGES.find((stage) => stage.id === 'S7')!.params).toContain('seat.halfAngleDeg');
+  });
 
   // S9's filters on models they act on: wolf's two smaller feet, 160.5 and 152.6 mm2, which an island
   // filter past them drops from its loop lock and from the base's pocket, and Benchy's one air pocket,

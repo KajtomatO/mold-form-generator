@@ -144,7 +144,8 @@ export const PARAM_SCHEMA = {
     tipWall: num('Tip wall', 0.86),
     seatClearance: num('Seat clearance', 0.1),
     // FL: a flat ring round the spigot's root that rests on the cover's top, so the funnel stands square. 0 leaves it out.
-    flangeWidth: num('Flange width', 4, { min: 0, max: 10 }),
+    // D21: 2 mm, where FL had 4, the user's choice of 2026-11-16, so the vent beside a pour on a peak stands 2 mm nearer it.
+    flangeWidth: num('Flange width', 2, { min: 0, max: 10 }),
     flangeThickness: num('Flange thickness', 1.2, { min: 0.6, max: 5 }),
   },
   grid: {

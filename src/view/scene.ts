@@ -180,6 +180,10 @@ export class PreviewScene {
 
     if (options.interactive) {
       this.controls = new OrbitControls(this.camera, canvas);
+      // Its constructor connects through disconnect(), which sets an inline cursor of 'auto' on the canvas, and an
+      // inline style beats the stylesheet: since M8 the cursor never turned to grab over a ring (.viewport.grab
+      // canvas), nor to the crosshair while picking a face. The stylesheet sets the canvas's cursor, so clear it.
+      canvas.style.removeProperty('cursor');
       this.controls.enableDamping = false;
       this.controls.addEventListener('change', () => this.requestRender());
     }

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, normalize, sep } from 'node:path';
 import { unzipSync } from 'fflate';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Request } from '@playwright/test';
 import { shownDate } from '../src/app/buildInfo';
 import type { TestHooks } from '../src/app/testHooks';
 import { missingExampleFiles } from '../test/fixtures/loadExamples';
@@ -116,13 +116,40 @@ function serve(out: string, host: string, log: Site['log']): Promise<Server> {
   return new Promise((resolve) => server.listen(0, host, () => resolve(server)));
 }
 
+/** What a page has loading, and when a load last started or ended, followed from the page's first open() on. */
+const traffic = new WeakMap<Page, { loading: Set<Request>; last: number }>();
+function trafficOf(page: Page): { loading: Set<Request>; last: number } {
+  let seen = traffic.get(page);
+  if (!seen) {
+    const fresh = { loading: new Set<Request>(), last: Date.now() };
+    const done = (r: Request): void => {
+      fresh.loading.delete(r);
+      fresh.last = Date.now();
+    };
+    page.on('request', (r) => {
+      fresh.loading.add(r);
+      fresh.last = Date.now();
+    });
+    page.on('requestfinished', done);
+    page.on('requestfailed', done);
+    traffic.set(page, (seen = fresh));
+  }
+  return seen;
+}
+
 /** Opens a page of the site with the test hooks, watching for errors, failed loads and requests that leave the site. */
 async function open(page: Page, site: Site, path: string, query = '?test=1'): Promise<PageWatch> {
   const watch: PageWatch = { errors: [], foreign: [] };
   const origin = new URL(site.url).origin;
+  const loads = trafficOf(page);
   // Loads the page before still has under way would be cut off by this navigation and counted against it,
-  // so that page finishes loading first, then the blank page leaves nothing of it running.
+  // so that page finishes loading first, then the blank page leaves nothing of it running. Its 'load' is not
+  // enough: the root page that Stable version opens can still be loading its rolldown-runtime chunk, and in
+  // Firefox that load, cut off by the step to the blank page (NS_BINDING_ABORTED), was reported once that step
+  // had returned, to this watch, and even as a load started after it. So the page before must have nothing
+  // loading, and nothing started or ended for half a second.
   await page.waitForLoadState('load');
+  await expect.poll(() => loads.loading.size === 0 && Date.now() - loads.last >= 500, { timeout: 30_000, intervals: [100] }).toBe(true);
   await page.goto('about:blank');
   page.on('pageerror', (e) => watch.errors.push(String(e)));
   page.on('console', (m) => {

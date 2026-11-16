@@ -1,5 +1,5 @@
 import type { OpeningPin } from '../core/analysis/placement';
-import { widestFlangeInLand } from '../core/analysis/validate';
+import { flangeGap, widestFlangeInLand } from '../core/analysis/validate';
 import { PARAM_SCHEMA, SCHEMA_VERSION, type ParamDef, type Params } from '../core/params/schema';
 import { DEFAULT_PLANE, type PlaneChoice } from '../workers/fieldStages';
 import { entryDef } from '../ui/layout';
@@ -79,16 +79,19 @@ const v4ToV5: Migration = (file) => {
  * Version 5 had no flange on the funnel, so it opens without one (FL), which is the funnel and the vents it
  * made, with the thickness 6 started with, so turning the flange on later gives the default one. A mold
  * with a funnel says so, and how wide a flange still fits the cover already printed: one the land alone
- * keeps clear of the vents moves none of them.
+ * keeps clear of the vents moves none of them. VN: by the gap the file's own seat clearance, seat angle and
+ * nozzle need, each as the project opens with it (opensWith): brought into its range, or at its default
+ * where the file has none.
  */
 const v5ToV6: Migration = (file, notes) => {
   const params = isObject(file.params) ? file.params : {};
   const funnel = isObject(params.funnel) ? params.funnel : {};
   const seat = isObject(params.seat) ? params.seat : {};
   const pour = isObject(params.pour) ? params.pour : {};
+  const print = isObject(params.print) ? params.print : {};
   if (funnel.generate !== false && seat.enabled !== false) {
-    const land = typeof pour.minLand === 'number' && Number.isFinite(pour.minLand) ? pour.minLand : 1.5;
-    const keeps = widestFlangeInLand(land);
+    const gap = flangeGap(opensWith('funnel.seatClearance', funnel.seatClearance), opensWith('seat.halfAngleDeg', seat.halfAngleDeg), opensWith('print.nozzle', print.nozzle));
+    const keeps = widestFlangeInLand({ minLand: opensWith('pour.minLand', pour.minLand), flangeGap: gap });
     const printed = keeps > 0
       ? ` A width of up to ${keeps} mm leaves every vent where it is, so a cover you have printed takes the new funnel; a wider flange moves the vent beside each pour out from under it, so print the cover again too.`
       : ' Any flange moves the vent beside each pour out from under it, so print the cover again too.';
@@ -96,6 +99,18 @@ const v5ToV6: Migration = (file, notes) => {
   }
   return { ...file, params: { ...params, funnel: { ...funnel, flangeWidth: 0, flangeThickness: 1.2 } } };
 };
+
+/**
+ * VN: the number a numeric setting opens with, as readParam keeps it but without its notes: brought into the
+ * range its control takes, or its default where the file has no number, from the schema, so a migration's
+ * notice names what the project then holds and no default is written out twice.
+ */
+function opensWith(path: ParamPath, value: unknown): number {
+  const def = entryDef(path);
+  if (def.kind !== 'number') throw new Error(`${path} is not a number setting.`);
+  if (!finite(value)) return def.default;
+  return Math.min(def.max ?? Infinity, Math.max(def.min ?? 0, value));
+}
 
 /** Each older version's step to the one after it. */
 export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6 };

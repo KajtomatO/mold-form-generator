@@ -14,18 +14,31 @@ export const MIN_CEILING = 1;
 /** Plan G11: past these a bore is long enough to say so. */
 export const LONG_VENT_RATIO = 40;
 export const LONG_POUR_MM = 60;
-/** Room to keep between two funnel rims when suggesting a size, in mm. */
+/**
+ * Room to keep between two funnel rims when suggesting a size, in mm. FL: and between two flanges, as each
+ * funnel has its play in its seat and each flange's edge prints up to half a line wide, together 0.63 mm at
+ * defaults, though the warning itself counts flanges that only touch as clear.
+ */
 const FUNNEL_GAP = 1;
 /**
- * FL: between a flange's edge and a vent's mouth, in mm. The spigot centres the funnel to within about
- * 0.12 mm (the seat clearance over cos 30 degrees), and the flange's edge prints up to half a line wide
- * of where it is drawn, about 0.2 mm at a 0.4 mm nozzle; 0.5 covers both, with room so the vent's mouth
- * shows beside the flange while silicone rises in it. It is fixed, so with a 0.4 mm nozzle it stops
- * covering both past a seat clearance of 0.26 mm in a 30 degree seat (0.21 at 45); the mouth's 0.3 mm
- * chamfer is outside the bore, so the bore itself stays clear until they add up to 0.8 mm (a clearance of
- * 0.52 mm at 30 degrees, 0.42 at 45).
+ * FL: the least gap between a flange's edge and a vent's mouth, in mm, which the defaults keep. The spigot
+ * centres the funnel to within about 0.12 mm (the seat clearance over cos 30 degrees), and the flange's
+ * edge prints up to half a line wide of where it is drawn, about 0.2 mm at a 0.4 mm nozzle; 0.5 covers
+ * both, with room so the vent's mouth shows beside the flange while silicone rises in it. VN: past what it
+ * covers, a seat clearance over 0.26 mm in a 30 degree seat (0.21 at 45) or a nozzle over 0.77 mm at the
+ * default clearance, the gap grows with them (flangeGap).
  */
 export const FLANGE_GAP = 0.5;
+
+/**
+ * VN: the gap between a flange's edge and a vent's mouth for these settings: how far a funnel pushed to one
+ * side of its seat moves (the seat clearance over the cosine of the seat's half angle) and half a printed
+ * line at the flange's edge, never under FLANGE_GAP. At defaults that is 0.12 + 0.2 mm, so it gives the
+ * literal FLANGE_GAP and nothing moves.
+ */
+export function flangeGap(seatClearance: number, seatHalfAngleDeg: number, nozzle: number): number {
+  return Math.max(FLANGE_GAP, seatClearance / Math.cos((seatHalfAngleDeg * Math.PI) / 180) + nozzle / 2);
+}
 
 /** Everything about an opening's size that placement and validation need. */
 export interface OpeningSizes {
@@ -43,6 +56,8 @@ export interface OpeningSizes {
   flangeRadius: number;
   /** The top's chamfered edge, which a flange must stay inside to rest flat. */
   topChamfer: number;
+  /** VN: between a flange's edge and a vent's mouth, from the seat clearance, the seat's half angle and the nozzle (flangeGap). */
+  flangeGap: number;
 }
 
 export function openingSizes(params: Params): OpeningSizes {
@@ -58,6 +73,7 @@ export function openingSizes(params: Params): OpeningSizes {
     funnelMinTop: Math.max(params.pour.diameter + 2 * params.funnel.wall, 2 * profile.rNeck),
     flangeRadius: funnel ? profile.rFlange : 0,
     topChamfer: params.cover.topChamfer,
+    flangeGap: flangeGap(params.funnel.seatClearance, params.seat.halfAngleDeg, params.print.nozzle),
   };
 }
 
@@ -146,6 +162,24 @@ export function discMinimum(field: Field, x: number, y: number, radius: number):
   return lowest === Infinity ? 0 : Math.max(lowest, 0);
 }
 
+/**
+ * VN: the highest ceiling under a disc, which is how high the air an opening there lets out can reach: air
+ * reaches an opening anywhere under its disc, as leavesCovered counts it, so the nodes within the radius and
+ * no further. With no node inside, the ceiling at the centre. Never under 0, as off the cavity reads 0.
+ */
+export function discMaximum(field: Field, x: number, y: number, radius: number): number {
+  const { nx, ny, cell, x0, y0, values } = field;
+  let highest = -Infinity;
+  const jLow = Math.max(0, Math.ceil((y - radius - y0) / cell)), jHigh = Math.min(ny - 1, Math.floor((y + radius - y0) / cell));
+  for (let j = jLow; j <= jHigh; j++) {
+    const dy = y0 + j * cell - y;
+    const half = Math.sqrt(Math.max(0, radius * radius - dy * dy));
+    const iLow = Math.max(0, Math.ceil((x - half - x0) / cell)), iHigh = Math.min(nx - 1, Math.floor((x + half - x0) / cell));
+    for (let i = iLow, n = iLow + j * nx; i <= iHigh; i++, n++) if (values[n] > highest) highest = values[n];
+  }
+  return highest === -Infinity ? heightAt(field, x, y) : Math.max(highest, 0);
+}
+
 /** H between nodes, as the tool's surface follows it. 0 off the grid. */
 export function heightAt(field: Field, x: number, y: number): number {
   const { nx, ny, cell, x0, y0, values } = field;
@@ -200,9 +234,12 @@ function topRect(space: PlacementSpace, kind: OpeningKind): Rect {
   };
 }
 
-/** FL: how far a vent's centre must stay from a pour's for the pour's flange to leave the vent's mouth clear, or 0 with no flange. */
+/**
+ * FL: how far a vent's centre must stay from a pour's for the pour's flange to leave the vent's mouth clear,
+ * or 0 with no flange. VN: by the gap these settings need, FLANGE_GAP at defaults.
+ */
 export function flangeReach(sizes: OpeningSizes): number {
-  return sizes.flangeRadius > 0 ? sizes.flangeRadius + topRadius(sizes, 'vent') + FLANGE_GAP : 0;
+  return sizes.flangeRadius > 0 ? sizes.flangeRadius + topRadius(sizes, 'vent') + sizes.flangeGap : 0;
 }
 
 /** The land alone between a pour's and a vent's centres, as before FL. */
@@ -212,24 +249,37 @@ export function ventLand(sizes: OpeningSizes): number {
 
 /**
  * FL: whether the flange keeps a vent further from a pour than the land does. A flange no wider than the
- * land less FLANGE_GAP (1 mm at defaults) does not, so every opening stands where it did with none; the
- * nm of slack keeps float rounding in the sum from deciding it.
+ * land less the gap (1 mm at defaults) does not, so every opening stands where it did with none; the nm of
+ * slack keeps float rounding in the sum from deciding it.
  */
 export function flangeOutreachesLand(sizes: OpeningSizes): boolean {
   return flangeReach(sizes) > ventLand(sizes) + 1e-6;
 }
 
 /**
- * FL: the widest flange, in tenths of a mm, that the land alone keeps clear of the vents: the land less
- * FLANGE_GAP, 1 mm at defaults. Up to it every opening stands where it does with no flange.
+ * VN: whether the flange reaches past the land by the least gap, FLANGE_GAP: then, with more than one pour
+ * per body, the pours go first, and a spread pour keeps its flange off the other seats where it has room
+ * (placement). Decided on that fixed gap, not the one the settings need, so a change of seat clearance or
+ * nozzle never changes the order the pours are placed in, which moves them by millimetres at a flange of
+ * about 1 mm: past what FLANGE_GAP covers it only moves the vents, by the hundredths the wider gap adds.
+ * At defaults the two gaps are the same number, so this is flangeOutreachesLand, to the bit.
  */
-export function widestFlangeInLand(minLand: number): number {
-  return Math.max(0, Math.floor((minLand - FLANGE_GAP) * 10) / 10);
+export function flangeOrdersPours(sizes: OpeningSizes): boolean {
+  return flangeOutreachesLand({ ...sizes, flangeGap: FLANGE_GAP });
 }
 
-/** FL: how far apart two pours' centres must be for neither's flange to come within FLANGE_GAP of the other's seat, or 0 with no flange. */
+/**
+ * FL: the widest flange, in tenths of a mm, that the land alone keeps clear of the vents: the land less the
+ * gap, 1 mm at defaults. Up to it every opening stands where it does with no flange. VN: by the gap these
+ * settings need, so past a few tenths of seat clearance it is narrower (0.9 mm at 0.3 in a 30 degree seat).
+ */
+export function widestFlangeInLand(sizes: Pick<OpeningSizes, 'minLand' | 'flangeGap'>): number {
+  return Math.max(0, Math.floor((sizes.minLand - sizes.flangeGap) * 10) / 10);
+}
+
+/** FL: how far apart two pours' centres must be for neither's flange to come within the gap of the other's seat, or 0 with no flange. */
 export function flangeSpacing(sizes: OpeningSizes): number {
-  return sizes.flangeRadius > 0 ? sizes.flangeRadius + topRadius(sizes, 'pour') + FLANGE_GAP : 0;
+  return sizes.flangeRadius > 0 ? sizes.flangeRadius + topRadius(sizes, 'pour') + sizes.flangeGap : 0;
 }
 
 /** FL: whether a pour here keeps its flange off every other pour's seat, and theirs off its own, on every copy. A soft rule: placement prefers it. */
@@ -432,17 +482,8 @@ export function offPeakWarning(space: PlacementSpace, spot: OpeningSpot, peakHei
   return { code: 'pour-off-peak', severity: 'warning', message: `The pour at (${spot.x.toFixed(1)}, ${spot.y.toFixed(1)}) is not at the body's highest point, so air could stay trapped above it.` };
 }
 
-/**
- * The plan's soft rule on funnels, from the rim and the closest pair of pours. Default 40 mm funnels
- * collide at x8's 22 mm pitch, so this says what size would fit. Null if nothing collides. With `only`,
- * one of `pours`, just the pairs it is in count, as a moved opening answers for its own funnel. FL: a
- * funnel takes the room of the wider of its rim and its flange, and a flange that reaches the other
- * pour's seat says so.
- */
-export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSpot[], only?: OpeningSpot): Diagnostic | null {
-  const { sizes } = space;
-  const { funnelTop, funnelMinTop, flangeRadius } = sizes;
-  if (funnelTop === null || pours.length === 0) return null;
+/** The closest two pours' copies come, and each pour to its own copies; with `only`, one of `pours`, just the pairs it is in. */
+export function closestPours(space: PlacementSpace, pours: readonly OpeningSpot[], only?: OpeningSpot): number {
   let closest = selfCopyDistance(space);
   for (let a = 0; a < pours.length; a++) {
     for (let b = a + 1; b < pours.length; b++) {
@@ -450,29 +491,82 @@ export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSp
       closest = Math.min(closest, nearestCopy(space, pours[a].x, pours[a].y, pours[b].x, pours[b].y));
     }
   }
+  return closest;
+}
+
+/** Whether funnels on pours this close collide: the wider of the rim and the flange takes more room than they have. */
+export function funnelsCollide(sizes: OpeningSizes, closest: number): boolean {
+  return sizes.funnelTop !== null && closest < Math.max(sizes.funnelTop, 2 * sizes.flangeRadius);
+}
+
+/**
+ * What funnel fits between pours this close: the top diameter, the one set where it fits with FUNNEL_GAP to
+ * spare, and the flange width, null where the one set fits with that to spare too, or 0 for none. Null where
+ * no funnel fits. VN: `then`, where the plan was made again at that width (placement's followed advice), is
+ * how far apart the pours stand there.
+ */
+export interface FunnelFit {
+  top: number;
+  width: number | null;
+  then?: number;
+}
+
+export function funnelFit(sizes: OpeningSizes, closest: number): FunnelFit | null {
+  const room = closest - FUNNEL_GAP;
+  const fits = Math.floor(room);
+  if (fits < sizes.funnelMinTop) return null;
+  const top = sizes.funnelTop !== null && sizes.funnelTop <= room ? sizes.funnelTop : fits;
+  if (2 * sizes.flangeRadius <= room) return { top, width: null };
+  return { top, width: Math.max(0, Math.floor((room / 2 - topRadius(sizes, 'pour')) * 10) / 10) };
+}
+
+/** FL: the widest flange, in tenths of a mm, that keeps a funnel's flange the gap off the seat of a pour this close, 0 where none does. */
+export function flangeOffSeat(sizes: OpeningSizes, closest: number): number {
+  return Math.max(0, Math.floor((closest - 2 * topRadius(sizes, 'pour') - sizes.flangeGap) * 10) / 10);
+}
+
+/** VN: the funnel-collision warning's advice, worked out by placement where following it moves the pours. */
+export interface FunnelAdvice {
+  fit: FunnelFit | null;
+  /** The widest flange that keeps one funnel at a time off the other pour's seat, 0 for none. */
+  alone: number;
+}
+
+/**
+ * The plan's soft rule on funnels, from the rim and the closest pair of pours. Default 40 mm funnels
+ * collide at x8's 22 mm pitch, so this says what size would fit. Null if nothing collides. With `only`,
+ * one of `pours`, just the pairs it is in count, as a moved opening answers for its own funnel. FL: a
+ * funnel takes the room of the wider of its rim and its flange, and a flange that reaches the other
+ * pour's seat says so. VN: `advice`, where placement has made the plan again at the width it names, so
+ * that following it clears the warning; without it, the advice is for the pours where they stand.
+ */
+export function funnelCollision(space: PlacementSpace, pours: readonly OpeningSpot[], only?: OpeningSpot, advice?: FunnelAdvice): Diagnostic | null {
+  const { sizes } = space;
+  const { funnelTop, flangeRadius } = sizes;
+  if (funnelTop === null || pours.length === 0) return null;
+  const closest = closestPours(space, pours, only);
+  if (!funnelsCollide(sizes, closest)) return null;
   const flange = 2 * flangeRadius;
-  if (closest >= Math.max(funnelTop, flange)) return null;
   const seat = topRadius(sizes, 'pour');
   const said = funnelTop >= flange ? `Funnels of ${funnelTop} mm collide` : `Funnels with flanges ${flange.toFixed(1)} mm across collide`;
   const covers = flangeRadius > 0 && closest < flangeRadius + seat ? " A funnel's flange would also cover part of the other pour's seat, so that seat could not take a funnel at the same time, and silicone rising in it would run out under the flange." : '';
-  const room = closest - FUNNEL_GAP;
-  const fits = Math.floor(room);
-  let advice: string;
-  if (fits < funnelMinTop) advice = 'No funnel fits between them, so pour them one at a time or move them apart.';
-  else if (flange <= room) advice = `A top diameter of ${fits} mm would fit.`;
+  const fit = advice ? advice.fit : funnelFit(sizes, closest);
+  let text: string;
+  if (!fit) text = 'No funnel fits between them, so pour them one at a time or move them apart.';
+  else if (fit.width === null) text = `A top diameter of ${fit.top} mm would fit.`;
   else {
-    const width = Math.floor((room / 2 - seat) * 10) / 10;
-    const narrower = width > 0 ? `a flange width of at most ${width} mm` : 'a flange width of 0, no flange,';
-    advice = funnelTop <= room ? `Funnels with ${narrower} would fit.` : `A top diameter of ${fits} mm with ${narrower} would fit.`;
+    const narrower = fit.width > 0 ? `a flange width of at most ${fit.width} mm` : 'a flange width of 0, no flange,';
+    const then = fit.then === undefined ? '' : `, with the pours then ${fit.then.toFixed(1)} mm apart`;
+    text = fit.top >= funnelTop ? `Funnels with ${narrower} would fit${then}.` : `A top diameter of ${fit.top} mm with ${narrower} would fit${then}.`;
   }
   // One funnel at a time still puts its flange over the next seat, so that advice needs a flange that stays off it.
   if (covers) {
-    const alone = Math.floor((closest - 2 * seat - FLANGE_GAP) * 10) / 10;
-    advice += alone > 0
+    const alone = advice ? advice.alone : flangeOffSeat(sizes, closest);
+    text += alone > 0
       ? ` To pour through one funnel at a time instead, a flange width of at most ${alone} mm keeps its flange off the other pour's seat.`
       : " To pour through one funnel at a time instead, use no flange (a flange width of 0), as any would reach the other pour's seat.";
   }
-  return { code: 'funnel-collision', severity: 'warning', message: `${said}, as two pours are only ${closest.toFixed(1)} mm apart.${covers} ${advice}` };
+  return { code: 'funnel-collision', severity: 'warning', message: `${said}, as two pours are only ${closest.toFixed(1)} mm apart.${covers} ${text}` };
 }
 
 export interface DropResult {

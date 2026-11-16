@@ -211,7 +211,7 @@ describe('printability', () => {
     expect(plasticEstimate([cube], params).printed).toBeCloseTo(plasticEstimate([cube], params).solid, 6);
   });
 
-  it('wolf takes about 3.1 kg printed solid, from the volumes of its cover, base and funnel: 428 g at the default 5 percent infill, a note, and 1.26 kg at 35 percent, more than a spool, a warning', async () => {
+  it('wolf takes about 3.1 kg printed solid, from the volumes of its cover, base and funnel: 427 g at the default 5 percent infill, a note, and 1.26 kg at 35 percent, more than a spool, a warning', async () => {
     const read = await withPipeline(exampleBytes('wolf'), EXAMPLE_FILES.wolf, () => {}, (p) => {
       const rim = p.field!.value.rim, cover = p.cover!.value;
       // The cover's volume from its mesh, as the estimate reads it, against the box less what the box loses.
@@ -241,14 +241,15 @@ describe('printability', () => {
     expect(read.volume / 1e6).toBeCloseTo(2.41, 2);
     expect(read.plastic.solid / 1000).toBeCloseTo(3.1, 1);
     expect(read.plastic.printed).toBeLessThan(read.plastic.solid);
-    // At the default 5 percent infill (D19) the print takes 428 g, under a spool, so the row is a note.
-    expect(read.plastic.printed).toBeCloseTo(428, 0);
+    // At the default 5 percent infill (D19) the print takes 427 g, under a spool, so the row is a note: 428 g
+    // with FL's 4 mm flange, whose funnel is 0.47 cm3 more.
+    expect(read.plastic.printed).toBeCloseTo(427, 0);
     expect(read.rows).toHaveLength(1);
-    expect(read.rows[0].message).toContain('about 428 g of plastic at 5 percent infill, or 3.07 kg printed solid');
+    expect(read.rows[0].message).toContain('about 427 g of plastic at 5 percent infill, or 3.07 kg printed solid');
     expect(read.rows[0].severity).toBe('info');
     // At 35 percent, the default before D19, it takes 1.26 kg, more than a spool, so it warns. The solid figure stays.
     expect(read.at35.plastic.solid).toBe(read.plastic.solid);
-    expect(read.at35.plastic.printed).toBeCloseTo(1263, 0);
+    expect(read.at35.plastic.printed).toBeCloseTo(1262, 0);
     expect(read.at35.rows).toHaveLength(1);
     expect(read.at35.rows[0].message).toContain('about 1.26 kg of plastic at 35 percent infill, or 3.07 kg printed solid');
     expect(read.at35.rows[0].severity).toBe('warning');

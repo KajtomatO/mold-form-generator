@@ -242,8 +242,28 @@ describe('migration', () => {
     expect(readProjectJson(JSON.stringify(bare)).notes).toHaveLength(1);
     const wide = { ...v5, params: { ...v5.params, pour: { ...v5.params.pour, minLand: 2 } } };
     expect(readProjectJson(JSON.stringify(wide)).notes[1].message).toContain('A width of up to 1.5 mm leaves every vent where it is');
-    // A new project has the flange, and a format 6 file keeps what it says.
-    expect(defaultParams().funnel.flangeWidth).toBe(4);
+    // VN: the gap is the file's own, from its seat clearance, seat angle and nozzle: at a clearance of 0.3 mm a
+    // funnel pushed to one side and half a line need 0.3 / cos 30 + 0.2 = 0.546 mm, so 1.5 less that, 0.9 mm;
+    // at 0.5 in a 45 degree seat 0.907, so 0.5 mm; with a 1 mm nozzle 0.615, so 0.8 mm.
+    const notedWith = (change: (params: typeof v5.params) => typeof v5.params): string => readProjectJson(JSON.stringify({ ...v5, params: change(v5.params) })).notes[1].message;
+    expect(notedWith((q) => ({ ...q, funnel: { ...q.funnel, seatClearance: 0.3 } }))).toContain('A width of up to 0.9 mm leaves every vent where it is');
+    expect(notedWith((q) => ({ ...q, funnel: { ...q.funnel, seatClearance: 0.5 }, seat: { ...q.seat, halfAngleDeg: 45 } }))).toContain('A width of up to 0.5 mm leaves every vent where it is');
+    expect(notedWith((q) => ({ ...q, print: { ...q.print, nozzle: 1 } }))).toContain('A width of up to 0.8 mm leaves every vent where it is');
+    // At the default clearance, and at the WORKFLOW's first step up from it, 0.15 mm, the 0.5 mm gap stands: 1 mm.
+    expect(notedWith((q) => ({ ...q, funnel: { ...q.funnel, seatClearance: 0.15 } }))).toContain('A width of up to 1 mm leaves every vent where it is');
+    // A file with none of the three takes their defaults, as the app would.
+    const noClearance = { ...v5.params.funnel } as Record<string, unknown>;
+    delete noClearance.seatClearance;
+    expect(notedWith((q) => ({ ...q, funnel: noClearance }))).toContain('A width of up to 1 mm leaves every vent where it is');
+    // VN, after the review: and as the project opens with them, brought into their ranges, so a hand-edited half
+    // angle of 80 degrees, which opens at 45, says what 45 keeps clear with a clearance of 0.3: 0.3 / cos 45 + 0.2 =
+    // 0.624 mm of gap, so 0.8 mm, where 80 degrees would have said that no flange does.
+    const steep = { ...v5, params: { ...v5.params, funnel: { ...v5.params.funnel, seatClearance: 0.3 }, seat: { ...v5.params.seat, halfAngleDeg: 80 } } };
+    const opened = readProjectJson(JSON.stringify(steep));
+    expect(opened.file.params.seat.halfAngleDeg).toBe(45);
+    expect(opened.notes.find((n) => n.message.startsWith('This mold was made before the funnel had a flange'))!.message).toContain('A width of up to 0.8 mm leaves every vent where it is');
+    // A new project has the flange, 2 mm since VN (D21), where FL had 4, and a format 6 file keeps what it says.
+    expect(defaultParams().funnel.flangeWidth).toBe(2);
     const v6 = { ...v5, schemaVersion: 6, params: { ...v5.params, funnel: { ...v5.params.funnel, flangeWidth: 2.5, flangeThickness: 1.6 } } };
     expect(readProjectJson(JSON.stringify(v6)).file.params.funnel).toMatchObject({ flangeWidth: 2.5, flangeThickness: 1.6 });
   });
@@ -634,7 +654,11 @@ describe('save and open with the real pipeline on jersey', () => {
     p.setParams((params) => (params.funnel.flangeWidth = 1));
     await p.idle();
     expect(p.placement!.value.placement.openings.map(({ id, x, y }) => ({ id, x, y }))).toEqual(before);
-    // Turned on, the flange takes the vent out past its edge: 4 mm more of flange, less the land, and its 0.5 mm gap.
+    // Turned on at the default 2 mm, the flange takes the vent out past its edge: 2 mm of flange, its mouth and the 0.5 mm gap.
+    p.setParams((params) => (params.funnel.flangeWidth = defaultParams().funnel.flangeWidth));
+    await p.idle();
+    expect(apart()).toBeCloseTo(5 + 3 * Math.tan(Math.PI / 6) + 2 + 1.55 + 0.5 + 0.01, 6);
+    // And at FL's 4 mm, 2 mm further.
     p.setParams((params) => (params.funnel.flangeWidth = 4));
     await p.idle();
     expect(apart()).toBeCloseTo(5 + 3 * Math.tan(Math.PI / 6) + 4 + 1.55 + 0.5 + 0.01, 6);

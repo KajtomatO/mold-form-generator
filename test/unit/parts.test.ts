@@ -287,11 +287,17 @@ describe('the fit-test piece of G12', () => {
     flat.funnel.flangeWidth = 0;
     expect(fitVent(flat)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
     const old = Math.hypot(7.2 + 10 / 3, 7.2);
-    // The default flange, by hand: the seat's 5 + 3 tan 30 and 4 more, the vent's mouth of 1.55 and the 0.5 mm gap.
+    // VN: the default flange of 2 mm (D21) reaches 10.78 mm from the pour, the seat's 5 + 3 tan 30 and 2 more,
+    // the vent's mouth of 1.55 and the 0.5 mm gap, nearly 2 mm short of M3's spot, so the vent stays there.
+    expect(old - (5 + 3 * Math.tan(Math.PI / 6) + 2 + 1.55 + 0.5)).toBeGreaterThan(1.9);
+    expect(fitVent(defaultParams())).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
+    // FL's flange of 4 mm, by hand: the seat's 5 + 3 tan 30 and 4 more, the vent's mouth of 1.55 and the 0.5 mm gap.
+    const four = defaultParams();
+    four.funnel.flangeWidth = 4;
     const reach = 5 + 3 * Math.tan(Math.PI / 6) + 4 + 1.55 + 0.5;
     expect(reach - old).toBeGreaterThan(0.02);
     expect(reach - old).toBeLessThan(0.03);
-    const at = fitVent(defaultParams());
+    const at = fitVent(four);
     expect(Math.hypot(at.x + 10 / 3, at.y)).toBeCloseTo(reach, 9);
     // On the same line as before.
     expect(Math.atan2(at.y, at.x + 10 / 3)).toBeCloseTo(Math.atan2(7.2, 7.2 + 10 / 3), 9);
@@ -300,8 +306,9 @@ describe('the fit-test piece of G12', () => {
     wide.funnel.flangeWidth = 8;
     expect(fitVent(wide).x).toBeCloseTo(10 - 1.25, 9);
     // A 6 mm vent where M3 put it already runs past the box tool's top edge (7.2 + 3 over 10), so it stays
-    // there rather than move in, further under the flange that reaches 14.5 mm for it.
+    // there rather than move in, further under a 4 mm flange that reaches 14.5 mm for it.
     const thick = defaultParams();
+    thick.funnel.flangeWidth = 4;
     thick.vents.diameter = 6;
     expect(5 + 3 * Math.tan(Math.PI / 6) + 4 + 3.3 + 0.5).toBeGreaterThan(old + 1.7);
     expect(fitVent(thick)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
@@ -311,7 +318,7 @@ describe('the fit-test piece of G12', () => {
     expect(fitVent(none)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
     // The cut cover has its vent there, by the hole in a slice through the top.
     withArena(api, (arena) => {
-      const { rim, cover } = buildFitPiece(arena, params, variants[0]);
+      const { rim, cover } = buildFitPiece(arena, four, variants[0]);
       const contours = arena.polygons(arena.track(cover.slice(rim.Zt - 0.5)));
       const centres = contours.map((c) => [c.reduce((a, p) => a + (p as [number, number])[0], 0) / c.length, c.reduce((a, p) => a + (p as [number, number])[1], 0) / c.length]);
       expect(centres.some(([x, y]) => Math.hypot(x - at.x, y - at.y) < 1e-3)).toBe(true);
@@ -319,7 +326,33 @@ describe('the fit-test piece of G12', () => {
     // Its README says how to check a funnel's fit in the seat, with the flange; with none, it says nothing of it.
     const readme = new TextDecoder().decode(fitTestFiles(api, params)['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');
     expect(readme).toContain('5. To check the funnel, print one (the Funnel button under Export, or funnel.stl in the mold\'s ZIP) and press it into the seat of the pour opening: its flange should sit flat on the top all round, and the funnel should stand without rocking.');
+    // VN: and when a larger Seat clearance moves the vents, worked out for the seat and nozzle set: the play over cos 30
+    // and half a 0.4 mm line reach 0.5 mm at a clearance of 0.3 x cos 30 = 0.26, and the bore of a vent placed for 0.5
+    // stays clear until they reach its 0.3 mm chamfer too, at 0.6 x cos 30 = 0.52.
+    expect(readme).toContain("Past about 0.26 mm of Seat clearance the funnel has enough play in its seat that the app keeps each vent a little further from the flange: a cover printed before still takes the funnel up to about 0.52 mm, its flange then at most over a vent's chamfer and not its bore, and the next export keeps each vent's mouth clear.");
+    const steep = defaultParams();
+    steep.seat.halfAngleDeg = 45;
+    expect(new TextDecoder().decode(fitTestFiles(api, steep)['fit_test/README.txt']).replace(/\r\n\s*/g, ' ')).toContain('Past about 0.21 mm of Seat clearance the funnel has enough play in its seat that the app keeps each vent a little further from the flange: a cover printed before still takes the funnel up to about 0.42 mm,');
     expect(new TextDecoder().decode(fitTestFiles(api, flat)['fit_test/README.txt'])).not.toContain('flange');
+  });
+
+  it('VN: at a seat clearance of 0.3 mm its vent moves out along the same line by the larger gap a funnel pushed to one side needs, 0.046 mm, by hand', () => {
+    const four = defaultParams();
+    four.funnel.flangeWidth = 4;
+    const loose = defaultParams();
+    loose.funnel.flangeWidth = 4;
+    loose.funnel.seatClearance = 0.3;
+    const out = (at: { x: number; y: number }): number => Math.hypot(at.x + 10 / 3, at.y);
+    // The gap, by hand: the funnel's play of 0.3 / cos 30 and half the 0.4 mm line, against 0.5 at defaults.
+    const more = 0.3 / Math.cos(Math.PI / 6) + 0.2 - 0.5;
+    expect(more).toBeCloseTo(0.0464, 4);
+    expect(out(fitVent(loose))).toBeCloseTo(5 + 3 * Math.tan(Math.PI / 6) + 4 + 1.55 + 0.5 + more, 9);
+    expect(Math.atan2(fitVent(loose).y, fitVent(loose).x + 10 / 3)).toBeCloseTo(Math.atan2(7.2, 7.2 + 10 / 3), 9);
+    // Negative control: the defaults' spot, which the fixed 0.5 mm gap gave at any clearance, is that much short of it.
+    expect(out(fitVent(loose)) - out(fitVent(four))).toBeCloseTo(more, 9);
+    // At the default 2 mm flange both stand where M3 put them, nearly 2 mm clear.
+    loose.funnel.flangeWidth = 2;
+    expect(fitVent(loose)).toEqual({ x: 10 * 0.72, y: 10 * 0.72 });
   });
 
   it('marks each variant on its own side, with as many notches as its place in the series', () => {

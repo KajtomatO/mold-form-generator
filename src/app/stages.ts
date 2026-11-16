@@ -81,6 +81,9 @@ export const STAGES: readonly StageDef[] = [
       'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'funnel.generate', 'funnel.topDiameter', 'funnel.wall', 'funnel.seatClearance',
       // FL: no vent under a flange, and a pour's flange inside the top's chamfer.
       'funnel.flangeWidth', 'cover.topChamfer',
+      // VN: the gap between a flange and a vent's mouth takes half a printed line, past the funnel's play in its
+      // seat. S5 and S10 already read the nozzle (DOMAIN), and S7 depends on both, so no key changes for it.
+      'print.nozzle',
       // t / 2 is the cover drop, and the vents' persistence until edited. Bodies stand within the plane tolerance.
       'silicone.t', 'base.planeTol',
     ],

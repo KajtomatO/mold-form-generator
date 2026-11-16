@@ -259,9 +259,13 @@ describe('README.txt', () => {
 
   it('FL: the funnel drops into its seat and its flange rests flat on the top, pressed down until it sits flat all round, with Vaseline under it to seal', () => {
     const readme = exportReadme(input()).replace(/\r\n\s*/g, ' ');
-    expect(readme).toContain("Print it as it is saved, wide rim down. Its spigot drops into the cone-shaped seat at the top of a pour opening, and its flange rests flat on the cover's top.");
-    // The Vaseline goes on first, under the flange alone, and the funnel is then seated and pressed flat.
-    expect(readme).toContain("Stand the mold on its base on a level surface. Smear a thin film of Vaseline on the underside of each funnel's flange, then push a funnel into the seat of each pour opening and press it down until its flange sits flat on the top all round: the Vaseline seals it. Keep the Vaseline out of the seats and the vents.");
+    // VN: with its width, and that the vents are clear of that width only, so a funnel with a wider one, such as
+    // one printed at FL's 4 mm, is not for this mold.
+    expect(readme).toContain("Print it as it is saved, wide rim down. Its spigot drops into the cone-shaped seat at the top of a pour opening, and its flange, 2 mm wide, rests flat on the cover's top. The vents are kept clear of a flange that wide, so use funnels printed for this mold: one with a wider flange, such as one printed for another mold, would rest on the vent beside each pour.");
+    expect(exportReadme(input((i) => (i.params.funnel.flangeWidth = 4))).replace(/\r\n\s*/g, ' ')).toContain("and its flange, 4 mm wide, rests flat on the cover's top.");
+    // The Vaseline goes on first, under the flange alone, and the funnel is then seated and pressed flat. VN: a vent's
+    // mouth stands 0.5 mm off the flange's edge, so the film stops short of that edge.
+    expect(readme).toContain("Stand the mold on its base on a level surface. Smear a thin film of Vaseline on the underside of each funnel's flange, then push a funnel into the seat of each pour opening and press it down until its flange sits flat on the top all round: the Vaseline seals it. Keep the Vaseline out of the seats and the vents: keep the film a little short of the flange's outer edge, and wipe away any that squeezes out by a vent.");
     // Vaseline is on the test patch already, so nothing new goes on the silicone untested.
     expect(readme).toContain('a smear of the Vaseline and a coat of the mold release on them');
     // With no flange, the funnel of before FL and its words.
@@ -1042,10 +1046,10 @@ describe('the export with bolts, in Node', () => {
     // The fit test with the bolts on: the joint pieces as before, and the coupon.
     const fit = Object.keys(files).filter((f) => f.startsWith('fit_test/')).sort();
     expect(fit).toEqual([...Object.keys(M9.fitTest), 'fit_test/README.txt', 'fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl'].sort());
-    // The joint pieces as M9 made them: the bases whole, and the covers but for their vent, which the default
-    // flange moves 0.02 mm out (FL), so they are M9's with no flange, as the test above holds.
+    // The joint pieces as M9 made them, the bases and the covers: FL's flange of 4 mm moved their vent 0.02 mm
+    // out, but VN's default of 2 mm (D21) leaves it where M3 put it, 2.48 mm clear of the flange's edge.
     for (const name of Object.keys(M9.fitTest).filter((f) => f.endsWith('_base.stl'))) expect(m9Sha(files[name]), name).toBe(M9.fitTest[name]);
-    for (const name of Object.keys(M9.fitTest).filter((f) => f.endsWith('_cover.stl'))) expect(m9Sha(files[name]), name).not.toBe(M9.fitTest[name]);
+    for (const name of Object.keys(M9.fitTest).filter((f) => f.endsWith('_cover.stl'))) expect(m9Sha(files[name]), name).toBe(M9.fitTest[name]);
     for (const name of ['fit_test/bolt_coupon_base.stl', 'fit_test/bolt_coupon_cover.stl']) expect(readPart(files[name]).audit, name).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
     expect(text(files['fit_test/README.txt']).split('\r\n').filter((line) => line.length > 76)).toEqual([]);
     const fitReadme = text(files['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');

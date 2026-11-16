@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { moldExtent, refusalReason } from '../app/derived';
+import { flangeTip, moldExtent, refusalReason } from '../app/derived';
 import { AXIS_INDEX, sectionPlane, type Store } from '../app/store';
 import { FLANGE_GAP, type DropResult, type OpeningKind } from '../core/analysis/validate';
 import type { PreviewScene } from '../view/scene';
@@ -334,13 +334,7 @@ function DragTip({ host }: { host: HTMLDivElement | null }) {
       ) : (
         <span data-testid="drag-reason">Not valid here: {reason}. No valid place was found, so let go and it stays here, marked invalid.</span>
       )}
-      {flange ? (
-        <span data-testid="drag-flange">
-          {drag.kind === 'vent'
-            ? `The red dashed circle is that funnel's flange: keep the vent's ring wholly outside it, which leaves the vent's mouth ${fixed(FLANGE_GAP, 1)} mm clear of the flange.`
-            : `The red dashed circle is this pour's flange: keep every vent's ring wholly outside it, which leaves each mouth ${fixed(FLANGE_GAP, 1)} mm clear of the flange.`}
-        </span>
-      ) : null}
+      {flange ? <span data-testid="drag-flange">{flangeTip(drag.kind, store.pipeline.placement?.value.space.sizes.flangeGap ?? FLANGE_GAP)}</span> : null}
       {warnings.map((warning) => (
         <span key={warning.code} class="tip-warning" data-code={warning.code}>
           {units(warning.message)}

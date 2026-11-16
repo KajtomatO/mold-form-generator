@@ -286,9 +286,9 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     const openings = p.placement!.value.placement.openings;
     const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
     // Half way between where the land would let it go and where the flange does: the seat 6.73, the mouth 1.55
-    // and the land 1.5 against the flange 10.73, the mouth and its 0.5 mm gap, by hand.
+    // and the land 1.5 against the default flange of 2 mm (D21), 8.73, the mouth and its 0.5 mm gap, by hand.
     const seat = 5 + 3 * Math.tan(Math.PI / 6);
-    const reach = seat + 4 + 1.55 + 0.5;
+    const reach = seat + 2 + 1.55 + 0.5;
     const along = (seat + 1.55 + 1.5 + reach) / 2;
     const ux = (vent.x - pour.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), uy = (vent.y - pour.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y);
     store.dragOpening(vent.id, pour.x + ux * along, pour.y + uy * along, { x: 0, y: 0 });
@@ -328,10 +328,10 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     const outlines = flangeOutlines(sizes, O, rest);
     const pours = rest.filter((r) => r.kind === 'pour');
     expect(outlines.map(({ x, y }) => [x, y])).toEqual(pours.map(({ x, y }) => [x, y]));
-    expect(outlines.every((o) => !o.refused && Math.abs(o.radius - (5 + 3 * Math.tan(Math.PI / 6) + 4)) < 1e-9)).toBe(true);
+    expect(outlines.every((o) => !o.refused && Math.abs(o.radius - (5 + 3 * Math.tan(Math.PI / 6) + 2)) < 1e-9)).toBe(true);
     // The vent half way between where the land would let it go and where the flange does, as in FL's test above.
     const seat = 5 + 3 * Math.tan(Math.PI / 6);
-    const reach = seat + 4 + 1.55 + 0.5;
+    const reach = seat + 2 + 1.55 + 0.5;
     const along = (seat + 1.55 + 1.5 + reach) / 2;
     const ux = (vent.x - pour.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), uy = (vent.y - pour.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y);
     const project = JSON.stringify(p.project());

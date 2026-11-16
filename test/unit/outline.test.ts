@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flangeOutlines, type FlangeSpot, type OpeningRing } from '../../src/app/derived';
+import { flangeOutlines, flangeTip, type FlangeSpot, type OpeningRing } from '../../src/app/derived';
 import { checkOpening, FLANGE_GAP, flangeReach, openingSizes, placementSpace, topRadius, type OpeningSizes, type OpeningSpot, type PlacementSpace } from '../../src/core/analysis/validate';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
@@ -12,8 +12,17 @@ import { DiagnosticMarkers, FlangeOutlines, OpeningMarkers, RING_WIDTH } from '.
 import { SectionHandle } from '../../src/view/section';
 import { fieldOf } from '../fixtures/fieldShapes';
 
-const sizes: OpeningSizes = openingSizes(defaultParams());
-/** FL's flange at defaults, by hand: the seat's radius at the top, 5 + 3 tan 30, plus the 4 mm flange width. */
+/**
+ * OL's tests take FL's 4 mm flange, as built: where it reaches, the flange's term decides the top's edge at a
+ * 3 mm wall, which VN's default of 2 mm (D21) does not.
+ */
+function fl4(): Params {
+  const params = defaultParams();
+  params.funnel.flangeWidth = 4;
+  return params;
+}
+const sizes: OpeningSizes = openingSizes(fl4());
+/** FL's flange at 4 mm, by hand: the seat's radius at the top, 5 + 3 tan 30, plus the 4 mm flange width. */
 const FLANGE = 5 + 3 * Math.tan(Math.PI / 6) + 4;
 const SEAT = 5 + 3 * Math.tan(Math.PI / 6);
 const MOUTH = topRadius(sizes, 'vent');
@@ -25,7 +34,7 @@ const cavity = fieldOf(200, 200, 0.5, () => 20);
 const O: Rect = { x0: -100, y0: -100, x1: 300, y1: 300 };
 
 function sizesWith(change: (p: Params) => void): OpeningSizes {
-  const params = defaultParams();
+  const params = fl4();
   change(params);
   return openingSizes(params);
 }
@@ -238,6 +247,26 @@ describe('OL: the flange outline round each pour', () => {
     }
     expect(refused).toBeGreaterThan(1000);
     expect(clear).toBeGreaterThan(600);
+  });
+
+  it('VN: the drag tip says what keeps a vent\'s mouth clear of the flange, by the gap these settings need: the ring wholly outside the circle at defaults, and that much further out past them', () => {
+    expect(sizes.flangeGap).toBe(FLANGE_GAP);
+    expect(flangeTip('vent', sizes.flangeGap)).toBe("The red dashed circle is that funnel's flange: keep the vent's ring wholly outside it, which leaves the vent's mouth 0.5 mm clear of the flange.");
+    expect(flangeTip('pour', sizes.flangeGap)).toBe("The red dashed circle is this pour's flange: keep every vent's ring wholly outside it, which leaves each mouth 0.5 mm clear of the flange.");
+    // At a seat clearance of 0.5 in a 45 degree seat the gap is 0.5 / cos 45 + 0.2 = 0.907 mm, so the ring must stand 0.41 mm off the dashes.
+    const loose = sizesWith((p) => ((p.funnel.seatClearance = 0.5), (p.seat.halfAngleDeg = 45)));
+    expect(loose.flangeGap).toBeCloseTo(0.5 / Math.SQRT1_2 + 0.2, 12);
+    expect(flangeTip('vent', loose.flangeGap)).toBe("The red dashed circle is that funnel's flange: keep the vent's ring 0.41 mm or more outside it, which leaves the vent's mouth 0.91 mm clear of the flange, as the funnel's play in its seat and half a printed line need.");
+    expect(flangeTip('pour', loose.flangeGap)).toBe("The red dashed circle is this pour's flange: keep every vent's ring 0.41 mm or more outside it, which leaves each mouth 0.91 mm clear of the flange, as the funnel's play in its seat and half a printed line need.");
+    // And it is so: there a vent is refused until its ring stands that far off the dashes, and the outline turns red with it.
+    const space = placementSpace(cavity, { O, Zt: 40, wall: 3 }, [[0, 0]], loose);
+    const pour: OpeningSpot = { kind: 'pour', x: 40, y: 40 };
+    const touching = loose.flangeRadius + OUTLINE_WIDTH / 2 + RING_WIDTH / 2 + topRadius(loose, 'vent');
+    for (const [off, refused] of [[0.01, true], [0.4, true], [0.42, false]] as [number, boolean][]) {
+      const vent: OpeningSpot = { kind: 'vent', x: pour.x + touching + off, y: pour.y };
+      expect(checkOpening(space, vent, [pour]).problems.includes('flange'), `${off} mm off`).toBe(refused);
+      expect(flangeOutlines(loose, O, ringsOf([pour, vent], [[0, 0]]))[0].refused, `${off} mm off`).toBe(refused);
+    }
   });
 
   it('the dashes draw after the see-through cover, over their light band, and before every overlay meant to stay on top, as three sorts them', () => {

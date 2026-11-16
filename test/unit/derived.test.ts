@@ -22,17 +22,22 @@ import { OPENING_GOLDEN, REPORT_GOLDEN, SOLID_GOLDEN } from '../regression/golde
  * the vent beside each first pour 3 mm further out, onto lower ceiling, so its bore holds more: M6's were
  * goddess 118.39, x8 89.52, barrel 10.52 (its vent now off the lid, 0.23% more) and wolf 207.41; vis35 reads
  * 530.025 against 530.02, the rest the same, Benchy's too, though its vent goes onto higher ceiling and its
- * bore is 0.3 mm shorter, as that is under the figure's last digit.
+ * bore is 0.3 mm shorter, as that is under the figure's last digit. Measured again at VN, whose default flange
+ * of 2 mm (D21) puts that vent 1 mm out past before FL's, onto higher ceiling than FL's, so its bore holds less:
+ * FL's were goddess 118.40, vis35 530.03, x8 89.53, barrel 10.54 and wolf 207.45 (in four decimals goddess
+ * 118.4035 to 118.3951, vis35 530.025 to 530.0182, x8 89.5333 to 89.5197, barrel 10.5446 to 10.5206, wolf
+ * 207.454 to 207.4277, chick 12.2523 to 12.2493, Benchy 43.3205 to 43.3214, its vent lower again; jersey the same).
  */
-const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.4, vis35: 530.03, jersey: 11.53, x8: 89.53, barrel: 10.54, wolf: 207.45, chick: 12.25 };
+const PREVIEW_ML: Record<ExampleId, number> = { benchy: 43.32, goddess: 118.4, vis35: 530.02, jersey: 11.53, x8: 89.52, barrel: 10.52, wolf: 207.43, chick: 12.25 };
 
 /**
  * The same at defaults, which since 1.0.2 have the silicone base layer, 3 mm with its 2 degree slope, as
  * first measured (docs/PLAN.md, the base layer). It adds 0.8% (jersey, whose cavity already fills most of
  * the plate) to 19% (the chick, small in a box its overhangs set). Measured again at FL, as above: they were
- * goddess 122.45, vis35 536.52, x8 92.97, barrel 11.27 and wolf 226.47.
+ * goddess 122.45, vis35 536.52, x8 92.97, barrel 11.27 and wolf 226.47. And at VN, as above: FL's were goddess
+ * 122.46, vis35 536.53, x8 92.99, barrel 11.3 and wolf 226.51.
  */
-const LAYER_ML: Record<ExampleId, number> = { benchy: 45.19, goddess: 122.46, vis35: 536.53, jersey: 11.62, x8: 92.99, barrel: 11.3, wolf: 226.51, chick: 14.6 };
+const LAYER_ML: Record<ExampleId, number> = { benchy: 45.19, goddess: 122.45, vis35: 536.52, jersey: 11.62, x8: 92.97, barrel: 11.28, wolf: 226.49, chick: 14.6 };
 
 /**
  * How far the preview may read over M3's solids with the bores: 3% on the seven, whose most is the barrel's

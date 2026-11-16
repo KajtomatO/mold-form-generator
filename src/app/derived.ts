@@ -1,5 +1,5 @@
 import { boreSilicone, describeProblem, firstPourPeak, type PlacedOpening } from '../core/analysis/placement';
-import { checkOpening, dropOpening, flangeReach, topRadius, type HardProblem, type OpeningKind, type OpeningSizes } from '../core/analysis/validate';
+import { checkOpening, dropOpening, FLANGE_GAP, flangeReach, topRadius, type HardProblem, type OpeningKind, type OpeningSizes } from '../core/analysis/validate';
 import { siliconeVolume } from '../core/field/silicone';
 import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
@@ -358,6 +358,19 @@ export function flangeOutlines(sizes: OpeningSizes, O: Rect, rings: readonly Pic
       radius,
       refused: vents.some((vent) => Math.hypot(vent.x - x, vent.y - y) < reach) || x < O.x0 + edge || y < O.y0 + edge || x > O.x1 - edge || y > O.y1 - edge,
     }));
+}
+
+/**
+ * OL: the drag tip's line where the flange is the problem: the red dashed circle is that flange, and what keeps
+ * a vent's mouth the gap clear of it. A ring is drawn 0.3 mm past the mouth's edge and the dashes 0.2 mm past
+ * the flange's, so at FLANGE_GAP the two touch where the rule starts to refuse. VN: a wider gap, as a larger
+ * seat clearance or nozzle needs (flangeGap), keeps the ring that much further off the dashes.
+ */
+export function flangeTip(kind: OpeningKind, gap: number): string {
+  const more = gap - FLANGE_GAP;
+  const [circle, ring, mouth] = kind === 'vent' ? ["that funnel's flange", "the vent's ring", "the vent's mouth"] : ["this pour's flange", "every vent's ring", 'each mouth'];
+  if (more < 0.005) return `The red dashed circle is ${circle}: keep ${ring} wholly outside it, which leaves ${mouth} ${FLANGE_GAP.toFixed(1)} mm clear of the flange.`;
+  return `The red dashed circle is ${circle}: keep ${ring} ${more.toFixed(2)} mm or more outside it, which leaves ${mouth} ${gap.toFixed(2)} mm clear of the flange, as the funnel's play in its seat and half a printed line need.`;
 }
 
 /** "Pour 1", "Vent 2": an opening's name as its row in Pour & funnel shows it, numbered by kind in placement order. */

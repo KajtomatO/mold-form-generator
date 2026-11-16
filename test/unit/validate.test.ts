@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boreLength, checkOpening, discMinimum, dropOpening, funnelCollision, heightAt, isValid, longBoreWarning, nearestCopy, offPeakWarning, openingSizes, placementSpace, snapOpening, topRadius, type OpeningSizes, type OpeningSpot, type PlacementSpace } from '../../src/core/analysis/validate';
+import { boreLength, checkOpening, clearOfFlanges, discMaximum, discMinimum, dropOpening, FLANGE_GAP, flangeGap, flangeOrdersPours, flangeOutreachesLand, flangeReach, flangeSpacing, funnelCollision, heightAt, isValid, longBoreWarning, nearestCopy, offPeakWarning, openingSizes, placementSpace, snapOpening, topRadius, widestFlangeInLand, type OpeningSizes, type OpeningSpot, type PlacementSpace } from '../../src/core/analysis/validate';
 import { describeProblem } from '../../src/core/analysis/placement';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
@@ -10,11 +10,20 @@ const CELL = 0.25;
 const CEILING = 20;
 const ZT = 30;
 const WALL = 3;
-const sizes: OpeningSizes = openingSizes(defaultParams());
+/**
+ * FL's tests are about a flange that reaches well past the land, the 4 mm FL had by default, so they set it:
+ * VN's default of 2 mm (D21) reaches past it by 1 mm only, and the top's chamfer then no longer decides.
+ */
+function fl4(): Params {
+  const params = defaultParams();
+  params.funnel.flangeWidth = 4;
+  return params;
+}
+const sizes: OpeningSizes = openingSizes(fl4());
 const SEAT = topRadius(sizes, 'pour');
 const MOUTH = topRadius(sizes, 'vent');
 const LAND = sizes.minLand;
-/** FL: the funnel's flange at defaults, by hand: the seat's radius at the top, 5 + 3 tan 30, plus the 4 mm flange width. */
+/** FL: the funnel's flange at 4 mm, by hand: the seat's radius at the top, 5 + 3 tan 30, plus the 4 mm flange width. */
 const FLANGE = 5 + 3 * Math.tan(Math.PI / 6) + 4;
 /** The sizes with no flange, as before FL, where only the land keeps a vent from a pour. */
 const unflanged = defaultParams();
@@ -194,6 +203,121 @@ describe('the hard rules across a grid', () => {
     expect(checkOpening(space, pour(18, 30), []).valid).toBe(true);
     const narrow = spaceOf([[0, 0], [45, 0]], { x0: -10, y0: -10, x1: 70, y1: 70 });
     expect(checkOpening(narrow, pour(18, 30), []).problems).toEqual(['top-edge']);
+  });
+});
+
+describe('VN: the gap between a flange and a vent\'s mouth', () => {
+  const withSettings = (clearance: number, halfAngle: number, nozzle: number): Params => {
+    const params = defaultParams();
+    params.funnel.seatClearance = clearance;
+    params.seat.halfAngleDeg = halfAngle;
+    params.print.nozzle = nozzle;
+    return params;
+  };
+  /** By hand: how far a funnel pushed to one side of its seat moves, and half a printed line at the flange's edge. */
+  const worst = (clearance: number, halfAngle: number, nozzle: number): number => clearance / Math.cos((halfAngle * Math.PI) / 180) + nozzle / 2;
+
+  it('is 0.5 mm at defaults and every seat angle, and grows with the funnel\'s play in its seat and half a line past that', () => {
+    // FLANGE_GAP itself, to the bit: at defaults the play and half a line come to 0.12 + 0.2 mm.
+    expect(openingSizes(defaultParams()).flangeGap).toBe(FLANGE_GAP);
+    expect(FLANGE_GAP).toBe(0.5);
+    expect(worst(0.1, 30, 0.4)).toBeCloseTo(0.3155, 4);
+    for (let half = 10; half <= 45; half += 5) expect(openingSizes(withSettings(0.1, half, 0.4)).flangeGap, `${half} degrees`).toBe(0.5);
+    // A 0.6 mm nozzle, and the clearances the fit test's advice steps up to, at 30 degrees.
+    for (const [c, h, n] of [[0.1, 30, 0.6], [0.15, 30, 0.4], [0.25, 30, 0.4]]) expect(openingSizes(withSettings(c, h, n)).flangeGap, `${c}, ${h}, ${n}`).toBe(0.5);
+    // Past what 0.5 covers, the worst case itself.
+    expect(openingSizes(withSettings(0.3, 30, 0.4)).flangeGap).toBeCloseTo(worst(0.3, 30, 0.4), 12);
+    expect(openingSizes(withSettings(0.3, 30, 0.4)).flangeGap).toBeCloseTo(0.54641, 5);
+    expect(openingSizes(withSettings(0.5, 45, 0.4)).flangeGap).toBeCloseTo(0.90711, 5);
+    expect(openingSizes(withSettings(0.1, 30, 1)).flangeGap).toBeCloseTo(0.61547, 5);
+    expect(flangeGap(0.5, 45, 0.4)).toBe(openingSizes(withSettings(0.5, 45, 0.4)).flangeGap);
+  });
+
+  it('keeps a vent\'s mouth clear of a funnel pushed to its side, with its edge printed half a line wide, which the fixed 0.5 mm did not', () => {
+    const loose = withSettings(0.5, 45, 0.4);
+    const sizes45 = openingSizes(loose);
+    const space = placementSpace(cavity, { O, Zt: ZT, wall: WALL }, [[0, 0]], sizes45);
+    const at = (apart: number): OpeningSpot => vent(40 + apart, 30);
+    // The reach the fixed gap gave, and the one these settings need.
+    const fixedReach = sizes45.flangeRadius + topRadius(sizes45, 'vent') + 0.5;
+    const reach = flangeReach(sizes45);
+    expect(reach - fixedReach).toBeCloseTo(worst(0.5, 45, 0.4) - 0.5, 12);
+    expect(checkOpening(space, at(fixedReach + 0.001), [pour(40, 30)]).problems).toEqual(['flange']);
+    expect(checkOpening(space, at(reach + 0.001), [pour(40, 30)]).valid).toBe(true);
+    // The check by hand: the flange's worst-case edge against the vent's mouth, at each reach.
+    const into = (apart: number): number => sizes45.flangeRadius + worst(0.5, 45, 0.4) - (apart - topRadius(sizes45, 'vent'));
+    expect(into(reach)).toBeLessThanOrEqual(1e-9);
+    // Negative control: placed by the fixed gap, the funnel pushed to that side covers 0.41 mm of the mouth.
+    expect(into(fixedReach)).toBeCloseTo(0.407, 3);
+  });
+
+  it('the widest flange the land keeps clear is the land less the gap: 1 mm at defaults, 0.9 at 0.3 mm of clearance, 0.5 at 0.5 in a 45 degree seat', () => {
+    expect(widestFlangeInLand(openingSizes(defaultParams()))).toBe(1);
+    expect(widestFlangeInLand(openingSizes(withSettings(0.3, 30, 0.4)))).toBe(0.9);
+    expect(widestFlangeInLand(openingSizes(withSettings(0.5, 45, 0.4)))).toBe(0.5);
+    // Negative control: by the fixed 0.5 mm, all three would say 1 mm.
+    for (const params of [defaultParams(), withSettings(0.3, 30, 0.4), withSettings(0.5, 45, 0.4)]) expect(widestFlangeInLand({ minLand: params.pour.minLand, flangeGap: FLANGE_GAP })).toBe(1);
+    // And never under 0.
+    expect(widestFlangeInLand({ minLand: 0.4, flangeGap: 0.5 })).toBe(0);
+  });
+
+  it('keeps a spread pour the gap these settings need off another pour\'s seat, and the one-funnel-at-a-time advice by it too', () => {
+    // A 0.5 mm seat clearance in a 45 degree seat: a gap of 0.907 mm, and the default flange of 2 mm.
+    const sizes45 = openingSizes(withSettings(0.5, 45, 0.4));
+    const gap = worst(0.5, 45, 0.4);
+    const seat = topRadius(sizes45, 'pour');
+    const space = placementSpace(cavity, { O, Zt: ZT, wall: WALL }, [[0, 0]], sizes45);
+    // By hand: the flange's radius, 8 + 2 mm, the other seat of 8 and the gap.
+    expect(seat).toBeCloseTo(8, 12);
+    expect(flangeSpacing(sizes45)).toBeCloseTo(10 + 8 + gap, 12);
+    const first = pour(30, 30);
+    expect(clearOfFlanges(space, pour(30 + flangeSpacing(sizes45) + 0.001, 30), [first])).toBe(true);
+    // 0.2 mm inside it, which the fixed 0.5 mm, 0.41 mm less, still let through: the flange would reach the seat's mouth there.
+    expect(clearOfFlanges(space, pour(30 + flangeSpacing(sizes45) - 0.2, 30), [first])).toBe(false);
+    // Two pours 17.6 mm apart: each flange, 10 mm round, covers the other's seat, and one funnel at a time keeps off it
+    // with a flange of 17.6 - 2 x 8 - 0.907 = 0.69, so 0.6 mm, where the fixed gap said 1.1.
+    const message = funnelCollision(space, [first, pour(30 + 17.6, 30)])!.message;
+    expect(message).toContain("A funnel's flange would also cover part of the other pour's seat");
+    expect(message).toContain("To pour through one funnel at a time instead, a flange width of at most 0.6 mm keeps its flange off the other pour's seat.");
+  });
+
+  it('decides the placing order on the fixed gap, so a seat clearance never changes it: at defaults as the flange\'s reach past the land, at 0.3 mm of clearance not at 1 mm', () => {
+    const at = (width: number, clearance = 0.1): OpeningSizes => {
+      const params = withSettings(clearance, 30, 0.4);
+      params.funnel.flangeWidth = width;
+      return openingSizes(params);
+    };
+    // At defaults the two are one: the gap there is FLANGE_GAP itself.
+    for (let tenths = 0; tenths <= 40; tenths++) expect(flangeOrdersPours(at(tenths / 10)), `${tenths / 10} mm`).toBe(flangeOutreachesLand(at(tenths / 10)));
+    expect(flangeOrdersPours(at(1))).toBe(false);
+    expect(flangeOrdersPours(at(1.1))).toBe(true);
+    // At 0.3 mm of clearance a 1 mm flange keeps the vent beside a pour 0.046 mm further out, but the order stays.
+    expect(flangeOutreachesLand(at(1, 0.3))).toBe(true);
+    expect(flangeOrdersPours(at(1, 0.3))).toBe(false);
+    expect(flangeOrdersPours(at(1.1, 0.3))).toBe(true);
+  });
+});
+
+describe('VN: the highest ceiling under a disc', () => {
+  it('is the highest node within the radius, no further, and the ceiling at the centre where no node is inside', () => {
+    // A ramp rising 1 mm per mm along x.
+    const ramp = fieldOf(40, 40, CELL, (x) => x);
+    expect(discMaximum(ramp, 20, 20, 1.25)).toBeCloseTo(21.25, 9);
+    // Between nodes: 21.3 is not a node, so the highest within reach is 21.25.
+    expect(discMaximum(ramp, 20.05, 20, 1.25)).toBeCloseTo(21.25, 9);
+    // A disc smaller than a cell between nodes reads the surface at its centre.
+    expect(discMaximum(ramp, 20.1, 20.1, 0.05)).toBeCloseTo(heightAt(ramp, 20.1, 20.1), 9);
+    // On a cliff the centre reads low, the disc as high as the air under it reaches.
+    const cliff = fieldOf(40, 40, CELL, (x) => (x < 20 ? 30 : 10));
+    expect(heightAt(cliff, 20.5, 20)).toBe(10);
+    expect(discMaximum(cliff, 20.5, 20, 1.25)).toBe(30);
+    expect(discMaximum(cliff, 21.6, 20, 1.25)).toBe(10);
+    // Off the cavity it reads 0, as heightAt does.
+    expect(discMaximum(fieldOf(40, 40, CELL, () => -1), 20, 20, 1.25)).toBe(0);
+    // A disc, not a square: on a field rising along x + y, the node 1 mm along and 0.75 across lies on the circle
+    // (1 + 0.5625 = 1.25 squared) and is the highest inside, 41.75; the square's corner, 1.25 along and across,
+    // would read 42.5, and the node at (1, 1), 1.41 mm off, 42.
+    expect(discMaximum(fieldOf(40, 40, CELL, (x, y) => x + y), 20, 20, 1.25)).toBe(41.75);
   });
 });
 
@@ -382,7 +506,7 @@ describe('the soft rules', () => {
   });
 
   it('FL: count a flange wider than the rim, say when it would cover the other pour\'s seat, and size the flange in the advice', () => {
-    const params = defaultParams();
+    const params = fl4();
     params.funnel.topDiameter = 15;
     const small = placementSpace(cavity, { O, Zt: ZT, wall: WALL }, [[0, 0]], openingSizes(params));
     // The rim alone fits 18 mm apart, the flange, 2 x 10.73 mm across, does not.
@@ -404,6 +528,10 @@ describe('the soft rules', () => {
     expect(funnelCollision(spaceOf(), [pour(20, 30), pour(37, 30)])!.message).toContain('A top diameter of 16 mm with a flange width of at most 1.2 mm would fit.');
     // x8's 22 mm pitch: the 40 mm rim collides, and a 21 mm top alone would still leave the flange too wide.
     expect(funnelCollision(spaceOf([[0, 0], [22, 0]]), [pour(20, 30)])!.message).toBe('Funnels of 40 mm collide, as two pours are only 22.0 mm apart. A top diameter of 21 mm with a flange width of at most 3.7 mm would fit.');
+    // VN: the default flange of 2 mm, 17.5 mm across, fits under a 21 mm top, so only the top is sized.
+    const fl2 = placementSpace(cavity, { O, Zt: ZT, wall: WALL }, [[0, 0], [22, 0]], openingSizes(defaultParams()));
+    expect(2 * fl2.sizes.flangeRadius).toBeCloseTo(2 * (5 + 3 * Math.tan(Math.PI / 6) + 2), 9);
+    expect(funnelCollision(fl2, [pour(20, 30)])!.message).toBe('Funnels of 40 mm collide, as two pours are only 22.0 mm apart. A top diameter of 21 mm would fit.');
   });
 
   it('say so when no funnel fits at all, and nothing when no funnel is made', () => {

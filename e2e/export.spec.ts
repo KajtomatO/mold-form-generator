@@ -540,15 +540,17 @@ interface ZipCase {
 }
 
 /**
- * The silicone at defaults, per example, with the base layer, as FL measured it in Node's export, which BL found
- * the browser's to the digit. FL's flange moves the vent beside each first pour from 9.79 to 12.79 mm out, onto
- * lower ceiling, where its longer bore holds more, but on Benchy onto higher ceiling, where its shorter bore
- * holds less; only the vents' bores change it: BL's were benchy 45.1881, goddess 122.3068, vis35 548.0961,
- * jersey 11.6832 (its vent stays on the flat top), x8 91.7855, barrel 11.1166, wolf 223.2889 and chick 14.336.
- * M6b's before the layer were benchy 43.1771, goddess 118.0047, vis35 541.4064, jersey 11.3591, x8 87.5913,
- * barrel 10.2682 and wolf 203.5269, and M11c's chick 11.807.
+ * The silicone at defaults, per example, with the base layer, as VN measured it in Node's export, which BL found
+ * the browser's to the digit. VN's default flange of 2 mm (D21) puts the vent beside each first pour 10.79 mm out,
+ * between before FL's 9.79 and FL's 12.79, so each figure lies between theirs: higher ceiling than at FL, a
+ * shorter bore holding less, but on Benchy lower ceiling, a longer bore holding more; only the vents' bores
+ * change it. FL's were benchy 45.1867, goddess 122.3214, vis35 548.1078, jersey 11.6832 (its vent stays on the
+ * flat top), x8 91.8051, barrel 11.1491, wolf 223.3299 and chick 14.3402; BL's benchy 45.1881, goddess 122.3068,
+ * vis35 548.0961, jersey 11.6832, x8 91.7855, barrel 11.1166, wolf 223.2889 and chick 14.336. M6b's before the
+ * layer were benchy 43.1771, goddess 118.0047, vis35 541.4064, jersey 11.3591, x8 87.5913, barrel 10.2682 and
+ * wolf 203.5269, and M11c's chick 11.807.
  */
-const ML: Record<ExampleId, number> = { benchy: 45.1867, goddess: 122.3214, vis35: 548.1078, jersey: 11.6832, x8: 91.8051, barrel: 11.1491, wolf: 223.3299, chick: 14.3402 };
+const ML: Record<ExampleId, number> = { benchy: 45.1876, goddess: 122.3106, vis35: 548.0982, jersey: 11.6832, x8: 91.7928, barrel: 11.1222, wolf: 223.3026, chick: 14.3372 };
 
 // All 8 in Chromium on the build; in the user's browser, jersey and the heaviest field, wolf.
 const CASES: ZipCase[] = [

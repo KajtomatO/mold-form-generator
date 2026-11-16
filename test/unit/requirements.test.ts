@@ -68,9 +68,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D20 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D21 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 20 }, (_, k) => `D${k + 1}`));
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 21 }, (_, k) => `D${k + 1}`));
     // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
     expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
@@ -82,6 +82,11 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     // VF's, the flicker the user reported the same day (U2), fixed in 0.2.0 for the user to check again.
     expect(section(requirements, 4)).toContain('D20 records how the flicker the user reported that day (U2) was fixed');
     expect(tableRows(section(requirements, 9)!).find((cells) => cells[0].startsWith('U2, reported by the user on 2026-11-12'))?.[2]).toMatch(/^fixed in 0\.2\.0, for the user to re-check \(U2\)/);
+    // VN's, the Flange width the user chose on 2026-11-16, quoted as asked and answered, and the item it settles.
+    expect(section(requirements, 4)).toContain('D21 records the Flange width default the user chose on 2026-11-16');
+    expect(section(requirements, 2)).toContain('Which default Flange width?');
+    expect(section(requirements, 2)).toContain('The user answered: "2 mm".');
+    expect(tableRows(section(requirements, 8)!).find((cells) => cells[0].startsWith('2026-11-12, left over from run FL') && cells[1].includes('vent-low'))?.[2]).toMatch(/^Done in 0\.2\.0 \(`docs\/PLAN\.md`, VN; D21\)/);
     for (const cells of decisions) expect(cells[1].length, cells[0]).toBeGreaterThan(20);
     const open = tableRows(section(requirements, 9)!);
     // The user settled the M11a memory deviation and the project's licence on 2026-11-09.

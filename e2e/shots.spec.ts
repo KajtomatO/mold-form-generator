@@ -71,7 +71,7 @@ interface Shot {
    * show through the cover's wall, or out to twice its distance, or both.
    */
   camera?: 'low' | 'far' | 'low-far';
-  /** OL: in Top view, the vent beside the first pour held 11.5 mm from it, under the flange's reach, with the tip's line. */
+  /** OL: in Top view, the vent beside the first pour held 10.2 mm from it, under the flange's reach, with the tip's line. */
   ventUnderFlange?: boolean;
 }
 
@@ -381,15 +381,15 @@ test.describe('review screenshots', () => {
             await expect(page.getByTestId('drag-reason')).toBeVisible();
           }
           if (shot.ventUnderFlange) {
-            // The vent beside the first pour, pressed on its ring and held 11.5 mm from the pour: outside the
-            // flange's circle (10.7 mm) and inside its reach (12.8 mm), so the pour's circle turns red.
+            // The vent beside the first pour, pressed on its ring and held 10.2 mm from the pour: outside the
+            // default flange's circle (8.7 mm, D21) and the land (9.8 mm), inside its reach (10.8 mm), so the pour's circle turns red.
             const spots = await app(page, (a) => {
               const p = a.store.pipeline, openings = p.placement!.value.placement.openings, Zt = p.field!.value.rim.Zt;
               const pour = openings.find((o) => o.kind === 'pour')!;
               const vent = openings.filter((o) => o.kind === 'vent').sort((u, v) => Math.hypot(u.x - pour.x, u.y - pour.y) - Math.hypot(v.x - pour.x, v.y - pour.y))[0];
               const d = Math.hypot(vent.x - pour.x, vent.y - pour.y);
               const screen = (x: number, y: number): { x: number; y: number } => (window as unknown as { __pipeline: { worldToScreen: (p: number[]) => { x: number; y: number } } }).__pipeline.worldToScreen([x, y, Zt]);
-              return { from: screen(vent.x, vent.y), to: screen(pour.x + ((vent.x - pour.x) * 11.5) / d, pour.y + ((vent.y - pour.y) * 11.5) / d) };
+              return { from: screen(vent.x, vent.y), to: screen(pour.x + ((vent.x - pour.x) * 10.2) / d, pour.y + ((vent.y - pour.y) * 10.2) / d) };
             });
             await page.mouse.move(spots.from.x, spots.from.y);
             await page.mouse.down();

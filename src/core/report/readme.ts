@@ -113,7 +113,11 @@ export function exportReadme(input: ReadmeInput): string {
   if (has('funnel.stl')) {
     out.push('', 'funnel.stl');
     // FL: the spigot only centres the funnel, which stands on its flange.
-    const sits = flanged ? 'Its spigot drops into the cone-shaped seat at the top of a pour opening, and its flange rests flat on the cover\'s top.' : 'Its spigot sits in the cone-shaped seat at the top of a pour opening.';
+    // VN: the vents stand clear of this mold's flange only, so a funnel with a wider one, such as a funnel
+    // printed before the default became 2 mm, would rest on the vent beside each pour.
+    const sits = flanged
+      ? `Its spigot drops into the cone-shaped seat at the top of a pour opening, and its flange, ${mm(params.funnel.flangeWidth)} wide, rests flat on the cover's top. The vents are kept clear of a flange that wide, so use funnels printed for this mold: one with a wider flange, such as one printed for another mold, would rest on the vent beside each pour.`
+      : 'Its spigot sits in the cone-shaped seat at the top of a pour opening.';
     out.push(...wrap(`The pour funnel. Print ${input.pours === 1 ? 'one' : `${input.pours}, one for each pour opening`}. Print it as it is saved, wide rim down. ${sits}`, '  '));
   }
   if (files.some((name) => name.startsWith('fit_test/'))) {
@@ -184,7 +188,8 @@ export function exportReadme(input: ReadmeInput): string {
   }
   const collide = input.diagnostics.some((d) => d.code === 'funnel-collision');
   // FL: the Vaseline goes on before the funnel is seated, and only under the flange.
-  const sealed = ': the Vaseline seals it. Keep the Vaseline out of the seats and the vents.';
+  // VN: a vent's mouth stands only 0.5 mm off the flange's edge, so a film smeared to the edge squeezes out onto it.
+  const sealed = ': the Vaseline seals it. Keep the Vaseline out of the seats and the vents: keep the film a little short of the flange\'s outer edge, and wipe away any that squeezes out by a vent.';
   const funnels = !has('funnel.stl')
     ? ''
     : collide
