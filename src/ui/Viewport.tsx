@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { moldExtent, refusalReason } from '../app/derived';
 import { AXIS_INDEX, sectionPlane, type Store } from '../app/store';
-import type { DropResult, OpeningKind } from '../core/analysis/validate';
+import { FLANGE_GAP, type DropResult, type OpeningKind } from '../core/analysis/validate';
 import type { PreviewScene } from '../view/scene';
 import { useStore } from './context';
 import { DiagnosticsCard } from './DiagnosticsCard';
@@ -302,17 +302,26 @@ function dropText(label: string, kind: OpeningKind, result: DropResult): { text:
  */
 function DragTip({ host }: { host: HTMLDivElement | null }) {
   const store = useStore();
+  const tip = useRef<HTMLDivElement>(null);
   const drag = store.drag.value;
+  // Kept inside the view, which clips anything past its edges: below the pointer, or as low as it fits. Its
+  // height is known once laid out, as its lines wrap, so it is placed again from that before it is painted.
+  const room = { w: host?.clientWidth ?? 800, h: host?.clientHeight ?? 600 };
+  const topFor = (height: number): number => (drag ? Math.min(Math.max(4, drag.pointer.y + 18), Math.max(4, room.h - height - 4)) : 0);
+  useLayoutEffect(() => {
+    if (tip.current) tip.current.style.top = `${topFor(tip.current.offsetHeight)}px`;
+  });
   if (!drag) return null;
   const tiles = store.pipeline.placement?.value.space.offsets.length ?? 1;
-  const { valid, reason, lands, warnings } = drag.check;
-  // Kept inside the view, which clips anything past its edges: right of the pointer, or left near the edge.
-  const width = 280, height = 92 + 44 * warnings.length;
-  const room = { w: host?.clientWidth ?? 800, h: host?.clientHeight ?? 600 };
+  const { valid, reason, lands, warnings, problems } = drag.check;
+  // OL: refused for a flange, the red dashed circle in the view is what to keep the vent's ring off.
+  const flange = problems.includes('flange');
+  // Right of the pointer, or left near the edge. The first guess at its height, before it is laid out.
+  const width = 280, height = 92 + 44 * warnings.length + (flange ? 50 : 0);
   const left = drag.pointer.x + 18 + width > room.w ? Math.max(4, drag.pointer.x - 18 - width) : drag.pointer.x + 18;
-  const top = Math.min(Math.max(4, drag.pointer.y + 18), Math.max(4, room.h - height));
+  const top = topFor(height);
   return (
-    <div class={`card drag-tip${valid ? '' : ' invalid'}`} data-testid="drag-tip" role="status" style={{ left: `${left}px`, top: `${top}px`, width: `${width}px` }}>
+    <div ref={tip} class={`card drag-tip${valid ? '' : ' invalid'}`} data-testid="drag-tip" role="status" style={{ left: `${left}px`, top: `${top}px`, width: `${width}px` }}>
       <strong>
         {drag.label} at {fixed(drag.x, 1)}, {fixed(drag.y, 1)} mm
       </strong>
@@ -325,6 +334,13 @@ function DragTip({ host }: { host: HTMLDivElement | null }) {
       ) : (
         <span data-testid="drag-reason">Not valid here: {reason}. No valid place was found, so let go and it stays here, marked invalid.</span>
       )}
+      {flange ? (
+        <span data-testid="drag-flange">
+          {drag.kind === 'vent'
+            ? `The red dashed circle is that funnel's flange: keep the vent's ring wholly outside it, which leaves the vent's mouth ${fixed(FLANGE_GAP, 1)} mm clear of the flange.`
+            : `The red dashed circle is this pour's flange: keep every vent's ring wholly outside it, which leaves each mouth ${fixed(FLANGE_GAP, 1)} mm clear of the flange.`}
+        </span>
+      ) : null}
       {warnings.map((warning) => (
         <span key={warning.code} class="tip-warning" data-code={warning.code}>
           {units(warning.message)}

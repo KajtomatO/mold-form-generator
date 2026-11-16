@@ -1,11 +1,12 @@
 import { boreSilicone, describeProblem, firstPourPeak, type PlacedOpening } from '../core/analysis/placement';
-import { checkOpening, dropOpening, topRadius, type HardProblem, type OpeningKind } from '../core/analysis/validate';
+import { checkOpening, dropOpening, flangeReach, topRadius, type HardProblem, type OpeningKind, type OpeningSizes } from '../core/analysis/validate';
 import { siliconeVolume } from '../core/field/silicone';
 import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
 import type { Params } from '../core/params/schema';
 import { boltNeeds } from '../core/parts/bolts';
 import type { Rim } from '../core/parts/rim';
+import type { Rect } from '../core/solid/rect';
 import { boltAdvice, GRAVITY, type BoltAdvice, type ClampAdvice } from '../core/report/clamp';
 import type { Diagnostic } from '../core/report/diagnostics';
 import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
@@ -280,6 +281,83 @@ export function boltFigure(pipeline: Pipeline): BoltAdvice | null {
 export function markerRadius(pipeline: Pipeline, kind: 'pour' | 'vent'): number {
   const sizes = pipeline.placement?.value.space.sizes;
   return sizes ? topRadius(sizes, kind) : 0;
+}
+
+/** One copy of an opening's ring on the cover's top, as the view draws it and a press picks it. */
+export interface OpeningRing {
+  x: number;
+  y: number;
+  kind: OpeningKind;
+  valid: boolean;
+  /** Where a dragged opening would land if let go now: drawn faint, never pressed. */
+  ghost?: boolean;
+  /** At the flat top: the seat's for a pour, the mouth's for a vent. */
+  radius: number;
+}
+
+/** What openingRings needs of a drag in progress (the store's OpeningDrag). */
+export interface RingDrag {
+  id: string;
+  kind: OpeningKind;
+  x: number;
+  y: number;
+  check: Pick<DragCheck, 'valid' | 'lands'>;
+}
+
+/**
+ * Every copy of every opening's ring, listed opening by opening with a copy per tile, then the landing
+ * spots of a drag. The one being dragged is where the pointer has it, on every tile, invalid while it may
+ * not stand there; where a drop would land instead comes last, faint, on every tile.
+ */
+export function openingRings(pipeline: Pipeline, drag: RingDrag | null): OpeningRing[] {
+  const rim = pipeline.field?.value.rim;
+  const placement = pipeline.placement?.value;
+  const rings: OpeningRing[] = [];
+  if (!rim || !placement) return rings;
+  const { offsets } = placement.space;
+  placement.copies.forEach((copy, k) => {
+    const opening = placement.placement.openings[Math.floor(k / offsets.length)];
+    const [ox, oy] = offsets[k % offsets.length];
+    const moving = drag !== null && opening?.id === drag.id;
+    const at = moving ? { x: drag.x + ox, y: drag.y + oy } : copy;
+    rings.push({ x: at.x, y: at.y, kind: copy.kind, valid: moving ? drag.check.valid : (opening?.valid ?? true), radius: markerRadius(pipeline, copy.kind) });
+  });
+  const lands = drag && !drag.check.valid ? drag.check.lands : null;
+  if (drag && lands) for (const [ox, oy] of offsets) rings.push({ x: lands.x + ox, y: lands.y + oy, kind: drag.kind, valid: true, ghost: true, radius: markerRadius(pipeline, drag.kind) });
+  return rings;
+}
+
+/** OL: one copy of a pour's funnel flange on the cover's top. */
+export interface FlangeSpot {
+  x: number;
+  y: number;
+  radius: number;
+  /** Refused, drawn red: a vent's mouth within the flange's reach, or the flange's edge past the top's chamfer. */
+  refused: boolean;
+}
+
+/**
+ * OL: where each funnel's flange will rest, one per copy of each pour's ring, none at a landing spot, and
+ * none with no funnel, no seat or no flange (a flange radius of 0, the hard rule's own condition). A copy
+ * is refused where a vent's ring stands nearer than the flange rule's reach (flangeReach: the flange,
+ * the vent's mouth and the gap between), so it turns red exactly where that rule refuses a vent or a pour,
+ * copy by copy; or where the flange and the top's chamfer run past the top, the flange's share of the
+ * top-edge rule. Pairwise over the copies drawn, which on a tile lattice is what nearestCopy finds.
+ */
+export function flangeOutlines(sizes: OpeningSizes, O: Rect, rings: readonly Pick<OpeningRing, 'x' | 'y' | 'kind' | 'ghost'>[]): FlangeSpot[] {
+  const radius = sizes.flangeRadius;
+  if (!(radius > 0)) return [];
+  const reach = flangeReach(sizes);
+  const edge = radius + sizes.topChamfer;
+  const vents = rings.filter((ring) => ring.kind === 'vent' && !ring.ghost);
+  return rings
+    .filter((ring) => ring.kind === 'pour' && !ring.ghost)
+    .map(({ x, y }) => ({
+      x,
+      y,
+      radius,
+      refused: vents.some((vent) => Math.hypot(vent.x - x, vent.y - y) < reach) || x < O.x0 + edge || y < O.y0 + edge || x > O.x1 - edge || y > O.y1 - edge,
+    }));
 }
 
 /** "Pour 1", "Vent 2": an opening's name as its row in Pour & funnel shows it, numbered by kind in placement order. */

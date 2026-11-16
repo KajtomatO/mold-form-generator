@@ -16,7 +16,7 @@ const folded = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ')
 const missing = (text: string, phrases: string[]): string[] => phrases.filter((phrase) => !folded(text).includes(folded(phrase)));
 
 describe('the requirement map in docs/REQUIREMENTS.md', () => {
-  it('maps every requirement R01 to R38 to test files and titles that exist, or to user checks section 10 lists', () => {
+  it('maps every requirement R01 to R39 to test files and titles that exist, or to user checks section 10 lists', () => {
     expect(mapProblems(requirements, read)).toEqual([]);
   });
 
@@ -59,7 +59,7 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(problems((rows) => rows.set('R11', 'U1'))).toEqual(['R11 names U1, but section 10 does not list R11 under it.']);
     expect(problems((rows) => rows.set('R02', '`test/unit/a.test.ts` "the box is closed"'))).toEqual(["Section 10 lists R02 under U1, but R02's row does not name U1."]);
     expect(problems((rows) => rows.set('R12', '`test/unit/a.test.ts` "reads the field"; M3 cover checks'))).toEqual(['R12: "M3 cover checks" is neither a backticked test file with quoted titles nor a user check\'s id.']);
-    expect(problems((rows) => rows.delete('R38'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R37, not R01 to R38 in order\.$/)]);
+    expect(problems((rows) => rows.delete('R39'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R38, not R01 to R39 in order\.$/)]);
   });
 
   it('section 10 is the fixed list of user checks, and every one covers a requirement', () => {
@@ -68,9 +68,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D19 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D20 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 19 }, (_, k) => `D${k + 1}`));
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 20 }, (_, k) => `D${k + 1}`));
     // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
     expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
@@ -79,6 +79,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     // The Infill default, from the user's note of the same day, quoted as they wrote it.
     expect(section(requirements, 4)).toContain('D19 records the Infill default the user\'s note of the same day changed');
     expect(section(requirements, 2)).toContain('"Note: I use 5% of infill or less, as the printed part are not uder high stress."');
+    // VF's, the flicker the user reported the same day (U2), fixed in 0.2.0 for the user to check again.
+    expect(section(requirements, 4)).toContain('D20 records how the flicker the user reported that day (U2) was fixed');
+    expect(tableRows(section(requirements, 9)!).find((cells) => cells[0].startsWith('U2, reported by the user on 2026-11-12'))?.[2]).toMatch(/^fixed in 0\.2\.0, for the user to re-check \(U2\)/);
     for (const cells of decisions) expect(cells[1].length, cells[0]).toBeGreaterThan(20);
     const open = tableRows(section(requirements, 9)!);
     // The user settled the M11a memory deviation and the project's licence on 2026-11-09.

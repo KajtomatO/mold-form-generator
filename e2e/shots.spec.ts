@@ -66,6 +66,13 @@ interface Shot {
   clearCard?: boolean;
   /** FL: the funnel shown, seated in the first pour, seen close from the front, or cut across y through the pour. */
   funnel?: 'side' | 'section';
+  /**
+   * VF: the fixed camera moved down to 15 degrees above the top's plane, where the lands round the groove
+   * show through the cover's wall, or out to twice its distance, or both.
+   */
+  camera?: 'low' | 'far' | 'low-far';
+  /** OL: in Top view, the vent beside the first pour held 11.5 mm from it, under the flange's reach, with the tip's line. */
+  ventUnderFlange?: boolean;
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
@@ -84,6 +91,8 @@ const M11_SETS = EXPORT_SETS;
 const M11C_SETS = (browser: Browser, width: number, theme: Theme): boolean => width === 1366 && (browser === 'chromium' || theme === 'dark');
 // FL's flange: the same sets.
 const FL_SETS = M11C_SETS;
+// VF's U2 views and flange outlines: the same sets.
+const VF_SETS = M11C_SETS;
 const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
@@ -137,6 +146,15 @@ const CASES: Shot[] = [
   { name: 'benchy-flange-advanced', file: EXAMPLE_FILES.benchy, grid: [1, 1], scroll: 'flange', only: FL_SETS },
   { name: 'benchy-funnel-side', file: EXAMPLE_FILES.benchy, grid: [1, 1], funnel: 'side', only: FL_SETS },
   { name: 'benchy-funnel-section', file: EXAMPLE_FILES.benchy, grid: [1, 1], funnel: 'section', only: FL_SETS },
+  // VF: Benchy at the cover's default opacity from a low angle, where U2's lands round the groove show, and both
+  // views at twice the distance; the wolf, a large model; x8's 24 pours in Top view with their flanges' circles;
+  // and a vent held under a flange's reach on jersey, its pour's circle red and the tip saying why.
+  { name: 'benchy-low', file: EXAMPLE_FILES.benchy, grid: [1, 1], camera: 'low', only: VF_SETS },
+  { name: 'benchy-far', file: EXAMPLE_FILES.benchy, grid: [1, 1], camera: 'far', only: VF_SETS },
+  { name: 'benchy-low-far', file: EXAMPLE_FILES.benchy, grid: [1, 1], camera: 'low-far', only: VF_SETS },
+  { name: 'wolf', file: EXAMPLE_FILES.wolf, grid: [1, 1], only: VF_SETS },
+  { name: 'x8-3-pours-top-view', file: EXAMPLE_FILES.x8, grid: [1, 1], settings: [['pour.perModel', 3]], topView: true, only: VF_SETS },
+  { name: 'jersey-vent-under-flange', file: EXAMPLE_FILES.jersey, grid: [1, 1], topView: true, ventUnderFlange: true, only: VF_SETS },
 ];
 
 /** The soup-mode L standing on its underside, or the 3 million triangle block in merged mode, by the Open button's input. */
@@ -243,6 +261,18 @@ test.describe('review screenshots', () => {
               const far = side !== 0 ? 1.12 * d : d;
               h.setCamera({ position: [c[0] + 0.6 * far, c[1] - 1.4 * far, c[2] + 0.9 * far], target: [c[0], c[1], c[2]], fov: 35 });
             }, clear);
+            if (shot.camera) {
+              // The same distance from the box's centre, 15 degrees up in place of 31, or twice as far, or both.
+              await hooks(page, (h, camera: string) => {
+                const { min, max } = h.partBounds('cover')!;
+                const d = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+                const c = [0, 1, 2].map((k) => (min[k] + max[k]) / 2);
+                const out = camera.endsWith('far') ? 2 : 1;
+                const way = camera.startsWith('low') ? [0.6, -1.4, 0.41] : [0.6, -1.4, 0.9];
+                const scale = (Math.hypot(0.6, 1.4, 0.9) / Math.hypot(...way)) * d * out;
+                h.setCamera({ position: [c[0] + way[0] * scale, c[1] + way[1] * scale, c[2] + way[2] * scale], target: [c[0], c[1], c[2]], fov: 35 });
+              }, shot.camera);
+            }
             expect(await app(page, (a) => a.store.pipeline.status().stale)).toBe(false);
           } else if ((await card.count()) > 0) {
             await card.getByRole('button', { name: 'Dismiss' }).click();
@@ -350,6 +380,22 @@ test.describe('review screenshots', () => {
             await page.mouse.move(spots.to.x, spots.to.y, { steps: 8 });
             await expect(page.getByTestId('drag-reason')).toBeVisible();
           }
+          if (shot.ventUnderFlange) {
+            // The vent beside the first pour, pressed on its ring and held 11.5 mm from the pour: outside the
+            // flange's circle (10.7 mm) and inside its reach (12.8 mm), so the pour's circle turns red.
+            const spots = await app(page, (a) => {
+              const p = a.store.pipeline, openings = p.placement!.value.placement.openings, Zt = p.field!.value.rim.Zt;
+              const pour = openings.find((o) => o.kind === 'pour')!;
+              const vent = openings.filter((o) => o.kind === 'vent').sort((u, v) => Math.hypot(u.x - pour.x, u.y - pour.y) - Math.hypot(v.x - pour.x, v.y - pour.y))[0];
+              const d = Math.hypot(vent.x - pour.x, vent.y - pour.y);
+              const screen = (x: number, y: number): { x: number; y: number } => (window as unknown as { __pipeline: { worldToScreen: (p: number[]) => { x: number; y: number } } }).__pipeline.worldToScreen([x, y, Zt]);
+              return { from: screen(vent.x, vent.y), to: screen(pour.x + ((vent.x - pour.x) * 11.5) / d, pour.y + ((vent.y - pour.y) * 11.5) / d) };
+            });
+            await page.mouse.move(spots.from.x, spots.from.y);
+            await page.mouse.down();
+            await page.mouse.move(spots.to.x, spots.to.y, { steps: 8 });
+            await expect(page.getByTestId('drag-flange')).toBeVisible();
+          }
           if (shot.undoTitle) {
             await page.locator('[data-param="silicone.t"] input[type="range"]').evaluate((el) => {
               (el as HTMLInputElement).value = '3.5';
@@ -380,7 +426,7 @@ test.describe('review screenshots', () => {
           const path = join(DIR, `${browser}-${shot.name}-${size.width}x${size.height}-${theme}.png`);
           await page.screenshot({ path });
           if (shot.exporting === 'mid') await page.getByTestId('export-cancel').click();
-          if (shot.dragInvalid) {
+          if (shot.dragInvalid || shot.ventUnderFlange) {
             await page.keyboard.press('Escape');
             await page.mouse.up();
           }

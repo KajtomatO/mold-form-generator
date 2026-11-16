@@ -115,6 +115,7 @@ function OpeningRow({ opening, label }: { opening: PlacedOpening; label: string 
 export function PourSection() {
   const store = useStore();
   const openings = store.pipeline.placement?.value.placement.openings ?? [];
+  const flange = (store.pipeline.placement?.value.space.sizes.flangeRadius ?? 0) > 0;
   const removed = store.project.value.removed;
   return (
     <Section id="pour" title="Pour & funnel">
@@ -125,6 +126,7 @@ export function PourSection() {
         <div class="openings" data-testid="openings">
           <p class="lead drag-lead">
             Drag a ring on the cover's top in the view to move an opening on every copy, or type a position.
+            {flange ? " The dashed circle round each pour is where its funnel's flange will rest; vents stay outside it." : ''}
             <button
               type="button"
               class="btn small"

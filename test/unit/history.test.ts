@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { dragCheck, openingLabel } from '../../src/app/derived';
+import { dragCheck, flangeOutlines, markerRadius, openingLabel, openingRings } from '../../src/app/derived';
 import { GROUP_MS, History, HISTORY_LIMIT } from '../../src/app/history';
 import { Pipeline } from '../../src/app/pipeline';
 import type { Project } from '../../src/app/project';
@@ -311,6 +311,42 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     store.dragOpening(vent.id, pour.x + ux * along, pour.y + uy * along, { x: 0, y: 0 });
     expect(store.drag.value!.check).toMatchObject({ valid: true, problems: [], reason: null });
     store.cancelDrag();
+  });
+
+  it('OL: the flange outlines stand on every pour ring, and a vent dragged under a flange refuses that pour\'s outline, as the tip says', async () => {
+    const { store } = await loaded();
+    const p = store.pipeline;
+    const placement = p.placement!.value;
+    const { sizes, O, offsets } = placement.space;
+    const openings = placement.placement.openings;
+    const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+    // The rings are what viewSync drew before they moved to derived.ts: every copy, opening by opening.
+    const before = placement.copies.map((copy, k) => ({ x: copy.x, y: copy.y, kind: copy.kind, valid: openings[Math.floor(k / offsets.length)].valid, radius: markerRadius(p, copy.kind) }));
+    const rest = openingRings(p, null);
+    expect(rest).toEqual(before);
+    // At rest: one outline per copy of each pour, at the flange's radius, none refused.
+    const outlines = flangeOutlines(sizes, O, rest);
+    const pours = rest.filter((r) => r.kind === 'pour');
+    expect(outlines.map(({ x, y }) => [x, y])).toEqual(pours.map(({ x, y }) => [x, y]));
+    expect(outlines.every((o) => !o.refused && Math.abs(o.radius - (5 + 3 * Math.tan(Math.PI / 6) + 4)) < 1e-9)).toBe(true);
+    // The vent half way between where the land would let it go and where the flange does, as in FL's test above.
+    const seat = 5 + 3 * Math.tan(Math.PI / 6);
+    const reach = seat + 4 + 1.55 + 0.5;
+    const along = (seat + 1.55 + 1.5 + reach) / 2;
+    const ux = (vent.x - pour.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), uy = (vent.y - pour.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y);
+    const project = JSON.stringify(p.project());
+    store.dragOpening(vent.id, pour.x + ux * along, pour.y + uy * along, { x: 0, y: 0 });
+    expect(store.drag.value!.check).toMatchObject({ valid: false, problems: ['flange'] });
+    const held = flangeOutlines(sizes, O, openingRings(p, store.drag.value));
+    expect(held.map((o) => o.refused)).toEqual(pours.map((r) => r.x === pour.x && r.y === pour.y));
+    // Past the reach by half a mm the vent is clear, and so is the outline.
+    store.dragOpening(vent.id, pour.x + ux * (reach + 0.5), pour.y + uy * (reach + 0.5), { x: 0, y: 0 });
+    expect(store.drag.value!.check.problems).not.toContain('flange');
+    expect(flangeOutlines(sizes, O, openingRings(p, store.drag.value)).some((o) => o.refused)).toBe(false);
+    // Esc: nothing changed, and the outlines are as they were.
+    store.cancelDrag();
+    expect(JSON.stringify(p.project())).toBe(project);
+    expect(flangeOutlines(sizes, O, openingRings(p, store.drag.value))).toEqual(outlines);
   });
 
   it('a change of base plane undoes to the old plane with the pins and removed vents it had, and redoes to the new one without them', async () => {

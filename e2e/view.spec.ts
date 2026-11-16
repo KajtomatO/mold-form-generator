@@ -4,7 +4,8 @@ import { asciiStl, box, engravedBlock, join as joinMeshes, toSoup, withoutTriang
 import { EXAMPLE_FILES, loadManifold, skipWithout } from '../test/fixtures/loadExamples';
 import { benchyLetterSpots } from './spots';
 import { fixed } from '../src/ui/format';
-import { app, canDraw, canvasPatch, canvasPixels, checkLayout, dropAndWait, dropExample, hooks, idle, openApp, type PageWatch } from './appHarness';
+import { dashCount } from '../src/view/dashes';
+import { app, canDraw, canvasPatch, canvasPixels, checkLayout, dropAndWait, dropExample, hideParts, hooks, idle, openApp, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
 import { nodeHash } from './nodeRuns';
 
@@ -500,6 +501,164 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
     expect(await camera()).toEqual(view);
   });
 
+  test('@smoke the flange outline: a dashed circle at the flange\'s radius round every copy of every pour, red where a vent is under it, never a press target, and gone with no flange', async ({ page }) => {
+    await hooks(page, (h) => h.setParam('grid.nx', 2));
+    await dropAndWait(page, EXAMPLE_FILES.jersey);
+    await page.getByTestId('top-view').click();
+    const openings = await hooks(page, (h) => h.openings());
+    const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+    const Zt = await app(page, (a) => a.store.pipeline.field!.value.rim.Zt);
+    // FL's flange at defaults, by hand, and the 24 dashes round it, dash k centred on 2 pi k / 24.
+    const flange = 5 + 3 * Math.tan(Math.PI / 6) + 4, n = 24;
+    const rings = await app(page, (a) => a.scene.markerPositions());
+    const outlines = await app(page, (a) => a.scene.flangeOutlines());
+    // One outline per copy of each pour, at its rings, and the rings' own list as long as before: no outline in it.
+    expect(rings).toHaveLength(openings.length * 2);
+    const pourRings = openings.flatMap((o, k) => (o.kind === 'pour' ? rings.slice(2 * k, 2 * k + 2) : []));
+    expect(outlines.map((o) => [o.x, o.y])).toEqual(pourRings.map((r) => [r.x, r.y]));
+    for (const outline of outlines) {
+      expect(outline.radius).toBeCloseTo(flange, 9);
+      expect(outline.refused).toBe(false);
+    }
+
+    // Close above the dash opposite the vent, about 25 px to the mm: the dash in its slate, nothing of it a
+    // little inside the circle or in the gap after the dash.
+    const away = Math.atan2(pour.y - vent.y, pour.x - vent.x);
+    const k = Math.round(away / ((2 * Math.PI) / n));
+    const round = (r: number, turn = 0): { x: number; y: number } => ({ x: pour.x + r * Math.cos(((k + turn) * 2 * Math.PI) / n), y: pour.y + r * Math.sin(((k + turn) * 2 * Math.PI) / n) });
+    const dash = round(flange), inside = round(flange - 1.2), gap = round(flange, 0.5);
+    const above = (at: { x: number; y: number }, height: number): Promise<void> =>
+      hooks(page, (h, v: number[]) => h.setCamera({ position: [v[0], v[1] - 1e-3 * v[3], v[2] + v[3]], target: [v[0], v[1], v[2]], fov: 35 }), [at.x, at.y, Zt, height]);
+    const share = async (at: { x: number; y: number }, rgb: Rgb): Promise<number> => {
+      const pixels = await canvasPatch(page, await topOnScreen(page, at.x, at.y), 2);
+      let near = 0;
+      for (let i = 0; i < pixels.length; i += 3) if (Math.hypot(pixels[i] - rgb[0], pixels[i + 1] - rgb[1], pixels[i + 2] - rgb[2]) < 24) near++;
+      return near / (pixels.length / 3);
+    };
+    const SLATE: Rgb = [0x47, 0x55, 0x69], RED: Rgb = [0xf4, 0x3f, 0x5e];
+    await above(dash, 40);
+    expect(await share(dash, SLATE), 'on the dash').toBeGreaterThanOrEqual(0.9);
+    expect(await share(inside, SLATE), '1.2 mm inside').toBeLessThanOrEqual(0.1);
+    expect(await share(gap, SLATE), 'in the gap').toBeLessThanOrEqual(0.1);
+    // Closer, about 75 px to the mm: the dash's light band, 0.2 mm wide beside it, which keeps it readable
+    // where the scene seen through the cover is dark.
+    const band = round(flange + 0.3), BAND: Rgb = [0xe2, 0xe8, 0xf0];
+    await above(band, 15);
+    expect(await share(band, BAND), 'on the light band beside the dash').toBeGreaterThanOrEqual(0.9);
+    expect(await share(dash, SLATE), 'the dash, closer').toBeGreaterThanOrEqual(0.9);
+
+    // A real drag of the vent to 11.5 mm from the pour, outside the circle but within its reach: both copies of
+    // the outline turn red, and the tip says what the red circle is. At 13.5 mm they are clear again.
+    const u = { x: (vent.x - pour.x) / Math.hypot(vent.x - pour.x, vent.y - pour.y), y: (vent.y - pour.y) / Math.hypot(vent.x - pour.x, vent.y - pour.y) };
+    const pinsBefore = await hooks(page, (h) => h.project().pins);
+    const undoBefore = await app(page, (a) => a.store.history.depth.undo);
+    await above(pour, 70);
+    const grab = await ringOnScreen(page, vent.id, 0);
+    const under = await topOnScreen(page, pour.x + 11.5 * u.x, pour.y + 11.5 * u.y);
+    await page.mouse.move(grab.x, grab.y);
+    await page.mouse.down();
+    await page.mouse.move(under.x, under.y, { steps: 6 });
+    await expect.poll(() => app(page, (a) => a.store.drag.value?.check.problems.includes('flange'))).toBe(true);
+    expect((await app(page, (a) => a.scene.flangeOutlines())).map((o) => o.refused)).toEqual(outlines.map(() => true));
+    await expect(page.getByTestId('drag-flange')).toHaveText("The red dashed circle is that funnel's flange: keep the vent's ring wholly outside it, which leaves the vent's mouth 0.5 mm clear of the flange.");
+    expect(await share(dash, RED), 'the dash opposite, refused').toBeGreaterThanOrEqual(0.9);
+    const clear = await topOnScreen(page, pour.x + 13.5 * u.x, pour.y + 13.5 * u.y);
+    await page.mouse.move(clear.x, clear.y, { steps: 6 });
+    await expect.poll(() => app(page, (a) => a.store.drag.value?.check.problems.includes('flange'))).toBe(false);
+    expect((await app(page, (a) => a.scene.flangeOutlines())).some((o) => o.refused)).toBe(false);
+    await expect(page.getByTestId('drag-flange')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await idle(page);
+    expect(await hooks(page, (h) => h.project().pins)).toEqual(pinsBefore);
+    expect(await app(page, (a) => a.store.history.depth.undo)).toBe(undoBefore);
+
+    // The same drag with the spot 90 px above the view's foot: the tip, three or four lines longer with the
+    // flange's, is placed by its height as laid out, and stays whole inside the view, which clips it.
+    const spot = { x: pour.x + 11.5 * u.x, y: pour.y + 11.5 * u.y };
+    const frame = (await page.getByTestId('viewport').boundingBox())!;
+    const lower = ((frame.height / 2 - 90) * 2 * 70 * Math.tan((17.5 * Math.PI) / 180)) / frame.height;
+    await hooks(page, (h, v: number[]) => h.setCamera({ position: [v[0], v[1] + v[3] - 0.07, v[2] + 70], target: [v[0], v[1] + v[3], v[2]], fov: 35 }), [spot.x, spot.y, Zt, lower]);
+    const foot = await topOnScreen(page, spot.x, spot.y);
+    expect(frame.y + frame.height - foot.y).toBeGreaterThan(70);
+    expect(frame.y + frame.height - foot.y).toBeLessThan(110);
+    const from = await ringOnScreen(page, vent.id, 0);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(foot.x, foot.y, { steps: 6 });
+    await expect.poll(() => app(page, (a) => a.store.drag.value?.check.problems.includes('flange'))).toBe(true);
+    await expect(page.getByTestId('drag-flange')).toBeVisible();
+    const card = (await page.getByTestId('drag-tip').boundingBox())!;
+    expect(card.height, 'the tip with the flange\'s line').toBeGreaterThan(130);
+    expect(card.y + card.height, 'the tip\'s foot').toBeLessThanOrEqual(frame.y + frame.height);
+    expect(card.y, 'the tip\'s head').toBeGreaterThanOrEqual(frame.y);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await idle(page);
+    expect(await hooks(page, (h) => h.project().pins)).toEqual(pinsBefore);
+
+    // The vent pinned at 9.9 mm, past the land (9.78) and so refused for the flange alone, with its centre inside
+    // the circle, and the pour pinned where it is, as placement would move it off the vent otherwise. Only the
+    // rings take a press: on the circle by the vent the vent, opposite it and between the circle and the pour's
+    // ring nothing, so a press there orbits; the pour's own disc still takes the pour.
+    const pins: OpeningPin[] = [{ id: pour.id, kind: 'pour', x: pour.x, y: pour.y }, { id: vent.id, kind: 'vent', x: pour.x + 9.9 * u.x, y: pour.y + 9.9 * u.y }];
+    await app(page, (a, list: OpeningPin[]) => a.store.pipeline.setPins(list), pins);
+    await idle(page);
+    await page.getByTestId('top-view').click();
+    await above(pour, 70);
+    expect((await app(page, (a) => a.scene.flangeOutlines())).map((o) => o.refused)).toEqual(outlines.map(() => true));
+    const order = await hooks(page, (h) => h.openings());
+    const ventRing = order.findIndex((o) => o.id === vent.id) * 2, pourRing = order.findIndex((o) => o.id === pour.id) * 2;
+    const pressAt = async (r: number, side: number): Promise<number | null> => {
+      const at = await topOnScreen(page, pour.x + side * r * u.x, pour.y + side * r * u.y);
+      return app(page, (a, p: { x: number; y: number }) => a.scene.markerAt(p.x, p.y), at);
+    };
+    expect(await pressAt(9.9, 1), 'the vent\'s centre').toBe(ventRing);
+    expect(await pressAt(flange, 1), 'the circle by the vent').toBe(ventRing);
+    expect(await pressAt(flange, -1), 'the circle opposite').toBeNull();
+    expect(await pressAt(9, -1), 'between the circle and the pour\'s ring').toBeNull();
+    expect(await pressAt(7, -1), 'the pour\'s own disc').toBe(pourRing);
+    // Real presses: on the vent's centre a drag of the vent; on the circle opposite an orbit.
+    const ventAt = await topOnScreen(page, pour.x + 9.9 * u.x, pour.y + 9.9 * u.y);
+    await page.mouse.move(ventAt.x, ventAt.y);
+    await page.mouse.down();
+    await page.mouse.move(ventAt.x + 12, ventAt.y, { steps: 4 });
+    await expect.poll(() => app(page, (a) => a.store.drag.value?.id)).toBe(vent.id);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    const camera = (): Promise<number[]> => app(page, (a) => a.scene.camera.position.toArray());
+    const still = await camera();
+    const opposite = await topOnScreen(page, pour.x - flange * u.x, pour.y - flange * u.y);
+    await page.mouse.move(opposite.x, opposite.y);
+    await page.mouse.down();
+    await page.mouse.move(opposite.x + 30, opposite.y, { steps: 6 });
+    expect(await app(page, (a) => a.store.drag.value)).toBeNull();
+    await page.mouse.up();
+    expect(await camera()).not.toEqual(still);
+
+    // Where a dash crosses a ring the ring wins, drawn 0.02 mm higher: a flange 0.2 mm wide, whose dashes run
+    // over the pour's own ring (the ring 0.3 mm each side of the seat's edge, the dashes 0.2 mm each side of 0.2 mm out).
+    await hooks(page, (h) => h.setParam('funnel.flangeWidth', 0.2));
+    await idle(page);
+    const seat = 5 + 3 * Math.tan(Math.PI / 6);
+    const narrow = await app(page, (a) => a.scene.flangeOutlines());
+    expect(narrow.map((o) => o.refused)).toEqual(outlines.map(() => false));
+    for (const outline of narrow) expect(outline.radius).toBeCloseTo(seat + 0.2, 9);
+    const m = dashCount(seat + 0.2), j = Math.round(away / ((2 * Math.PI) / m));
+    const onDash = (r: number): { x: number; y: number } => ({ x: pour.x + r * Math.cos((j * 2 * Math.PI) / m), y: pour.y + r * Math.sin((j * 2 * Math.PI) / m) });
+    const crossing = onDash(seat + 0.15), beyond = onDash(seat + 0.36), BLUE: Rgb = [0x3e, 0xa6, 0xff];
+    await above(crossing, 15);
+    expect(await share(beyond, SLATE), 'the dash just past the ring').toBeGreaterThanOrEqual(0.9);
+    expect(await share(crossing, BLUE), 'the ring where the dash crosses it').toBeGreaterThanOrEqual(0.9);
+
+    // With no flange there is nothing to draw: no outline, and none of its slate where the dash was.
+    await hooks(page, (h) => h.setParam('funnel.flangeWidth', 0));
+    await idle(page);
+    expect(await app(page, (a) => a.scene.flangeOutlines())).toEqual([]);
+    await above(dash, 40);
+    expect(await share(dash, SLATE), 'no flange').toBeLessThanOrEqual(0.1);
+  });
+
   test('@smoke undo and redo: 20 edits come back to the same params and geometry, slider drags group, the shortcuts work outside text boxes, and a new file clears it', async ({ page }) => {
     skipWithout(test, 'barrel');
     await dropAndWait(page, EXAMPLE_FILES.jersey);
@@ -624,6 +783,313 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
   });
 });
 
+/** U2: what a run of the flicker probe found: pixels further than 8 from their reference, of how many, and the nearest ring or flange circle to a sample. */
+interface FlickerRun {
+  flagged: number;
+  pixels: number;
+  /** In CSS pixels, from any sample to the nearest point of a ring or a flange's circle on screen. */
+  nearestMark: number;
+  /** Each sample with a flagged pixel: its view, which sample, how many, the reference and the furthest pixel. */
+  cases: string[];
+}
+
+/** U2: the probe's elevations: two oblique views and one all but straight down, as Top view is. */
+const FLICKER_ELEVATIONS = [35, 70, 89.9];
+
+/**
+ * U2: looks at surfaces where two parts meet in one plane from 36 views, azimuth every 30 degrees at 35, 70
+ * and 89.9 degrees up, each from 100 mm, about 10 px to the mm, and compares a 5 x 5 patch at each sample
+ * with a reference drawn where nothing can fight. `lands`: the base's top under the cover's shelf, on the
+ * outer land (half way across it, on the side facing the camera) and the inner land (0.3 mm out from D, on
+ * a side the camera looks along, so the line of sight passes over the groove and its edges stay off the
+ * patch; on this block the shelf starts 0.4 mm inside D); the reference is the view exploded by 0.25 mm, a
+ * 0.5 mm gap. `merged`: Mode B's model on its top, where the merged base holds a copy of it, at the spot 3 mm
+ * or more inside the top's edges whose line of sight passes furthest from every ring and flange circle and
+ * every opening's bore, on the cover's top, half way down and at the model's top; the reference has the
+ * base hidden. Every draw is synchronous, so the canvas holds it.
+ */
+async function flicker(page: Page, mode: 'lands' | 'merged'): Promise<FlickerRun> {
+  return app(page, (a, arg: { mode: string; elevations: number[] }) => {
+    const scene = a.scene, p = a.store.pipeline, rim = p.field!.value.rim;
+    const canvas = document.querySelector('[data-testid="viewport"] canvas') as HTMLCanvasElement;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width;
+    copy.height = canvas.height;
+    const context = copy.getContext('2d', { willReadFrequently: true })!;
+    const patch = (at: number[]): number[] => {
+      const screen = scene.worldToScreen(at as [number, number, number]);
+      const rect = canvas.getBoundingClientRect(), scale = canvas.width / rect.width;
+      context.drawImage(canvas, 0, 0);
+      const px = Math.round((screen.x - rect.left) * scale), py = Math.round((screen.y - rect.top) * scale);
+      return Array.from(context.getImageData(px - 2, py - 2, 5, 5).data).filter((_, i) => i % 4 !== 3);
+    };
+    const median = (pixels: number[]): number[] => [0, 1, 2].map((c) => pixels.filter((_, i) => i % 3 === c).sort((x, y) => x - y)[Math.floor(pixels.length / 6)]);
+    // Every ring at its own radius and every flange circle at its, as drawn on the top; points round each on
+    // screen keep the samples clear of their edges.
+    const circles = [...scene.markerPositions().map((m) => ({ x: m.x, y: m.y, r: m.radius })), ...scene.flangeOutlines().map((f) => ({ x: f.x, y: f.y, r: f.radius }))];
+    const marks = circles.flatMap((c) => Array.from({ length: 36 }, (_, k) => [c.x + c.r * Math.cos((k * Math.PI) / 18), c.y + c.r * Math.sin((k * Math.PI) / 18), rim.Zt]));
+    const D = rim.D, cx = (D.x0 + D.x1) / 2, cy = (D.y0 + D.y1) / 2, hx = (D.x1 - D.x0) / 2, hy = (D.y1 - D.y0) / 2;
+    const sides = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    const bounds = p.oriented!.value.bounds, top = bounds.max[2];
+    // Mode B: of the spots on a 1 mm grid over the model's top, 3 mm in from its edges, the one whose line of
+    // sight, at the model's top, half way up and at the cover's top, passes furthest in plan from every circle.
+    const clearest = (u: number[], elevation: number): number[] => {
+      const cot = 1 / Math.tan((elevation * Math.PI) / 180);
+      let best = [cx, cy, top], room = -Infinity;
+      for (let x = bounds.min[0] + 3; x <= bounds.max[0] - 3 + 1e-9; x += 1) {
+        for (let y = bounds.min[1] + 3; y <= bounds.max[1] - 3 + 1e-9; y += 1) {
+          let near = Infinity;
+          for (const share of [0, 0.5, 1]) {
+            const along = share * (rim.Zt - top) * cot, sx = x + along * u[0], sy = y + along * u[1];
+            for (const c of circles) near = Math.min(near, Math.abs(Math.hypot(sx - c.x, sy - c.y) - c.r));
+          }
+          if (near > room) [room, best] = [near, [x, y, top]];
+        }
+      }
+      return best;
+    };
+    const base = scene.partStyles().base!;
+    let flagged = 0, pixels = 0, nearestMark = Infinity;
+    const cases: string[] = [];
+    for (let azimuth = 0; azimuth < 360; azimuth += 30) {
+      for (const elevation of arg.elevations) {
+        const u = [Math.cos((azimuth * Math.PI) / 180), Math.sin((azimuth * Math.PI) / 180)];
+        const facing = sides.map((n) => n[0] * u[0] + n[1] * u[1]);
+        const samples: number[][] = [];
+        if (arg.mode === 'lands') {
+          const outer = sides[facing.indexOf(Math.max(...facing))];
+          const along = sides[facing.reduce((best, f, k) => (f > -1e-9 && f < facing[best] - 1e-9 ? k : best), facing.indexOf(Math.max(...facing)))];
+          const on = (n: number[], off: number): number[] => (n[0] !== 0 ? [cx + n[0] * (hx + off), cy, 0] : [cx, cy + n[1] * (hy + off), 0]);
+          samples.push(on(outer, (rim.e4 + rim.e5) / 2), on(along, 0.3));
+        } else {
+          samples.push(clearest(u, elevation));
+        }
+        for (const [index, at] of samples.entries()) {
+          const e = (elevation * Math.PI) / 180;
+          scene.setCamera({ position: [at[0] + 100 * Math.cos(e) * u[0], at[1] + 100 * Math.cos(e) * u[1], at[2] + 100 * Math.sin(e)], target: [at[0], at[1], at[2]], fov: 35 });
+          const here = scene.worldToScreen(at as [number, number, number]);
+          for (const m of marks) {
+            const s = scene.worldToScreen(m as [number, number, number]);
+            nearestMark = Math.min(nearestMark, Math.hypot(s.x - here.x, s.y - here.y));
+          }
+          let reference: number[];
+          if (arg.mode === 'lands') {
+            scene.setExplode(0.25);
+            scene.render();
+            reference = median(patch([at[0], at[1], at[2] - 0.25]));
+            scene.setExplode(0);
+          } else {
+            scene.setLayer('base', { ...base, visible: false });
+            scene.render();
+            reference = median(patch(at));
+            scene.setLayer('base', base);
+          }
+          scene.render();
+          const seen = patch(at);
+          let count = 0, worst: number[] = reference, off = 0;
+          for (let i = 0; i < seen.length; i += 3) {
+            pixels++;
+            const d = Math.max(...[0, 1, 2].map((c) => Math.abs(seen[i + c] - reference[c])));
+            if (d > 8) count++;
+            if (d > off) [off, worst] = [d, seen.slice(i, i + 3)];
+          }
+          flagged += count;
+          if (count > 0) cases.push(`${azimuth} deg, ${elevation} up, sample ${index} at ${at.map((v) => v.toFixed(1))}: ${count} of 25, reference ${reference}, furthest ${worst}`);
+        }
+      }
+    }
+    return { flagged, pixels, nearestMark, cases };
+  }, { mode, elevations: FLICKER_ELEVATIONS });
+}
+
+test.describe('U2: no flicker as the view turns', () => {
+  let watch: PageWatch;
+  test.beforeEach(async ({ page }, info) => {
+    test.skip(info.project.name === 'dev', DEV_SKIP);
+    test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+    watch = await openApp(page);
+    // A plain 40 x 40 x 20 mm block: its mold's lands, its top in Mode B, and nothing else to look at.
+    await dropExample(page, 'block.stl', { text: new TextDecoder().decode(asciiStl(toSoup(box([0, 0, 0], [40, 40, 20])), 'block')) });
+    await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe('block.stl');
+    await idle(page);
+    await expect.poll(() => app(page, (a) => a.scene.proxySpan('base') === null && a.scene.proxySpan('cover') === null)).toBe(true);
+    await hideParts(page, ['silicone', 'model']);
+  });
+  test.afterEach(({}, info) => {
+    if (info.status === 'skipped') return;
+    expect(watch.errors).toEqual([]);
+    expect(watch.foreign).toEqual([]);
+  });
+
+  test('@smoke the camera\'s planes keep the whole mold, exploded, with its funnels, between them, at a depth step under 0.001 mm, and 8 m out in either projection', async ({ page }) => {
+    // The step a 24-bit buffer resolves at the farthest corner of the mold's box, from the camera as it stands.
+    const step = (): Promise<number> =>
+      app(page, (a) => {
+        const rim = a.store.pipeline.field!.value.rim, camera = a.scene.camera;
+        (window as unknown as { __pipeline: { worldToScreen: (p: number[]) => unknown } }).__pipeline.worldToScreen([0, 0, 0]);
+        const e = camera.matrixWorld.elements, eye = camera.position;
+        const forward = [-e[8], -e[9], -e[10]];
+        let farthest = 0;
+        for (const x of [rim.O.x0, rim.O.x1]) for (const y of [rim.O.y0, rim.O.y1]) for (const z of [-rim.Tb, rim.Zt]) farthest = Math.max(farthest, (x - eye.x) * forward[0] + (y - eye.y) * forward[1] + (z - eye.z) * forward[2]);
+        return (2 ** -24 * farthest * farthest * (camera.far - camera.near)) / (camera.far * camera.near);
+      });
+    // The framed view of a new file.
+    const framed = await step();
+    expect(framed).toBeLessThan(0.001);
+    // Negative control: 0.1.0's fixed planes resolve only about 0.03 mm there.
+    await app(page, (a) => (a.scene.depthOverride = { near: 0.1, far: 5000 }));
+    const fixed01 = await step();
+    expect(fixed01).toBeGreaterThan(0.02);
+    await app(page, (a) => (a.scene.depthOverride = null));
+    const said = `${framed.toExponential(2)} mm fitted, ${fixed01.toExponential(2)} mm with 0.1 and 5000`;
+    test.info().annotations.push({ type: 'U2 depth step at the framed view', description: said });
+    console.log(`U2 (${test.info().project.name}): the depth step at the framed view's farthest corner, ${said}`);
+
+    // The funnels shown, the view exploded as far as it goes: every corner of every part where it now is, and
+    // each funnel's top, lies between the planes, in Top view and from an orbit below the plate.
+    await page.locator('[data-part="funnel"] .eye').click();
+    await app(page, (a) => a.store.setExplode({ on: true, distance: 1e6 }));
+    await expect.poll(() => app(page, (a) => a.scene.explodeOffsets().cover)).toBeGreaterThan(40);
+    const kept = (): Promise<{ points: number; outside: string[] }> =>
+      app(page, (a) => {
+        const p = a.store.pipeline, rim = p.field!.value.rim, lift = a.scene.explodeOffsets();
+        const hooks = (window as unknown as { __pipeline: { partBounds: (n: string) => { min: number[]; max: number[] }; worldToScreen: (p: number[]) => unknown } }).__pipeline;
+        hooks.worldToScreen([0, 0, 0]);
+        const points: number[][] = [];
+        for (const [part, dz] of [['cover', lift.cover], ['base', lift.base]] as const) {
+          const { min, max } = hooks.partBounds(part);
+          for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) points.push([x, y, z + dz]);
+        }
+        const funnel = p.funnel!.value!.positions;
+        let height = 0;
+        for (let i = 2; i < funnel.length; i += 3) height = Math.max(height, funnel[i]);
+        for (const c of p.placement!.value.copies) if (c.kind === 'pour') points.push([c.x, c.y, rim.Zt + height + lift.funnel]);
+        const camera = a.scene.camera;
+        const view = camera.matrixWorldInverse.elements, projection = camera.projectionMatrix.elements;
+        const outside: string[] = [];
+        for (const [x, y, z] of points) {
+          const v = [0, 1, 2, 3].map((r) => view[r] * x + view[4 + r] * y + view[8 + r] * z + view[12 + r]);
+          const clip = [0, 1, 2, 3].map((r) => projection[r] * v[0] + projection[4 + r] * v[1] + projection[8 + r] * v[2] + projection[12 + r] * v[3]);
+          const ndc = clip[2] / clip[3];
+          if (!(clip[3] > 0 && ndc > -1 && ndc < 1)) outside.push(`${[x, y, z].map((c) => c.toFixed(1))} at ${ndc.toFixed(4)}`);
+        }
+        return { points: points.length, outside };
+      });
+    await page.getByTestId('top-view').click();
+    const fromTop = await kept();
+    expect(fromTop.points).toBeGreaterThanOrEqual(17);
+    expect(fromTop.outside).toEqual([]);
+    await app(page, (a) => {
+      const rim = a.store.pipeline.field!.value.rim;
+      const c = [(rim.O.x0 + rim.O.x1) / 2, (rim.O.y0 + rim.O.y1) / 2, 0];
+      (window as unknown as { __pipeline: { setCamera: (v: unknown) => void } }).__pipeline.setCamera({ position: [c[0] - 90, c[1] + 140, c[2] - 60], target: c, fov: 35 });
+    });
+    expect((await kept()).outside).toEqual([]);
+    // Negative control: a near plane past the nearest corner puts that corner in front of it.
+    await app(page, (a) => {
+      const rim = a.store.pipeline.field!.value.rim, lift = a.scene.explodeOffsets(), camera = a.scene.camera;
+      const e = camera.matrixWorld.elements, eye = camera.position;
+      let nearest = Infinity;
+      for (const x of [rim.O.x0, rim.O.x1]) for (const y of [rim.O.y0, rim.O.y1]) for (const z of [-rim.Tb + lift.base, rim.Zt + lift.cover]) nearest = Math.min(nearest, -((x - eye.x) * e[8] + (y - eye.y) * e[9] + (z - eye.z) * e[10]));
+      a.scene.depthOverride = { near: 1.1 * nearest, far: camera.far };
+    });
+    expect((await kept()).outside.length).toBeGreaterThan(0);
+    await app(page, (a) => (a.scene.depthOverride = null));
+    expect((await kept()).outside).toEqual([]);
+
+    // 8 m out, which 0.1.0's far plane of 5000 cut away: the perspective view keeps every corner, and so does
+    // the orthographic view switched to there, whose planes now stand round what it orbits, not round the
+    // camera. Each corner is asked of the camera drawing, as the next frame has it.
+    const onScreen = (): Promise<string[]> =>
+      app(page, (a) => {
+        const lift = a.scene.explodeOffsets();
+        const hooks = (window as unknown as { __pipeline: { partBounds: (n: string) => { min: number[]; max: number[] }; worldToScreen: (p: number[]) => { visible: boolean } } }).__pipeline;
+        const lost: string[] = [];
+        for (const [part, dz] of [['cover', lift.cover], ['base', lift.base]] as const) {
+          const { min, max } = hooks.partBounds(part);
+          for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) if (!hooks.worldToScreen([x, y, z + dz]).visible) lost.push(`${part} ${[x, y, z + dz].map((c) => c.toFixed(1))}`);
+        }
+        return lost;
+      });
+    await app(page, (a) => {
+      const rim = a.store.pipeline.field!.value.rim;
+      const c = [(rim.O.x0 + rim.O.x1) / 2, (rim.O.y0 + rim.O.y1) / 2, rim.Zt / 2];
+      const way = [0.6, -1.4, 0.9].map((v) => (v / Math.hypot(0.6, 1.4, 0.9)) * 8000);
+      (window as unknown as { __pipeline: { setCamera: (v: unknown) => void } }).__pipeline.setCamera({ position: [c[0] + way[0], c[1] + way[1], c[2] + way[2]], target: c, fov: 35 });
+    });
+    expect(await onScreen()).toEqual([]);
+    await page.getByTestId('perspective').uncheck();
+    await expect.poll(() => app(page, (a) => a.scene.perspective)).toBe(false);
+    expect(await app(page, (a) => a.scene.ortho.position.distanceTo((a.scene as unknown as { target: typeof a.scene.ortho.position }).target))).toBeGreaterThan(7900);
+    expect(await onScreen()).toEqual([]);
+    // Negative control: the orthographic planes 0.1.0 had, -5000 to 5000 from the camera, lose the mold there.
+    await app(page, (a) => {
+      Object.assign(a.scene.ortho, { near: -5000, far: 5000 });
+      a.scene.ortho.updateProjectionMatrix();
+    });
+    expect((await onScreen()).length).toBe(16);
+    await page.getByTestId('perspective').check();
+    await expect.poll(() => app(page, (a) => a.scene.perspective)).toBe(true);
+    expect(await onScreen()).toEqual([]);
+  });
+
+  test('the lands under the cover\'s shelf keep one colour as the view turns', async ({ page }) => {
+    // Where 0.1.0 drew them, with no offset on the base and its fixed planes: software WebGL here shows the
+    // fight too (205 of 1,200 lands pixels in Chromium and 183 in Firefox at 35 and 70 degrees, when VF
+    // measured), so the probe is held to seeing some, which proves it sees a real coplanar fight and not only
+    // the pushed-back controls below.
+    const bias = (on: boolean): Promise<void> =>
+      app(page, (a, value: boolean) => {
+        const base = (a.scene as unknown as { meshes: Map<string, { material: { polygonOffset: boolean } }> }).meshes.get('base')!;
+        base.material.polygonOffset = value;
+        a.scene.depthOverride = value ? null : { near: 0.1, far: 5000 };
+      }, on);
+    await bias(false);
+    const before = await flicker(page, 'lands');
+    await bias(true);
+    const lands = await flicker(page, 'lands');
+    expect(before.flagged, 'the lands as 0.1.0 drew them').toBeGreaterThan(0);
+    // The samples stand clear of every ring and flange circle, which the 0.25 mm reference moves with the cover.
+    expect(lands.nearestMark).toBeGreaterThan(30);
+    expect(lands.pixels).toBe(12 * FLICKER_ELEVATIONS.length * 2 * 25);
+    expect(lands.cases).toEqual([]);
+    expect(lands.flagged).toBe(0);
+    // Negative control: the cover pushed behind the base loses the shelf over the lands, and the probe sees it.
+    // Its slope factor must pass the base's, whose slope term outweighs any number of plain units at these views.
+    await app(page, (a) => {
+      const cover = (a.scene as unknown as { meshes: Map<string, { material: { polygonOffset: boolean; polygonOffsetFactor: number; polygonOffsetUnits: number } }> }).meshes.get('cover')!.material;
+      Object.assign(cover, { polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 16 });
+    });
+    const lost = await flicker(page, 'lands');
+    expect(lost.flagged / lost.pixels).toBeGreaterThan(0.9);
+    await app(page, (a) => Object.assign((a.scene as unknown as { meshes: Map<string, { material: object }> }).meshes.get('cover')!.material, { polygonOffset: false, polygonOffsetFactor: 0, polygonOffsetUnits: 0 }));
+
+    // Mode B: the model shown, its top where the merged base holds a copy of it.
+    await hooks(page, (h) => h.setParam('base.mode', 'merged'));
+    await idle(page);
+    await page.locator('[data-part="model"] .eye').click();
+    await bias(false);
+    const mergedBefore = await flicker(page, 'merged');
+    await bias(true);
+    const merged = await flicker(page, 'merged');
+    expect(mergedBefore.flagged, 'Mode B as 0.1.0 drew it').toBeGreaterThan(0);
+    expect(merged.nearestMark, 'Mode B\'s samples clear of every ring and flange circle').toBeGreaterThan(30);
+    expect(merged.pixels).toBe(12 * FLICKER_ELEVATIONS.length * 25);
+    expect(merged.cases).toEqual([]);
+    expect(merged.flagged).toBe(0);
+    // Negative control: the model pushed behind its copy in the base shows the base's grey.
+    await app(page, (a) => {
+      const model = (a.scene as unknown as { model: { material: object } }).model!.material;
+      Object.assign(model, { polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 16 });
+    });
+    const hidden = await flicker(page, 'merged');
+    expect(hidden.flagged / hidden.pixels).toBeGreaterThan(0.9);
+    const said = `lands ${before.flagged} of ${before.pixels} pixels, Mode B ${mergedBefore.flagged} of ${mergedBefore.pixels}; negative controls ${lost.flagged} and ${hidden.flagged}; nearest mark ${lands.nearestMark.toFixed(0)} and ${merged.nearestMark.toFixed(0)} px`;
+    test.info().annotations.push({ type: 'U2 fight pixels as 0.1.0 drew them', description: said });
+    console.log(`U2 (${test.info().project.name}): as 0.1.0 drew them, ${said}`);
+  });
+});
+
 test.describe('section caps through Benchy\'s lettering', () => {
   test.skip(!FULL, 'runs with CFG_FULL=1');
   let watch: PageWatch;
@@ -694,10 +1160,18 @@ test.describe('opening drag on x8 3 x 3', () => {
     await expect.poll(() => app(page, (a) => a.store.drag.value?.id)).toBe(pour.id);
     await expect.poll(() => hooks(page, (h) => h.shownCover()?.provisional === true && !h.status().stale), { timeout: 60_000 }).toBe(true);
     const drag = (await app(page, (a) => a.store.drag.value))!;
-    const { rings, offsets } = await app(page, (a) => ({ rings: a.scene.markerPositions(), offsets: a.store.pipeline.placement!.value.space.offsets }));
+    const { rings, offsets, outlines } = await app(page, (a) => ({ rings: a.scene.markerPositions(), offsets: a.store.pipeline.placement!.value.space.offsets, outlines: a.scene.flangeOutlines() }));
     offsets.forEach(([ox, oy], k) => {
       expect(rings[index * 9 + k].x).toBeCloseTo(drag.x + ox, 6);
       expect(rings[index * 9 + k].y).toBeCloseTo(drag.y + oy, 6);
+    });
+    // OL: a flange outline on every copy of every pour, and the dragged pour's 9 follow it.
+    const pours = openings.filter((o) => o.kind === 'pour');
+    expect(outlines).toHaveLength(pours.length * 9);
+    const own = pours.indexOf(pour) * 9;
+    offsets.forEach(([ox, oy], k) => {
+      expect(outlines[own + k].x).toBeCloseTo(drag.x + ox, 6);
+      expect(outlines[own + k].y).toBeCloseTo(drag.y + oy, 6);
     });
     await page.mouse.up();
     await idle(page);

@@ -1,11 +1,10 @@
 import { effect } from '@preact/signals';
-import { allDiagnostics, diagnosticMarkers, markerRadius, moldExtent } from '../app/derived';
+import { allDiagnostics, diagnosticMarkers, flangeOutlines, moldExtent, openingRings } from '../app/derived';
 import type { Marker } from '../app/pipeline';
 import { explodeDistance, sectionPlane, type Store } from '../app/store';
 import { toMat4 } from '../core/base/orient';
 import { coverBottom } from '../core/parts/cover';
 import { HOVER_COLOUR, SELECTED_COLOUR } from '../view/materials';
-import type { OpeningMarker } from '../view/overlays';
 import { coplanarTriangles } from '../view/picking';
 import { DARK_BACKGROUND, LIGHT_BACKGROUND, type Highlight, type PreviewScene } from '../view/scene';
 import { diagnosticKey } from './DiagnosticsCard';
@@ -80,24 +79,15 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     if (funnelChanged || poursChanged) scene.setFunnel(funnel, pours);
 
     // Each opening has one copy per tile, listed opening by opening. The one being dragged is drawn where
-    // the pointer has it, on every tile, in the invalid colour while it may not stand there.
-    const markers: OpeningMarker[] = [];
-    const drag = store.drag.value;
-    if (rim && placement) {
-      const { offsets } = placement.space;
-      placement.copies.forEach((copy, k) => {
-        const opening = placement.placement.openings[Math.floor(k / offsets.length)];
-        const [ox, oy] = offsets[k % offsets.length];
-        const moving = drag !== null && opening?.id === drag.id;
-        const at = moving ? { x: drag.x + ox, y: drag.y + oy } : copy;
-        markers.push({ x: at.x, y: at.y, kind: copy.kind, valid: moving ? drag.check.valid : (opening?.valid ?? true), radius: markerRadius(p, copy.kind) });
-      });
-      // Where a drop would snap to while the spot is not valid, faint, on every tile, after the rest.
-      const lands = drag && !drag.check.valid ? drag.check.lands : null;
-      if (drag && lands) for (const [ox, oy] of offsets) markers.push({ x: lands.x + ox, y: lands.y + oy, kind: drag.kind, valid: true, ghost: true, radius: markerRadius(p, drag.kind) });
-    }
+    // the pointer has it, on every tile, in the invalid colour while it may not stand there; where a drop
+    // would snap to while the spot is not valid comes after the rest, faint, on every tile.
+    const markers = openingRings(p, store.drag.value);
     const markersChanged = changed('markers', JSON.stringify(markers)), topChanged = changed('top', rim?.Zt);
     if (markersChanged || topChanged) scene.setOpenings(markers, rim?.Zt ?? 0);
+    // OL: each pour's funnel flange as a dashed circle on every copy, red where a vent's ring is too near it.
+    // Drawn only: the rings above stay the one list a press picks from.
+    const outlines = placement ? flangeOutlines(placement.space.sizes, placement.space.O, markers) : [];
+    if (changed('outlines', JSON.stringify(outlines)) || topChanged) scene.setFlanges(outlines, rim?.Zt ?? 0);
 
     // Each new file is framed once, when its box is first known.
     const file = p.parsed?.key ?? null;

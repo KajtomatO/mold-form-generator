@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Field } from '../core/field/grid';
+import { boxCorners, depthPlanes, orthoPlanes } from './depthPlanes';
 import { HeightPreview, type HeightMode } from './heightPreview';
 import { applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
-import { boxMesh, DiagnosticMarkers, OpeningMarkers, placeBox, type BoxSpan, type MarkerSpec, type OpeningMarker } from './overlays';
+import { boxMesh, DiagnosticMarkers, FlangeOutlines, OpeningMarkers, placeBox, type BoxSpan, type FlangeOutline, type MarkerSpec, type OpeningMarker } from './overlays';
 import { Picker } from './picking';
 import { SectionCaps, SectionHandle, type CapPart, type CapSource, type Counting } from './section';
 
@@ -66,6 +67,8 @@ export class PreviewScene {
   readonly ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -5000, 5000);
   readonly heights: HeightPreview;
   readonly markers = new OpeningMarkers();
+  /** OL: the funnels' flanges as dashed circles round the pours, drawn and never hit. */
+  readonly flanges = new FlangeOutlines();
   readonly diagnosticMarkers = new DiagnosticMarkers();
   readonly section: SectionCaps;
   readonly sectionHandle = new SectionHandle();
@@ -134,6 +137,14 @@ export class PreviewScene {
   private readonly picker = new Picker();
   private readonly controls: OrbitControls | null = null;
   private drawQueued = false;
+  /**
+   * For tests: fixed planes for the perspective camera in place of the fitted ones, such as 0.1.0's
+   * 0.1 and 5000. Null, as the app has it, fits them to what is drawn on every frame (fitDepth).
+   */
+  depthOverride: { near: number; far: number } | null = null;
+  /** The boxes fitDepth measures with, kept from frame to frame. */
+  private readonly drawnBox = new THREE.Box3();
+  private readonly partBox = new THREE.Box3();
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -160,7 +171,7 @@ export class PreviewScene {
     this.proxies = { cover: boxMesh(partMaterial('cover', this.styles.cover, false)), base: boxMesh(partMaterial('base', this.styles.base, false)) };
     this.proxies.cover.renderOrder = LAYER_ORDER.cover;
     for (const proxy of Object.values(this.proxies)) placeBox(proxy, null);
-    this.coverRoot.add(this.proxies.cover, this.markers.group, this.coverField, this.coverFloor);
+    this.coverRoot.add(this.proxies.cover, this.markers.group, this.flanges.group, this.coverField, this.coverFloor);
     this.baseRoot.add(this.proxies.base);
     // Faces down, so its outside is below: the field's solid is {0 <= z <= H}.
     this.siliconeFloor.rotation.x = Math.PI;
@@ -420,6 +431,17 @@ export class PreviewScene {
     this.requestRender();
   }
 
+  /** OL: the flanges' dashed circles, one per copy of each pour, on the flat top at `top`. */
+  setFlanges(outlines: FlangeOutline[], top: number): void {
+    this.flanges.set(outlines, top);
+    this.requestRender();
+  }
+
+  /** The flanges' dashed circles as last set, for tests. */
+  flangeOutlines(): FlangeOutline[] {
+    return this.flanges.list();
+  }
+
   setDiagnosticMarkers(marks: MarkerSpec[], size: number): void {
     this.diagnosticMarkers.set(marks, size);
     this.requestRender();
@@ -471,7 +493,7 @@ export class PreviewScene {
   }
 
   /** Where each opening ring is, in mold coordinates, in the order set: ghosts of a drag's landing last. */
-  markerPositions(): { x: number; y: number; valid: boolean; ghost: boolean }[] {
+  markerPositions(): { x: number; y: number; valid: boolean; ghost: boolean; radius: number; kind: 'pour' | 'vent' }[] {
     return this.markers.positions();
   }
 
@@ -606,6 +628,8 @@ export class PreviewScene {
 
   /** Where a point in mold coordinates lands on the page, in CSS pixels, for tests that click or drag in 3D. */
   worldToScreen(point: [number, number, number]): { x: number; y: number; visible: boolean } {
+    // With the planes the next frame draws with, so `visible` says whether that frame keeps the point.
+    this.fitDepth();
     const projected = new THREE.Vector3(...point).project(this.active);
     const rect = this.canvas.getBoundingClientRect();
     return {
@@ -641,7 +665,58 @@ export class PreviewScene {
       this.section.sync(centre, 3 * diagonal + 6 * Math.abs(this.explodeBy), this.active);
       this.sectionHandle.place(this.section.plane, centre, Math.max(1, diagonal * 0.08));
     }
+    this.fitDepth();
     this.renderer.render(this.scene, this.active);
+  }
+
+  /**
+   * U2: the perspective camera's near and far planes, fitted on every frame to the box of what is drawn:
+   * the mold's box, the model and its copies (a model trimmed at the plane hangs below the plate), the
+   * cover and base wherever the exploded view has moved them, with their proxies, rings and flange
+   * outlines, the funnels, the diagnostic pins and the section's handle. The height preview and the caps
+   * are left out, as their vertices are lattice indices until a shader places them; the silicone lies
+   * inside the mold's box. The orthographic camera keeps its linear planes, which fitOrtho centres on the
+   * target. Objects hidden by their own `visible` are skipped; a part hidden by its material still counts,
+   * which only widens the box.
+   */
+  private fitDepth(): void {
+    if (this.active !== this.camera) return;
+    const { near, far } = this.depthOverride ?? this.drawnPlanes();
+    if (near !== this.camera.near || far !== this.camera.far) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  private drawnPlanes(): { near: number; far: number } {
+    this.scene.updateMatrixWorld();
+    const box = this.drawnBox.makeEmpty();
+    if (this.moldBox) box.union(this.moldBox);
+    // Hidden objects are not drawn, so they cannot be clipped: a proxy left where an older rim had it does not widen the planes.
+    const grow = (root: THREE.Object3D): void =>
+      root.traverseVisible((object) => {
+        // An instanced mesh's own box holds all its copies; its geometry's, one copy at the origin.
+        const instanced = object as THREE.InstancedMesh;
+        if (instanced.isInstancedMesh) {
+          if (!instanced.boundingBox) instanced.computeBoundingBox();
+          box.union(this.partBox.copy(instanced.boundingBox!).applyMatrix4(object.matrixWorld));
+          return;
+        }
+        const geometry = (object as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (!geometry) return;
+        if (!geometry.boundingBox) geometry.computeBoundingBox();
+        box.union(this.partBox.copy(geometry.boundingBox!).applyMatrix4(object.matrixWorld));
+      });
+    // The model itself, not its group: the highlights there share the whole mesh's positions.
+    if (this.model && this.modelGroup.visible) grow(this.model);
+    for (const root of [this.modelCopies, this.coverRoot, this.baseRoot, this.funnels, this.diagnosticMarkers.group, this.sectionHandle.group]) grow(root);
+    // A funnel set as a part, as no page does, hangs from the scene itself.
+    const loose = this.meshes.get('funnel');
+    if (loose) grow(loose);
+    const eye = this.camera.position;
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    return depthPlanes(box.isEmpty() ? null : boxCorners(box.min.toArray(), box.max.toArray()), eye.toArray(), forward.toArray(), eye.distanceTo(this.target));
   }
 
   /**
@@ -763,6 +838,7 @@ export class PreviewScene {
     this.setFunnel(null, []);
     this.heights.dispose();
     this.markers.dispose();
+    this.flanges.dispose();
     this.section.dispose();
     this.sectionHandle.dispose();
     for (const { back, front } of Object.values(this.heightCounting)) {
@@ -783,6 +859,7 @@ export class PreviewScene {
     this.heights.style(styles.silicone, wireframe);
     this.clip(this.heights.mesh.material);
     for (const material of Object.values(this.markers.materials)) this.clip(material);
+    for (const material of Object.values(this.flanges.materials)) this.clip(material);
     for (const child of this.highlights.children) this.clip((child as THREE.Mesh).material as THREE.Material);
     this.requestRender();
   }
@@ -801,6 +878,9 @@ export class PreviewScene {
     this.ortho.bottom = -half;
     this.ortho.left = -half * this.camera.aspect;
     this.ortho.right = half * this.camera.aspect;
+    const { near, far } = orthoPlanes(distance);
+    this.ortho.near = near;
+    this.ortho.far = far;
     this.ortho.updateProjectionMatrix();
   }
 }
