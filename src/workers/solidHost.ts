@@ -7,6 +7,7 @@ import { usedHeap } from './heapProbe';
 import { applyDelay, buffersOf, injectedCrash, isInlineError, type ToWorker } from './protocol';
 import { SolidStages, type SolidOutputs } from './solidStages';
 import { Arena, withArena } from '../core/solid/arena';
+import { arrayBytes, figureOrNone, type WorkerMemory } from '../app/memory';
 
 /** The meshes are fresh copies out of WASM, so they go as they are. Only the import's mesh is held here. */
 function wire(outputs: SolidOutputs): { outputs: SolidOutputs; transfer: ArrayBuffer[] } {
@@ -23,9 +24,24 @@ function wire(outputs: SolidOutputs): { outputs: SolidOutputs; transfer: ArrayBu
   return { outputs: out, transfer: buffersOf(...arrays) };
 }
 
-/** solid.worker's message handler, apart from `self` and the WASM boot, so a Node test can drive the same code. */
-export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heapBytes: () => number | null, post: Post, now: () => number, limits: HeavyLimits = HEAVY_LIMITS): (message: ToWorker) => void {
+/**
+ * What a solid worker holds, for the memory meter (MM1): its WebAssembly heap, Manifold's, at its full size,
+ * and the arrays it keeps outside it, with `extra`, such as an export's inputs while it runs. The heap's own
+ * buffer is seeded as seen, so a view into it never counts twice. meshoptimizer keeps a small heap of its
+ * own, which it does not expose, so that is not counted.
+ */
+export function solidMemory(heap: ArrayBuffer | null, held: unknown[]): WorkerMemory {
+  return { wasm: heap?.byteLength ?? 0, arrays: arrayBytes(held, new Set<ArrayBufferLike>(heap ? [heap] : [])) };
+}
+
+/**
+ * solid.worker's message handler, apart from `self` and the WASM boot, so a Node test can drive the same code.
+ * `heap` is the WebAssembly memory's buffer as it stands, or null where the glue hides it.
+ */
+export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heap: () => ArrayBuffer | null, post: Post, now: () => number, limits: HeavyLimits = HEAVY_LIMITS): (message: ToWorker) => void {
   const stages = new SolidStages(api, now, simplifier, limits);
+  const heapBytes = (): number | null => heap()?.byteLength ?? null;
+  const memory = (extra: unknown[] = []): WorkerMemory | undefined => figureOrNone(() => solidMemory(heap(), [...stages.heldArrays(), ...extra]));
   return (message) => {
     if (message.t === 'heap') {
       post({ t: 'heap', id: message.id, capacity: heapBytes(), used: usedHeap(api, heapBytes), held: stages.heldEntries(), handles: Arena.live });
@@ -38,11 +54,13 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
       injectedCrash(message.fault);
       applyDelay(message.fault, now);
       if (message.t === 'export') {
+        // MM1: its inputs, and what it has built so far, which it adds to as it goes.
+        const holding: unknown[] = [];
         const progress = (step: string, done: number, total: number): void => {
-          post({ t: 'progress', id, step, done, total });
+          post({ t: 'progress', id, step, done, total, memory: memory([message, holding]) });
           applyDelay(message.fault, now, step);
         };
-        const outputs = runExport(api, simplifier, message, progress, now, timings, limits);
+        const outputs = runExport(api, simplifier, message, progress, now, timings, limits, holding);
         post({ t: 'exported', id, outputs, timings }, buffersOf(outputs.zip, ...Object.values(outputs.files)));
         return;
       }
@@ -52,15 +70,15 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
         // Released from its arena and never deleted: a forgotten handle, as a real leak would be.
         withArena(api, (arena) => arena.release(arena.crossSection([Array.from({ length: points }, (_, k): [number, number] => [10 * Math.cos((2 * Math.PI * k) / points), 10 * Math.sin((2 * Math.PI * k) / points)])])));
       }
-      post({ t: 'result', id, outputs: sent.outputs, cached: stages.cached(), heapBytes: heapBytes(), timings }, sent.transfer);
+      post({ t: 'result', id, outputs: sent.outputs, cached: stages.cached(), heapBytes: heapBytes(), timings, memory: memory() }, sent.transfer);
     } catch (error) {
       if (error instanceof StageMiss) {
-        post({ t: 'miss', id, stage: error.stage, cached: stages.cached() });
+        post({ t: 'miss', id, stage: error.stage, cached: stages.cached(), memory: memory() });
         return;
       }
       const e = error instanceof Error ? error : new Error(String(error));
       // A crash may have left the cache half replaced, so main must not trust it: this worker is about to go.
-      post({ t: 'error', id, name: e.name, message: e.message, inline: isInlineError(e), cached: isInlineError(e) ? stages.cached() : {} });
+      post({ t: 'error', id, name: e.name, message: e.message, inline: isInlineError(e), cached: isInlineError(e) ? stages.cached() : {}, memory: memory() });
     }
   };
 }

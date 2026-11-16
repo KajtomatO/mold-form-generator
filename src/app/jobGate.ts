@@ -1,5 +1,6 @@
 import type { Budgets, GateName } from './budgets';
 import type { Cached, ErrorMessage, Fault, FromWorker, HeapMessage, ResultMessage, StageMessage, ToWorker, WorkerLike } from '../workers/protocol';
+import type { WorkerMemory } from './memory';
 
 /** The plan's bootstrap rule: a worker that has not said ready by then gets an inline error. */
 export const INIT_TIMEOUT_MS = 20_000;
@@ -57,6 +58,12 @@ export interface JobGateOptions<T extends GateTarget> {
   budgets: Budgets;
   now: () => number;
   timers: Timers;
+  /**
+   * The memory meter's word from this gate's worker (MM1): what it holds, from any message it sends that
+   * says, and null once it is terminated, by a respawn, a recycle, an overrun or dispose, as its memory goes
+   * with it. A fresh worker says again when it is ready.
+   */
+  onMemory?: (memory: WorkerMemory | null) => void;
 }
 
 interface Running<T> {
@@ -147,6 +154,16 @@ export class JobGate<T extends GateTarget> {
   dispose(): void {
     this.clearTimers();
     this.worker.terminate();
+    this.tellMemory(null);
+  }
+
+  /** The memory meter's word, which may never stop the gate: a meter that fails reads stale, not the jobs. */
+  private tellMemory(memory: WorkerMemory | null): void {
+    try {
+      this.options.onMemory?.(memory);
+    } catch {
+      // The figure is lost; the next message brings another.
+    }
   }
 
   private start(): WorkerLike {
@@ -185,6 +202,7 @@ export class JobGate<T extends GateTarget> {
     this.worker.onmessage = null;
     this.worker.onerror = null;
     this.worker.terminate();
+    this.tellMemory(null);
     this.recyclePending = false;
     this.worker = this.start();
     this.log('respawned', -1, undefined, reason);
@@ -250,6 +268,8 @@ export class JobGate<T extends GateTarget> {
 
   private receive(worker: WorkerLike, message: FromWorker): void {
     if (worker !== this.worker) return;
+    // Whatever the message, and whichever job it answers: it is what this worker holds now.
+    if ('memory' in message && message.memory) this.tellMemory(message.memory);
     if (message.t === 'ready') {
       // Late, perhaps, but it can work after all.
       this.ready = true;

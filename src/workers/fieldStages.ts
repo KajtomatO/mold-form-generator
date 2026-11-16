@@ -237,6 +237,11 @@ export class FieldStages {
     return out;
   }
 
+  /** What the stages keep between jobs, for the memory meter, which counts the arrays in them (MM1). */
+  heldArrays(): unknown[] {
+    return [this.s1, this.s2, this.s3, this.s4, this.s5, this.s6, this.s10, this.s7, this.groups];
+  }
+
   /** Drops everything, as loading another file does: the old model's arrays are the biggest thing here. */
   clear(): void {
     this.s1 = this.s2 = this.s3 = this.s4 = this.s5 = this.s6 = this.s10 = this.s7 = null;

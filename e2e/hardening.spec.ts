@@ -6,6 +6,7 @@ import { unzipSync } from 'fflate';
 import { buildBaseBody } from '../src/core/parts/base';
 import type { Rim } from '../src/core/parts/rim';
 import { withArena } from '../src/core/solid/arena';
+import { MEMORY_WARN_BYTES } from '../src/app/memory';
 import { formatCount } from '../src/ui/format';
 import type { ExportReport } from '../src/workers/exportJob';
 import { heightBlockSoup, heightBlockStl, heightBlockTriangles, HEAVY_BLOCK } from '../test/fixtures/heavy';
@@ -14,7 +15,7 @@ import { readPart } from '../test/fixtures/solidChecks';
 import { asciiStl, box, L_POCKET, patchedL, spikedBlock, toSoup, withoutTriangles } from '../test/fixtures/synthetic';
 import { app, canDraw, dropAndWait, hooks, idle, openApp, type PageWatch } from './appHarness';
 import { firefoxHasDisplay, firefoxReady, NO_FIREFOX_WEBGL } from './firefox';
-import { sampleMemory } from './memory';
+import { sampleMemory, treeMemory, type MemorySample } from './memory';
 
 /** M11a in the browser: files the app cannot read, an open mesh in soup mode, and with CFG_SOAK=1 3 million triangles. */
 const SOAK = process.env.CFG_SOAK === '1';
@@ -209,6 +210,38 @@ test.describe('hardening on index.html', () => {
 /** The plan's 3 GB, as 3e9 bytes, in the MiB /proc's figures are summed in: 2,861 MiB. 3 GiB would be 3,072. */
 const PLAN_LIMIT_MIB = 3e9 / 2 ** 20;
 
+/** The memory meter's reading at each change, by the page's clock, which is the system's (MM1): its total and the export's share. */
+type MeterLog = [number, number, number][];
+
+/**
+ * The export's own window: from its worker's first figure to the reading that dropped it. Before that the
+ * preview's solid worker, whose heap a merged preview has grown, may still stand, as the export recycles it
+ * only as it starts, so the export phase's first samples are not the export's.
+ */
+function exportWindow(log: MeterLog): [number, number] {
+  const start = log.findIndex(([, , exporting]) => exporting > 0);
+  if (start < 0) throw new Error('the export never said what it holds');
+  const end = log.findIndex(([, , exporting], k) => k > start && exporting === 0);
+  return [log[start][0], end < 0 ? Infinity : log[end][0]];
+}
+
+/** What the meter showed at a moment: its last reading at or before it. */
+function meterAt(log: MeterLog, at: number): number {
+  let shown = 0;
+  for (const [when, bytes] of log) {
+    if (when > at) break;
+    shown = bytes;
+  }
+  return shown;
+}
+
+/**
+ * Firefox's main process, which holds the chosen file and draws the page, and which the page cannot see into.
+ * Chromium names every process of its tree "chrome", so its main process is not told apart here.
+ */
+const FIREFOX_MAIN = /^(firefox|firefox-bin)$/;
+const parentPss = (sample: { each: [string, number, number][] }): number => sample.each.filter(([name]) => FIREFOX_MAIN.test(name)).reduce((sum, [, , pss]) => sum + pss, 0);
+
 test.describe('3 million triangles', () => {
   test.skip(!SOAK, 'runs with CFG_SOAK=1');
   let watch: PageWatch;
@@ -218,7 +251,7 @@ test.describe('3 million triangles', () => {
     watch = await openApp(page);
   });
 
-  test('@soak a 150 MB STL imports, previews in glue and merged mode, exports and cuts, with the browser under 3 GB', async ({ page }, info) => {
+  test('@soak a 150 MB STL imports, previews in glue and merged mode, exports and cuts, with the browser under 3 GB and the memory meter at or under it at every sample, amber once the preview stands', async ({ page }, info) => {
     test.setTimeout(1_800_000);
     const path = join(tmpdir(), `cfg-heavy-${info.project.name}-${process.pid}.stl`);
     const times: Record<string, number> = {};
@@ -228,6 +261,16 @@ test.describe('3 million triangles', () => {
       t0 = Date.now();
     };
     await writeFile(path, heightBlockStl());
+    // MM1: every reading of the memory meter, by the page's clock, from before the file is chosen.
+    await app(page, (a) => {
+      const log: [number, number, number][] = [];
+      (window as unknown as { __meter: [number, number, number][] }).__meter = log;
+      a.store.memory.subscribe((reading) => log.push([Date.now(), reading.total, reading.parts.export ? reading.parts.export.wasm + reading.parts.export.arrays : 0]));
+    });
+    // The empty app once all three workers have said ready, which the meter's parts show.
+    await expect.poll(() => app(page, (a) => Object.keys(a.store.memory.value.parts).sort().join()), { timeout: 60_000 }).toBe('field,page,reports,solid');
+    await page.waitForTimeout(1_000);
+    const empty = treeMemory();
     // Past 500 MB more swap the browser is closed, which ends the test with that reason.
     const memory = sampleMemory(200, { mb: 500, then: () => void page.context().close() });
     try {
@@ -249,6 +292,16 @@ test.describe('3 million triangles', () => {
       expect(shown.proxy!).toBeLessThanOrEqual(300_000);
       // The copy the view draws is said, with how far it was simplified.
       await expect(page.locator('[data-testid="diagnostics"] [data-code="display-proxy"]')).toContainText(`The view draws this model simplified to ${formatCount(shown.proxy!)} of its 3,011,040 triangles`);
+      // MM1: the meter is amber with the preview standing, and a reading costs main little, timed over 20
+      // as Firefox's clock steps in whole milliseconds.
+      await expect(page.getByTestId('status-memory')).toHaveClass(/\bwarn\b/, { timeout: 5_000 });
+      const preview = await app(page, (a) => {
+        const at = performance.now();
+        for (let k = 0; k < 20; k++) a.store.measureMemory();
+        return { tickMs: (performance.now() - at) / 20, reading: a.store.memory.value };
+      });
+      expect(preview.reading.total).toBeGreaterThanOrEqual(MEMORY_WARN_BYTES);
+      expect(preview.tickMs, 'one reading of the meter on main, in ms').toBeLessThan(2);
 
       // Merged mode unions a copy simplified to a million triangles, and says by how much under Mode.
       memory.phase('merged');
@@ -291,6 +344,27 @@ test.describe('3 million triangles', () => {
 
       const peak = memory.stop();
       console.log(`3M triangles in ${info.project.name}: ms ${JSON.stringify(times)}; merged copy's error ${mm} mm; export total ${Math.round(report.timings.total)} ms, ZIP ${(saved.bytes.length / 1e6).toFixed(1)} MB; browser tree peak RSS ${peak.rssMb.toFixed(0)} MiB (${peak.phase}, ${peak.processes} processes: ${JSON.stringify(peak.each)}), PSS ${peak.pssMb.toFixed(0)} MiB, by phase ${JSON.stringify(peak.phases)}, swap +${peak.swapGrowthMb.toFixed(0)} MiB, ${peak.samples} samples`);
+
+      // MM1: the meter counts only what the app holds, so it never reads more than the browser's PSS, and the
+      // rest is the browser's own: its empty app, and in Firefox the main process, which holds the file.
+      const log = await page.evaluate(() => (window as unknown as { __meter: [number, number, number][] }).__meter);
+      const samples = memory.samples();
+      const paired = samples.map((sample: MemorySample) => ({ ...sample, meter: meterAt(log, sample.at), pss: sample.pssMb * 2 ** 20 }));
+      // The export's own peak, inside its window, and the meter's share of what the browser grew by since the empty app.
+      const [from, to] = exportWindow(log);
+      const exportPeak = paired.filter((sample) => sample.phase === 'export' && sample.at >= from && sample.at <= to).reduce((a, b) => (b.pss > a.pss ? b : a));
+      const grown = exportPeak.pss - empty.pssMb * 2 ** 20;
+      const share = exportPeak.meter / grown;
+      // Firefox's main process holds the file, which no page can see: the share of the rest of the growth too.
+      const parentAtPeak = (parentPss(exportPeak) - parentPss(empty)) * 2 ** 20;
+      const shareOutside = parentPss(empty) > 0 ? exportPeak.meter / (grown - parentAtPeak) : share;
+      const meterPeak = paired.reduce((a, b) => (b.meter > a.meter ? b : a));
+      const parentGrowth = Math.max(...samples.map(parentPss)) - parentPss(empty);
+      const widest = paired.reduce((a, b) => (b.pss - b.meter > a.pss - a.meter ? b : a));
+      await writeFile(info.outputPath('memory-samples.json'), JSON.stringify({ empty, preview, log, exportWindow: [from, to], samples: paired.map(({ each, ...rest }) => ({ ...rest, parent: parentPss({ each }) })) }));
+      console.log(`MM1 meter in ${info.project.name}: empty app PSS ${empty.pssMb.toFixed(0)} MiB (${JSON.stringify(empty.each)}); preview ${(preview.reading.total / 1e9).toFixed(2)} GB, ${preview.tickMs.toFixed(2)} ms a reading; meter peak ${(meterPeak.meter / 1e9).toFixed(2)} GB in ${meterPeak.phase} against PSS ${meterPeak.pssMb.toFixed(0)} MiB; at the export's own PSS peak ${exportPeak.pssMb.toFixed(0)} MiB, ${((exportPeak.at - from) / 1000).toFixed(1)} s after its worker's first figure, the meter read ${(exportPeak.meter / 1e9).toFixed(2)} GB, ${(share * 100).toFixed(0)}% of PSS less the empty app${parentPss(empty) > 0 ? ` and ${(shareOutside * 100).toFixed(0)}% of that less the growth of Firefox's main process (${(parentAtPeak / 2 ** 20).toFixed(0)} MiB there); Firefox's main process grew by ${parentGrowth} MiB PSS at most` : ''}; the widest gap ${((widest.pss - widest.meter) / 1e9).toFixed(2)} GB in ${widest.phase}, the narrowest ${(Math.min(...paired.map((sample) => sample.pss - sample.meter)) / 2 ** 20).toFixed(0)} MiB; ${log.length} readings, ${paired.length} samples, written to ${info.outputPath('memory-samples.json')}`);
+      expect(log.length).toBeGreaterThan(10);
+      expect(paired.filter((sample) => sample.meter > sample.pss).map(({ at, phase, meter, pssMb }) => ({ at, phase, meter, pssMb })), 'samples where the meter read more than PSS').toEqual([]);
       expect(peak.swapGrowthMb, 'swap grew past what the server can spare').toBeLessThan(500);
       // The browser's tree was found and read whole, or the sums below would pass on nothing.
       expect(peak.fewestProcesses).toBeGreaterThanOrEqual(3);

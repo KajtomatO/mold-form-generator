@@ -396,6 +396,28 @@ export class PreviewScene {
     this.requestRender();
   }
 
+  /**
+   * The arrays the view holds, for the memory meter (MM1): every geometry in the scene, those the section
+   * keeps for its count, the height field's and the picker's tree. Most of the model's and the parts' are
+   * the pipeline's own arrays, which the meter counts once. What the graphics card holds is not here.
+   */
+  heldArrays(): unknown[] {
+    const roots: unknown[] = [];
+    const add = (geometry: THREE.BufferGeometry | null | undefined): void => {
+      if (!geometry) return;
+      for (const attribute of Object.values(geometry.attributes)) roots.push(attribute.array);
+      if (geometry.index) roots.push(geometry.index.array);
+    };
+    this.scene.traverse((object) => {
+      add((object as THREE.Mesh).geometry);
+      const instanced = object as THREE.InstancedMesh;
+      if (instanced.isInstancedMesh) roots.push(instanced.instanceMatrix.array);
+    });
+    for (const geometry of [this.countedModel?.geometry, this.exteriorModel?.geometry, this.sealedAir?.geometry, this.joined?.whole, this.joined?.outer]) add(geometry);
+    roots.push(...this.heights.heldArrays(), ...this.picker.heldArrays());
+    return roots;
+  }
+
   /** How many triangles each highlight shows, for tests. */
   highlightCounts(): number[] {
     return this.highlights.children.map((child) => ((child as THREE.Mesh).geometry.index?.count ?? 0) / 3);

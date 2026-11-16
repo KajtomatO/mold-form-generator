@@ -148,6 +148,11 @@ export class HeightPreview {
     });
   }
 
+  /** The field drawn and its texture's data, for the memory meter (MM1); the grid's own arrays are in its geometry. */
+  heldArrays(): unknown[] {
+    return [this.field?.values, this.texture?.image.data];
+  }
+
   /** The rectangle the lattice spans in mm, which the section closes from below at z = 0. */
   span(): { x0: number; y0: number; x1: number; y1: number } | null {
     const f = this.field;

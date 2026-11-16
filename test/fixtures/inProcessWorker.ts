@@ -1,9 +1,9 @@
 import Module, { type ManifoldToplevel } from 'manifold-3d';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import type { HeavyLimits } from '../../src/core/mesh/simplify';
-import { fieldHost, type Post } from '../../src/workers/fieldHost';
+import { FIELD_READY_MEMORY, fieldHost, type Post } from '../../src/workers/fieldHost';
 import type { FromWorker, ToWorker, WorkerLike } from '../../src/workers/protocol';
-import { solidHost } from '../../src/workers/solidHost';
+import { solidHost, solidMemory } from '../../src/workers/solidHost';
 import { runProjectJob, type ProjectJob } from '../../src/workers/projectJob';
 
 /**
@@ -69,7 +69,7 @@ const now = (): number => performance.now();
 export function inProcessField(): WorkerLike {
   return new InProcessWorker(async (post) => {
     const handle = fieldHost(post, now);
-    post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: null });
+    post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: null, memory: FIELD_READY_MEMORY });
     return handle;
   });
 }
@@ -91,9 +91,9 @@ export function inProcessSolid(limits?: HeavyLimits): WorkerLike {
     } as unknown as Parameters<typeof Module>[0]);
     api.setup();
     await MeshoptSimplifier.ready;
-    const heapBytes = (): number | null => (memory ? memory.buffer.byteLength : null);
-    const handle = solidHost(api, MeshoptSimplifier, heapBytes, post, now, limits);
-    post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: heapBytes() });
+    const heap = (): ArrayBuffer | null => (memory ? memory.buffer : null);
+    const handle = solidHost(api, MeshoptSimplifier, heap, post, now, limits);
+    post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: heap()?.byteLength ?? null, memory: solidMemory(heap(), []) });
     return handle;
   });
 }

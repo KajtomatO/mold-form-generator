@@ -36,6 +36,9 @@ try {
   scene = null;
 }
 render(<App store={store} scene={scene} canvas={scene ? canvas : null} />, document.getElementById('app')!);
+// MM1: the memory meter counts the view's arrays with main's, and reads nothing while the tab is hidden.
+store.setViewRoots(() => scene?.heldArrays() ?? []);
+store.startMemoryMeter({ hidden: () => document.hidden, onVisibility: (listener) => document.addEventListener('visibilitychange', listener) });
 
 if (test) {
   const noView = (): never => {

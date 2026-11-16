@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ADAPT_AFTER, Budgets, MAX_TUNE_SCALE } from '../../src/app/budgets';
 import { INIT_TIMEOUT_MS, JobGate, type GateEvent, type GateTarget, type LogEntry, type Timers } from '../../src/app/jobGate';
+import { MemoryLedger, type WorkerMemory } from '../../src/app/memory';
 import type { FromWorker, ToWorker, WorkerLike } from '../../src/workers/protocol';
 
 /** Timers that move only when the test says, so the 20 s and 8 s rules take no time. */
@@ -52,12 +53,13 @@ interface T extends GateTarget {
   name: string;
 }
 
-function setup(budgets = new Budgets(true), early = 0) {
+function setup(budgets = new Budgets(true), early = 0, onMemory?: (memory: WorkerMemory | null) => void) {
   const clock = new ManualClock(early);
   const workers: FakeWorker[] = [];
   const events: GateEvent<T>[] = [];
   const log: LogEntry[] = [];
   const gate = new JobGate<T>({
+    onMemory,
     name: 'solid',
     spawn: () => {
       const worker = new FakeWorker();
@@ -272,6 +274,69 @@ describe('JobGate', () => {
     expect(workers[0].terminated).toBe(true);
     expect(log.filter((e) => e.event === 'respawned' && e.detail === 'recycled')).toHaveLength(1);
     expect(workers[1].received.map((m) => (m as unknown as { want: string[] }).want)).toEqual([['b']]);
+  });
+
+  it('MM1: passes on what its worker says it holds, and drops it when the worker is respawned, recycled, terminated or disposed', () => {
+    const ledger = new MemoryLedger();
+    const said: (WorkerMemory | null)[] = [];
+    const { gate, target, worker, workers, last, clock } = setup(new Budgets(true, { terminateFloorMs: 1_000 }), 0, (memory) => {
+      said.push(memory);
+      if (memory) ledger.report('solid', memory);
+      else ledger.drop('solid');
+    });
+    const heap = (mb: number): WorkerMemory => ({ wasm: mb * 1e6, arrays: 1e6 });
+    worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0, memory: heap(16) });
+    expect(ledger.total()).toBe(17e6);
+    // A result for a job no longer running still says what the worker holds now.
+    gate.request(target('a', 1));
+    worker().reply({ ...result(last().id), memory: heap(600) } as FromWorker);
+    worker().reply({ ...result(999), memory: heap(700) } as FromWorker);
+    expect(ledger.total()).toBe(701e6);
+    // A recycle between jobs: the old heap is gone before the fresh worker says anything.
+    const oldHandler = workers[0].onmessage!;
+    gate.recycle();
+    expect(workers[0].terminated).toBe(true);
+    expect(ledger.parts()).toEqual({});
+    // A late message from the old worker, already on its way to the handler it had, is not counted.
+    oldHandler({ data: { ...result(1), memory: heap(900) } as FromWorker });
+    expect(ledger.total()).toBe(0);
+    worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0, memory: heap(16) });
+    expect(ledger.total()).toBe(17e6);
+    // A crash respawns it.
+    gate.request(target('b', 2));
+    worker().reply({ t: 'progress', id: last().id, step: 'x', done: 0, total: 1, memory: heap(800) });
+    expect(ledger.total()).toBe(801e6);
+    worker().reply({ t: 'error', id: last().id, name: 'RuntimeError', message: 'memory access out of bounds', inline: false, cached: {} });
+    expect(workers).toHaveLength(3);
+    expect(ledger.total()).toBe(0);
+    // An overrun ended for a newer request.
+    worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0, memory: heap(16) });
+    gate.request(target('c', 3));
+    worker().reply({ t: 'stage', id: last().id, outputs: {}, memory: heap(500) });
+    expect(ledger.total()).toBe(501e6);
+    clock.advance(1_100);
+    gate.request(target('d', 4));
+    expect(workers).toHaveLength(4);
+    expect(ledger.total()).toBe(0);
+    worker().reply({ t: 'miss', id: last().id, stage: 'S11', cached: {}, memory: heap(20) });
+    expect(ledger.total()).toBe(21e6);
+    gate.dispose();
+    expect(ledger.total()).toBe(0);
+    expect(said.filter((m) => m === null)).toHaveLength(4);
+  });
+
+  it('MM1: a memory meter that throws never stops a job: the result still comes, and a respawn still happens', () => {
+    const { gate, target, worker, workers, events, last } = setup(new Budgets(true), 0, () => {
+      throw new Error('a meter that fails');
+    });
+    worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0, memory: { wasm: 16e6, arrays: 0 } });
+    gate.request(target('a', 1));
+    worker().reply({ ...result(last().id), memory: { wasm: 600e6, arrays: 0 } } as FromWorker);
+    expect(events.map((e) => e.kind)).toEqual(['result']);
+    gate.request(target('b', 2));
+    worker().reply({ t: 'error', id: last().id, name: 'RuntimeError', message: 'memory access out of bounds', inline: false, cached: {}, memory: { wasm: 700e6, arrays: 0 } });
+    expect(workers).toHaveLength(2);
+    expect(() => gate.dispose()).not.toThrow();
   });
 });
 

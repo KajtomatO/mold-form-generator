@@ -226,9 +226,13 @@ function unique(list: Diagnostic[]): Diagnostic[] {
  * the margin if it comes up short, and the files in their print poses. Nothing is kept, as the worker is
  * terminated when this returns. A cellScale above 1 is the retry after a crash. The single parts run
  * the same steps as the ZIP, so a part saved alone is the one the ZIP holds; only what nothing needs is
- * left out. The base needs the cover still, as a raise of the margin moves the rim of both.
+ * left out. The base needs the cover still, as a raise of the margin moves the rim of both. `holding` is
+ * given the largest things it builds as it goes, for the memory meter, which counts them at each step's
+ * progress (MM1): the oriented mesh from the import on, the export field once the field step ends, the build
+ * from the clearance on, and the files. A raise's build takes the first one's place there once it is done,
+ * so `holding` keeps nothing alive that the export itself has let go, and it changes nothing the export makes.
  */
-export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job: ExportJob, progress: ProgressReport, now: () => number, timings: Record<string, number> = {}, limits: HeavyLimits = HEAVY_LIMITS): ExportOutputs {
+export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job: ExportJob, progress: ProgressReport, now: () => number, timings: Record<string, number> = {}, limits: HeavyLimits = HEAVY_LIMITS, holding: unknown[] = []): ExportOutputs {
   const steps = exportSteps(job);
   // After a raise of the margin the build runs again. Its steps show as one, 'raise', where the clearance
   // stands, so the stage bar never runs backwards. A step is reported once, when it begins.
@@ -279,6 +283,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         return found;
       });
     const mesh: WeldedMesh = { positions: transformPositions(imported.mesh.positions, inputs.transform), indices: imported.mesh.indices };
+    holding.push(mesh);
     const bounds = meshBounds(mesh.positions);
     // Past G1.8's limit, what only the whole solid can tell is read before the copy is made, so the whole
     // solid is freed before the build: the model's volume, and a trimmed model_oriented.stl, which otherwise
@@ -322,6 +327,8 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     // The coarser cell widens the margin of G4, and with it the cavity and the box, past what the preview showed.
     if (cellScale !== 1) diagnostics.push({ code: 'export-coarser', severity: 'warning', message: `The geometry engine failed at full detail, so the export was built again at half the detail, on a ${scaled.quality.cellFinal} mm grid instead of ${params.quality.cellFinal} mm, with a wider safety margin and a larger box than the preview shows.` });
 
+    // The build the export stands on, in one place: the field as soon as it is built, then the whole build.
+    const slot = holding.push(null) - 1;
     const build = (margin: number): Built => {
       const raised: Params = { ...scaled, silicone: { ...scaled.silicone, printMargin: margin } };
       const own: Diagnostic[] = [];
@@ -340,6 +347,8 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         }
         return { field: built.field, plan, settings, rim, space, offsets: mold.offsets, copies: replicateOpenings(inputs.openings, space) };
       });
+      // In a raise the first build stands until this one is done, so both count until then.
+      holding[slot] = raising ? [holding[slot], shaped] : shaped;
       const { rim, offsets, copies } = shaped;
       const tool = timed('tool', () => {
         const toolMesh = buildToolMesh(shaped.field, { raise: raised.quality.tinTolFinal, tol: raised.quality.tinTolFinal, clip: rim.D });
@@ -367,6 +376,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     };
 
     let built = build(printMargin);
+    holding[slot] = built;
     let clearance: Clearance | null = null;
     const search = Math.max(8, scaled.silicone.t + SEARCH_PAST_T);
     // Decimating a heavy model is part of measuring it, so it shows as that step.
@@ -382,6 +392,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         raisedBy = scaled.silicone.t - measured + RAISE_EXTRA;
         raising = true;
         built = build(printMargin + raisedBy);
+        holding[slot] = built;
         raising = false;
         measured = gapOf(built);
         diagnostics.push({ code: 'margin-raised', severity: 'warning', message: `The silicone measured thinner than ${scaled.silicone.t} mm in places, so the safety margin was raised by ${raisedBy.toFixed(2)} mm and the mold built again, a little larger than the preview shows.` });
@@ -402,6 +413,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       if (want === 'zip' && scaled.base.mode === 'glue') out['model_oriented.stl'] = trimmedStl ?? modelOrientedStl({ mesh, needsTrim: inputs.needsTrim } as OrientedModel, model);
       return out;
     });
+    holding.push(files, trimmedStl);
     if (want !== 'zip') return { want, files, zip: new Uint8Array(), clearance, rim: built.rim, diagnostics, report: null, modelSha256: meta.modelSha256 };
 
     if (job.fitTest) Object.assign(files, timed('fit-test', () => fitTestFiles(api, params)));

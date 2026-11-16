@@ -9,7 +9,8 @@ import { defaultParams } from '../src/core/params/defaults';
 import { PARAM_SCHEMA, type ParamDef } from '../src/core/params/schema';
 import { deriveRim, moldBounds, type Rim } from '../src/core/parts/rim';
 import { parseStl } from '../src/core/stl/parse';
-import { formatCount, formatNumber, formatSize } from '../src/ui/format';
+import { MEMORY_WARN_BYTES } from '../src/app/memory';
+import { formatCount, formatMemory, formatNumber, formatSize, memoryText, memoryTitle, MEMORY_LABELS, MEMORY_NOT_COUNTED } from '../src/ui/format';
 import { sliderRange, stepOf } from '../src/ui/layout';
 import { coplanarTriangles } from '../src/view/picking';
 import { orientedExample } from '../test/fixtures/fieldRuns';
@@ -47,6 +48,27 @@ function allChanged(): [string, unknown][] {
 async function settledLayout(page: Page, watch: PageWatch): Promise<void> {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await checkLayout(page, watch);
+}
+
+/**
+ * MM1: the memory meter shows, on one line, on the line of the view's toggles (its box's middle within 2 px
+ * of the Wireframe label's), and inside the strip, before the controls hint.
+ */
+async function checkMeter(page: Page): Promise<void> {
+  // Its figure, once a worker has said what it holds; an ellipsis until then.
+  await expect(page.getByTestId('status-memory')).toHaveText(/^App memory \d+(\.\d)? (MB|GB)$/);
+  const m = await page.evaluate(() => {
+    const box = (selector: string): DOMRect => document.querySelector(selector)!.getBoundingClientRect();
+    const meter = box('[data-testid="status-memory"]'), wire = document.querySelector('[data-testid="wireframe"]')!.closest('label')!.getBoundingClientRect();
+    const status = box('[data-testid="status"]'), hint = box('.status .hint');
+    const lineHeight = parseFloat(getComputedStyle(document.querySelector('[data-testid="status-memory"]')!).lineHeight) || 16;
+    return { middle: meter.top + meter.height / 2 - (wire.top + wire.height / 2), height: meter.height, lineHeight, inside: meter.left >= status.left && meter.right <= status.right, beforeHint: meter.right <= hint.left || meter.top < hint.top - 1 || hint.top > meter.bottom, text: document.querySelector('[data-testid="status-memory"]')!.textContent };
+  });
+  expect(m.text).toMatch(/^App memory \d+(\.\d)? (MB|GB)$/);
+  expect(Math.abs(m.middle), 'the meter on the toggles\' line').toBeLessThanOrEqual(2);
+  expect(m.height, 'the meter on one line').toBeLessThan(m.lineHeight * 1.5);
+  expect(m.inside).toBe(true);
+  expect(m.beforeHint).toBe(true);
 }
 const numberBox = (page: Page, path: string): Locator => row(page, path).locator('input.num');
 
@@ -122,6 +144,7 @@ test.describe('the app on index.html', () => {
     for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
       await page.setViewportSize(size);
       await checkLayout(page, watch);
+      await checkMeter(page);
     }
     // CS: every setting changed, with the bolts on and Advanced open, so every row has its arrow and coloured
     // name; then Reset in the header puts a dot back in every row. Both fit at both sizes, empty and loaded.
@@ -156,6 +179,7 @@ test.describe('the app on index.html', () => {
     for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
       await page.setViewportSize(size);
       await checkLayout(page, watch);
+      await checkMeter(page);
       // Advanced open, where the longest labels are.
       await page.locator('.advanced > summary').click();
       await checkLayout(page, watch);
@@ -178,6 +202,101 @@ test.describe('the app on index.html', () => {
     expect(notices.headers()['content-type']).toMatch(/^text\/plain/);
     // Byte for byte: the file is plain ASCII, which the licence test holds, so no charset can misread it.
     expect(Buffer.compare(await notices.body(), readFileSync(join(import.meta.dirname, '..', 'public', 'third-party-notices.txt')))).toBe(0);
+  });
+
+  test('@smoke the memory meter shows what the app holds, grows with the model, counts an export while it runs and drops it when it ends', async ({ page }) => {
+    test.setTimeout(240_000);
+    /** The store's reading with what the strip shows, in one go, once the strip has drawn it. */
+    const shown = async () => {
+      let last: { reading: { total: number; parts: Record<string, { wasm: number; arrays: number }> }; text: string; title: string; warn: boolean } | null = null;
+      await expect
+        .poll(async () => {
+          last = await app(page, (a) => {
+            const el = document.querySelector('[data-testid="status-memory"]')!;
+            return { reading: a.store.memory.value as never, text: el.textContent!, title: el.getAttribute('title')!, warn: el.classList.contains('warn') };
+          });
+          return last.text === memoryText(last.reading) && last.title === memoryTitle(last.reading);
+        })
+        .toBe(true);
+      return last!;
+    };
+    // The page's share and each of the three workers', once they are ready.
+    await expect.poll(() => app(page, (a) => Object.keys(a.store.memory.value.parts).join())).toBe('page,field,solid,reports');
+    const empty = await shown();
+    expect(empty.text).toBe(`App memory ${formatMemory(empty.reading.total)}`);
+    expect(empty.warn).toBe(false);
+    expect(empty.reading.parts.solid.wasm).toBeGreaterThan(0);
+    // The total, the parts that hold something, the export's word, and what is not counted.
+    const lines = empty.title.split('\n');
+    expect(lines[0]).toBe(`Memory this app holds: ${formatMemory(empty.reading.total, true)}`);
+    expect(lines).toContain(`  Geometry engine: ${formatMemory(empty.reading.parts.solid.wasm + empty.reading.parts.solid.arrays, true)}`);
+    expect(lines.at(-2)).toBe('  Export: not running');
+    expect(lines.at(-1)).toBe(MEMORY_NOT_COUNTED);
+
+    // Benchy: the page holds its file and meshes, and the preview's worker its own copy, each counted.
+    await dropAndWait(page, EXAMPLE_FILES.benchy);
+    const welded = await app(page, (a) => a.store.pipeline.parsed!.value.welded.positions.byteLength + a.store.pipeline.parsed!.value.welded.indices.byteLength);
+    await expect.poll(async () => (await shown()).reading.parts.page.arrays).toBeGreaterThanOrEqual(exampleBytes('benchy').byteLength + welded);
+    const loaded = await shown();
+    expect(loaded.reading.total).toBeGreaterThan(empty.reading.total + exampleBytes('benchy').byteLength);
+    expect(loaded.reading.parts.field.arrays).toBeGreaterThanOrEqual(welded);
+    // Each part that holds something, by name; the reports' worker keeps plain objects alone, which are not counted.
+    expect(loaded.title.split('\n').slice(1, -1)).toEqual([...(['page', 'field', 'solid'] as const).map((part) => `  ${MEMORY_LABELS[part]}: ${formatMemory(loaded.reading.parts[part].wasm + loaded.reading.parts[part].arrays, true)}`), '  Export: not running']);
+    expect(loaded.reading.total).toBeLessThan(MEMORY_WARN_BYTES);
+    expect(loaded.warn).toBe(false);
+    // The view's arrays count with main's, in one walk: the page hands the scene's over, the view's own add
+    // to the page's share, and the pipeline's arrays the view also holds count once.
+    const view = await app(page, (a) => {
+      a.store.measureMemory();
+      const wired = a.store.memory.value.parts.page!.arrays;
+      const share = (roots: () => unknown[]): number => {
+        a.store.setViewRoots(roots);
+        a.store.measureMemory();
+        return a.store.memory.value.parts.page!.arrays;
+      };
+      const counts = { wired, full: share(() => a.scene.heldArrays()), none: share(() => []), twice: share(() => [...a.store.pipeline.heldArrays(), ...a.scene.heldArrays()]) };
+      share(() => a.scene.heldArrays());
+      return counts;
+    });
+    expect(view.wired).toBe(view.full);
+    expect(view.none).toBeLessThan(view.full);
+    expect(view.twice).toBe(view.full);
+
+    // A smaller model, whose export is quick: what Benchy needed goes with it.
+    await dropAndWait(page, EXAMPLE_FILES.jersey);
+    await expect.poll(async () => (await shown()).reading.parts.page.arrays).toBeLessThan(loaded.reading.parts.page.arrays - exampleBytes('benchy').byteLength);
+    const jersey = await shown();
+    const inputs = await app(page, (a) => a.store.pipeline.parsed!.value.welded.positions.byteLength + a.store.pipeline.parsed!.value.welded.indices.byteLength);
+
+    // An export held at a step: its worker's heap, its inputs and what it has built show while it runs, and
+    // go the moment Cancel ends it. Its first word, as it says ready, has its heap alone, so the poll waits
+    // for the step's own.
+    await hooks(page, (h) => h.armFault('export', { kind: 'delay', ms: 120_000, at: 'clearance' }));
+    await page.getByTestId('export-zip').click();
+    await expect(page.getByTestId('stage-bar')).toHaveAttribute('data-step', 'clearance');
+    await expect.poll(async () => (await shown()).reading.parts.export?.arrays ?? 0).toBeGreaterThan(inputs);
+    const exporting = await shown();
+    expect(exporting.reading.parts.export.wasm).toBeGreaterThan(0);
+    expect(exporting.title).toContain(`  Export: ${formatMemory(exporting.reading.parts.export.wasm + exporting.reading.parts.export.arrays, true)}`);
+    // Cancel takes no click in the stage bar's first moments, which would be a double-click's second: the
+    // bar stood before its step said clearance, so half a second from here is past that.
+    await page.waitForTimeout(500);
+    await page.getByTestId('export-cancel').click();
+    await expect(page.getByTestId('export-outcome')).toHaveText('Export cancelled. Nothing was saved.');
+    const cancelled = await shown();
+    expect(cancelled.reading.parts.export).toBeUndefined();
+    expect(cancelled.title).toContain('  Export: not running');
+
+    // One that ends with its files: its share goes, and main now keeps the files, for the single parts.
+    const download = page.waitForEvent('download');
+    await page.getByTestId('export-zip').click();
+    await download;
+    await expect(page.getByTestId('stage-bar')).toHaveCount(0);
+    const files = await app(page, (a) => Object.values(a.store.pipeline.currentExport()!.files).reduce((sum, bytes) => sum + bytes.byteLength, 0));
+    await expect.poll(async () => (await shown()).reading.parts.page.arrays).toBeGreaterThanOrEqual(jersey.reading.parts.page.arrays + files);
+    const after = await shown();
+    expect(after.reading.parts.export).toBeUndefined();
+    expect(after.title).toContain('  Export: not running');
   });
 
   test('@smoke a dropped STL loads, its base is confirmed on the top candidate, and the status strip is what core gives in Node', async ({ page }) => {
@@ -948,10 +1067,49 @@ test.describe('all eight examples, dropped into the app', () => {
       await expect(page.locator('.candidate').first()).toHaveAttribute('aria-selected', 'true');
       expect(await app(page, (a) => a.store.pipeline.oriented!.value.chosen.normal)).toEqual([0, 0, -1]);
       expect(await hooks(page, (h) => h.geometryHash())).toEqual(node.hash);
+      // MM1: the memory meter on the toggles' line with each example's file name, at both sizes, once the
+      // diagnostics card has counted its rows again for the new size.
+      for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
+        await page.setViewportSize(size);
+        await settledLayout(page, watch);
+        await checkMeter(page);
+      }
       expect(watch.errors).toEqual([]);
       expect(watch.foreign).toEqual([]);
     });
   }
+
+  test('MM1: the largest example, doomedmarine, keeps the memory meter grey from opening through an export in merged mode with the fit test', async ({ page }, info) => {
+    test.skip(info.project.name === 'dev', 'the dev server serves the same code; preview and firefox cover it');
+    test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+    test.setTimeout(300_000);
+    const watch = await openApp(page);
+    // Every reading's total, and whether the item ever turned amber, from before the file is dropped.
+    await app(page, (a) => {
+      const w = window as unknown as { __meter: { peak: number; parts: unknown; amber: boolean } };
+      w.__meter = { peak: 0, parts: null, amber: false };
+      a.store.memory.subscribe((reading) => {
+        if (reading.total > w.__meter.peak) w.__meter = { ...w.__meter, peak: reading.total, parts: reading.parts };
+      });
+      const item = document.querySelector('[data-testid="status-memory"]')!;
+      new MutationObserver(() => (w.__meter.amber ||= item.classList.contains('warn'))).observe(item, { attributes: true, attributeFilter: ['class'] });
+    });
+    await dropAndWait(page, 'doomedmarine.stl');
+    await hooks(page, (h) => h.setParam('base.mode', 'merged'));
+    await idle(page);
+    await page.getByTestId('export-fit-option').check();
+    const saved = page.waitForEvent('download', { timeout: 240_000 });
+    await page.getByTestId('export-zip').click();
+    await saved;
+    await expect(page.getByTestId('stage-bar')).toHaveCount(0);
+    const meter = await page.evaluate(() => (window as unknown as { __meter: { peak: number; parts: Record<string, { wasm: number; arrays: number }>; amber: boolean } }).__meter);
+    console.log(`${info.project.name} doomedmarine in merged mode with the fit test: the meter's highest reading ${(meter.peak / 1e9).toFixed(3)} GB (${JSON.stringify(Object.fromEntries(Object.entries(meter.parts).map(([part, m]) => [part, Math.round((m.wasm + m.arrays) / 1e6)])))} MB)`);
+    // With the export's worker beside the preview's, the most an example reaches, under the warning figure.
+    expect(meter.parts.export, 'the peak came during the export').toBeDefined();
+    expect(meter.peak).toBeLessThan(MEMORY_WARN_BYTES);
+    expect(meter.amber).toBe(false);
+    expect(watch.errors).toEqual([]);
+  });
 
   test('x8 3 x 3: the export cell\'s wall check runs after the preview settles, and its time is recorded', async ({ page }, info) => {
     test.skip(info.project.name === 'dev', 'measures a worker, which runs the same on the dev server');

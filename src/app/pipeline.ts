@@ -23,6 +23,7 @@ import { Budgets } from './budgets';
 import { exportBlocked, siliconeAdvice } from './derived';
 import { hashFloats, hashMesh, hashString } from './hash';
 import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
+import { MemoryLedger, type MemorySource, type WorkerMemory } from './memory';
 import type { Project } from './project';
 import { stageKeys, type StageId, type StageInputs } from './stages';
 import { BUILD } from './buildInfo';
@@ -305,16 +306,22 @@ export class Pipeline {
   private wallJob: { key: string; worker: WorkerLike } | null = null;
   /** In ms, per wall check that finished, for the record. */
   readonly wallTimes: number[] = [];
+  /**
+   * The memory meter's figures from the workers (MM1): each gate's worker and an export's, while it lives.
+   * The store adds main's own, 'page', from heldArrays() and the view's.
+   */
+  readonly memory = new MemoryLedger();
 
   constructor(private readonly options: PipelineOptions) {
     this.now = options.now ?? (() => performance.now());
     this.timers = options.timers ?? realTimers;
     this.budgets = new Budgets(options.frozen ?? false);
     const common = { budgets: this.budgets, now: this.now, timers: this.timers, log: (entry: LogEntry) => keep(this.log, entry) };
-    this.fieldGate = new JobGate<FieldTarget>({ ...common, name: 'field', spawn: options.spawnField, derive: (t, c) => this.deriveField(t, c), onEvent: (e) => this.onField(e) });
-    this.solidGate = new JobGate<SolidTarget>({ ...common, name: 'solid', spawn: options.spawnSolid, derive: (t, c) => this.deriveSolid(t, c), onEvent: (e) => this.onSolid(e) });
+    const memory = (source: MemorySource) => (held: WorkerMemory | null): void => (held ? this.memory.report(source, held) : this.memory.drop(source));
+    this.fieldGate = new JobGate<FieldTarget>({ ...common, name: 'field', spawn: options.spawnField, derive: (t, c) => this.deriveField(t, c), onEvent: (e) => this.onField(e), onMemory: memory('field') });
+    this.solidGate = new JobGate<SolidTarget>({ ...common, name: 'solid', spawn: options.spawnSolid, derive: (t, c) => this.deriveSolid(t, c), onEvent: (e) => this.onSolid(e), onMemory: memory('solid') });
     this.reportsGate = options.reports
-      ? new JobGate<ReportsTarget>({ ...common, name: 'reports', spawn: options.spawnField, derive: (t, c) => this.deriveReports(t, c), onEvent: (e) => this.onReports(e) })
+      ? new JobGate<ReportsTarget>({ ...common, name: 'reports', spawn: options.spawnField, derive: (t, c) => this.deriveReports(t, c), onEvent: (e) => this.onReports(e), onMemory: memory('reports') })
       : null;
   }
 
@@ -619,6 +626,33 @@ export class Pipeline {
     return this.crashScale * this.tuneScale;
   }
 
+  /**
+   * Everything main keeps for the model, for the memory meter, which counts the arrays in them, each buffer
+   * once (MM1): the file, every result on screen, the import's mesh when it changed the file's and the rims
+   * of its holes, the wall check, and the last export's files, kept while its geometry is what shows. A
+   * job's own copies go to its worker by transfer, and leave main with them.
+   */
+  heldArrays(): unknown[] {
+    return [
+      this.file?.bytes,
+      this.importInput,
+      this.parsed?.value,
+      this.oriented?.value,
+      this.imported?.value,
+      this.displayProxy,
+      this.joined,
+      this.footprint?.value,
+      this.field?.value,
+      this.placement?.value,
+      this.cover?.value,
+      this.base?.value,
+      this.funnel?.value,
+      this.reports?.value,
+      this.walls?.value,
+      this.lastExport?.outputs,
+    ];
+  }
+
   /** What a fresh build needs to reach the same state from nothing. */
   snapshot(): PipelineSnapshot | null {
     if (!this.file) return null;
@@ -750,6 +784,12 @@ export class Pipeline {
     this.timers.clear(this.exportWorker.boot);
     this.exportWorker.worker.terminate();
     this.exportWorker = null;
+    // Its memory goes with it, whether it answered, failed or was cancelled.
+    try {
+      this.memory.drop('export');
+    } catch {
+      // A meter that failed reads stale; the export's end goes on.
+    }
   }
 
   /**
@@ -866,6 +906,15 @@ export class Pipeline {
         }, INIT_TIMEOUT_MS);
         this.exportWorker = { worker, boot };
         worker.onmessage = ({ data }: { data: FromWorker }) => {
+          // MM1: its heap, its inputs and what it has built, as it says ready and as each step begins, while it
+          // is the export's worker. The meter may never stop the export, so a failure there only loses the figure.
+          if ((data.t === 'ready' || data.t === 'progress') && data.memory && this.exportWorker?.worker === worker) {
+            try {
+              this.memory.report('export', data.memory);
+            } catch {
+              // The next step's figure stands in for it.
+            }
+          }
           if (data.t === 'ready') this.timers.clear(boot);
           else if (data.t === 'progress') {
             this.timers.clear(boot);

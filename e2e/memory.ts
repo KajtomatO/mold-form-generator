@@ -107,17 +107,31 @@ export interface MemoryPeak {
   phases: Record<string, [number, number]>;
 }
 
+/** One sample of the tree, by the system clock, which a page's Date.now() reads too (MM1). */
+export interface MemorySample {
+  at: number;
+  phase: string;
+  rssMb: number;
+  pssMb: number;
+  /** Each process's command name, RSS and PSS in MiB. */
+  each: [string, number, number][];
+}
+
 /**
- * Samples the tree every `everyMs` until stopped, keeping the peaks. `phase` names what the test is doing,
- * so the report says when the peak came. Sampling a few hundred /proc entries takes about a millisecond.
+ * Samples the tree every `everyMs` until stopped, keeping the peaks, and every sample for a test that holds
+ * something else to them, as MM1's memory meter. `phase` names what the test is doing, so the report says
+ * when the peak came. Sampling a few hundred /proc entries takes about a millisecond.
  */
-export function sampleMemory(everyMs = 200, swapLimit?: { mb: number; then: () => void }): { phase(name: string): void; peak(): MemoryPeak; stop(): MemoryPeak } {
+export function sampleMemory(everyMs = 200, swapLimit?: { mb: number; then: () => void }): { phase(name: string): void; peak(): MemoryPeak; stop(): MemoryPeak; samples(): MemorySample[] } {
   const swap0 = swapUsedMb();
   let phase = 'start';
   let stopped = false;
   const peak: MemoryPeak = { rssMb: 0, pssMb: 0, phase, processes: 0, each: [], fewestProcesses: Infinity, failedReads: 0, samples: 0, swapGrowthMb: 0, phases: {} };
+  const all: MemorySample[] = [];
   const sample = (): void => {
+    const at = Date.now();
     const now = treeMemory();
+    all.push({ at, phase, rssMb: now.rssMb, pssMb: now.pssMb, each: now.each });
     peak.samples++;
     peak.failedReads += now.failedReads;
     peak.fewestProcesses = Math.min(peak.fewestProcesses, now.processes);
@@ -140,6 +154,7 @@ export function sampleMemory(everyMs = 200, swapLimit?: { mb: number; then: () =
       phase = name;
     },
     peak: () => ({ ...peak, phases: { ...peak.phases } }),
+    samples: () => [...all],
     stop: () => {
       clearInterval(timer);
       sample();

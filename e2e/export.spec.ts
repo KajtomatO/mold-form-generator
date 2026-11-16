@@ -194,12 +194,12 @@ test.describe('the Export box on index.html', () => {
     await expect(page.getByTestId('status-clearance')).toHaveText('clearance ≥ 3.00 mm, planned');
 
     // Held for a moment only, so a worker that Cancel left running would finish within the wait below
-    // and answer. Cancel is clicked once its guard against a double-click's second click has passed.
+    // and answer. Cancel is clicked once its guard against a double-click's second click has passed: the
+    // guard runs from the stage bar's first showing, which comes before its step says clearance.
     await hooks(page, (h) => h.armFault('export', { kind: 'delay', ms: 1_500, at: 'clearance' }));
-    const clicked = Date.now();
     await page.getByTestId('export-zip').click();
     await expect(page.getByTestId('stage-bar')).toHaveAttribute('data-step', 'clearance');
-    await page.waitForTimeout(Math.max(0, 500 - (Date.now() - clicked)));
+    await page.waitForTimeout(500);
     await page.getByTestId('export-cancel').click();
     await expect(page.getByTestId('export-outcome')).toHaveText('Export cancelled. Nothing was saved.');
     const held = (await workers()).at(-1)!;

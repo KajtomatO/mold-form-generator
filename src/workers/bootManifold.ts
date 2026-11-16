@@ -7,6 +7,8 @@ export interface BootedManifold {
   api: Toplevel;
   /** Size of the WASM heap, or null if the glue hides the memory object. */
   heapBytes(): number | null;
+  /** The WASM heap's buffer as it stands, which growing the heap replaces, or null if the glue hides it. */
+  heap(): ArrayBuffer | null;
 }
 
 /**
@@ -41,5 +43,5 @@ export async function bootManifold(): Promise<BootedManifold> {
 
   const api = await Promise.race([Module(config as Parameters<typeof Module>[0]), failed]);
   api.setup();
-  return { api, heapBytes: () => (memory ? memory.buffer.byteLength : null) };
+  return { api, heapBytes: () => (memory ? memory.buffer.byteLength : null), heap: () => (memory ? memory.buffer : null) };
 }

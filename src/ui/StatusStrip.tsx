@@ -1,10 +1,24 @@
 import { modelSize, moldBox, previewSilicone } from '../app/derived';
+import { MEMORY_WARN_BYTES } from '../app/memory';
 import { useStore } from './context';
-import { formatCount, formatSize } from './format';
+import { formatCount, formatSize, memoryText, memoryTitle } from './format';
 
 /**
- * File, triangles, size, box, silicone, clearance and rebuild time, then the view toggles and how the
- * mouse moves the view. Section and Explode bring their controls up in the Parts card.
+ * MM1: the memory the app holds, read off the store's own signal alone, so a new reading draws this item
+ * and nothing else of the strip. Amber while it reads MEMORY_WARN_BYTES or more, with advice in its tooltip.
+ */
+function MemoryItem() {
+  const reading = useStore().memory.value;
+  return (
+    <span class={reading.total >= MEMORY_WARN_BYTES ? 'item memory warn' : 'item memory'} data-testid="status-memory" title={memoryTitle(reading)}>
+      {memoryText(reading)}
+    </span>
+  );
+}
+
+/**
+ * File, triangles, size, box, silicone, clearance and rebuild time, then the view toggles, the app's
+ * memory, and how the mouse moves the view. Section and Explode bring their controls up in the Parts card.
  */
 export function StatusStrip() {
   const store = useStore();
@@ -79,6 +93,7 @@ export function StatusStrip() {
           Explode
         </label>
       </span>
+      <MemoryItem />
       <span class="hint">Drag: turn · Right-drag: move · Wheel: zoom</span>
     </footer>
   );

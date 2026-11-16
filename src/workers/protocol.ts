@@ -6,10 +6,13 @@ import type { ExportJob, ExportOutputs } from './exportJob';
 import type { ReportsInputs, ReportsOutputs } from './reportStages';
 import type { WallCheck, WallInputs } from './wallCheck';
 import type { ProjectJob, ProjectReply } from './projectJob';
+import type { WorkerMemory } from '../app/memory';
 
 /**
  * Messages between main and the workers. Every job names the full key of each stage it touches, and
  * every reply says what the worker now holds, which is all main ever knows about a worker's cache.
+ * The replies a JobGate or an export reads also say how much memory the worker holds (`memory`), for the
+ * memory meter (MM1): it rides on messages the worker sends anyway, and nothing asks for it.
  */
 
 /**
@@ -45,7 +48,10 @@ export interface ExportJobMessage extends ExportJob {
   fault?: Fault;
 }
 
-/** Test-only: how much of the WASM heap is in use. */
+/**
+ * Test-only: how much of the WASM heap is in use. Each reading grows the heap a step, so the memory meter
+ * never asks for one: it reads `memory` off the messages the workers send anyway.
+ */
 export interface HeapProbeMessage {
   t: 'heap';
   id: number;
@@ -81,6 +87,7 @@ export interface ReadyMessage {
   bootMs: number;
   cached: Cached;
   heapBytes: number | null;
+  memory?: WorkerMemory;
 }
 
 /** Part of a job's outputs, sent ahead of the rest: the field, which T1 waits for, before placement runs. */
@@ -88,6 +95,7 @@ export interface StageMessage {
   t: 'stage';
   id: number;
   outputs: FieldOutputs;
+  memory?: WorkerMemory;
 }
 
 export interface ResultMessage<O = FieldOutputs | SolidOutputs | ReportsOutputs> {
@@ -98,6 +106,7 @@ export interface ResultMessage<O = FieldOutputs | SolidOutputs | ReportsOutputs>
   heapBytes: number | null;
   /** In ms, per stage that ran. */
   timings: Record<string, number>;
+  memory?: WorkerMemory;
 }
 
 export interface MissMessage {
@@ -105,6 +114,7 @@ export interface MissMessage {
   id: number;
   stage: StageId;
   cached: Cached;
+  memory?: WorkerMemory;
 }
 
 export interface ErrorMessage {
@@ -118,6 +128,7 @@ export interface ErrorMessage {
    */
   inline: boolean;
   cached: Cached;
+  memory?: WorkerMemory;
 }
 
 export interface ProgressMessage {
@@ -126,6 +137,7 @@ export interface ProgressMessage {
   step: string;
   done: number;
   total: number;
+  memory?: WorkerMemory;
 }
 
 export interface ExportResultMessage {

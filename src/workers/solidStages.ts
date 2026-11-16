@@ -152,6 +152,15 @@ export class SolidStages {
     return out;
   }
 
+  /**
+   * What it keeps between jobs outside the WebAssembly heap, for the memory meter (MM1): the import's mesh,
+   * its holes and its joined parts, and the footprint's mesh. The solids themselves are in the heap, which
+   * the meter counts whole; their handles are passed over.
+   */
+  heldArrays(): unknown[] {
+    return [this.model?.value.solid, this.model?.value.outcome, this.footprint];
+  }
+
   /** Live handles held between jobs: what a soak test watches besides the heap. */
   heldEntries(): number {
     return [this.model, this.tool, this.coverBody, this.baseBody, this.funnel, this.dragRest].filter(Boolean).length;

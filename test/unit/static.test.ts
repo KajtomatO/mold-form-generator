@@ -29,6 +29,10 @@ describe('source rules', () => {
       'serviceWorker',
       'showSaveFilePicker',
       'SharedArrayBuffer',
+      // MM1: the memory meter's sources are the app's own; these two need cross-origin isolation or a
+      // secure context, are Chromium's alone, and the first is rough besides (docs/REQUIREMENTS.md, D23).
+      'measureUserAgentSpecificMemory',
+      'deviceMemory',
     ];
     // The diagnostics page reports whether these exist, which is its job.
     const checked = all.filter((f) => !f.path.startsWith('src/diag/'));
@@ -37,6 +41,41 @@ describe('source rules', () => {
         expect(file.text.includes(word), `${file.path} uses ${word}`).toBe(false);
       }
     }
+  });
+
+  it('reads no memory figure the browser rounds or delays, and the memory meter never probes a heap', () => {
+    // MM1 (D23): Chromium's main-thread heap figure refreshes at most every 20 minutes and is rounded, and
+    // covers main alone; the heap probe grows the heap each time it reads it, and is for tests only.
+    // Outside the diagnostics page the code uses `performance` for its clock alone, so the figure cannot be
+    // read through a cast, a bracket or another name for `performance` either; nor by its fields' names.
+    const code = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+    const rounded = /\bperformance\b(?!\s*\.\s*now\b)|(used|total)JSHeapSize|jsHeapSizeLimit/;
+    const checked = all.filter((f) => !f.path.startsWith('src/diag/'));
+    for (const file of checked) expect(rounded.exec(code(file.text))?.[0] ?? null, `${file.path} reads Chromium's rounded heap figure, or uses performance for more than its clock`).toBeNull();
+    // The meter's own code: its files whole, and in the others, each method and closure that works out a figure.
+    const probe = /readSolidHeap|readHeap|usedHeap|t: 'heap'/;
+    const meter = all.filter((f) => ['src/app/memory.ts', 'src/app/store.ts', 'src/ui/StatusStrip.tsx', 'src/ui/format.ts', 'src/ui/main.tsx'].includes(f.path));
+    expect(meter).toHaveLength(5);
+    for (const file of meter) expect(probe.test(file.text), `${file.path} probes a heap`).toBe(false);
+    /** The body of the block that starts at the first `{` after `at`, braces matched. */
+    const block = (text: string, at: number): string => {
+      const open = text.indexOf('{', at);
+      let depth = 0;
+      for (let i = open; i < text.length; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}' && --depth === 0) return text.slice(open, i + 1);
+      }
+      throw new Error('unbalanced braces');
+    };
+    const bodies: string[] = [];
+    for (const file of all) {
+      for (const match of file.text.matchAll(/\bheldArrays\(\): unknown\[\] \{|\bexport function solidMemory\(/g)) bodies.push(`${file.path}: ${block(file.text, match.index)}`);
+      // The hosts' figures are one-line closures.
+      for (const match of file.text.matchAll(/\bconst memory = \(.*$/gm)) bodies.push(`${file.path}: ${match[0]}`);
+    }
+    // Pipeline, PreviewScene, Picker, HeightPreview and the three caches' heldArrays, solidMemory, and the two hosts' figures.
+    expect(bodies.length).toBeGreaterThanOrEqual(10);
+    for (const body of bodies) expect(probe.test(body), body.slice(0, 200)).toBe(false);
   });
 
   it('imports three only under src/view', () => {

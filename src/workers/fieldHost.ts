@@ -6,6 +6,7 @@ import type { Bounds, WeldedMesh } from '../core/mesh/weld';
 import type { Diagnostic } from '../core/report/diagnostics';
 import { ReportStages } from './reportStages';
 import { checkWalls } from './wallCheck';
+import { arrayBytes, figureOrNone, type WorkerMemory } from '../app/memory';
 
 export type Post = (message: FromWorker, transfer?: Transferable[]) => void;
 
@@ -66,10 +67,15 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
   return { outputs: out, transfer: buffersOf(...arrays) };
 }
 
+/** What a field.worker holds as it says ready, for the memory meter: no arrays yet, and it has no WebAssembly heap. */
+export const FIELD_READY_MEMORY: WorkerMemory = { wasm: 0, arrays: 0 };
+
 /** field.worker's message handler, apart from `self`, so a Node test can drive the very same code. */
 export function fieldHost(post: Post, now: () => number): (message: ToWorker) => void {
   const stages = new FieldStages(now);
   const reports = new ReportStages(now);
+  // Read when a message goes, after its arrays are copied for the transfer, so only what stays here counts.
+  const memory = (): WorkerMemory | undefined => figureOrNone(() => ({ wasm: 0, arrays: arrayBytes([...stages.heldArrays(), ...reports.heldArrays()]) }));
   return (message) => {
     if (message.t === 'reports') {
       const timings: Record<string, number> = {};
@@ -77,14 +83,14 @@ export function fieldHost(post: Post, now: () => number): (message: ToWorker) =>
         injectedCrash(message.fault);
         applyDelay(message.fault, now);
         const outputs = reports.run(message.keys, message.params, message.inputs, timings);
-        post({ t: 'result', id: message.id, outputs, cached: reports.cached(), heapBytes: null, timings });
+        post({ t: 'result', id: message.id, outputs, cached: reports.cached(), heapBytes: null, timings, memory: memory() });
       } catch (error) {
         if (error instanceof StageMiss) {
-          post({ t: 'miss', id: message.id, stage: error.stage, cached: reports.cached() });
+          post({ t: 'miss', id: message.id, stage: error.stage, cached: reports.cached(), memory: memory() });
           return;
         }
         const e = error instanceof Error ? error : new Error(String(error));
-        post({ t: 'error', id: message.id, name: e.name, message: e.message, inline: isInlineError(e), cached: reports.cached() });
+        post({ t: 'error', id: message.id, name: e.name, message: e.message, inline: isInlineError(e), cached: reports.cached(), memory: memory() });
       }
       return;
     }
@@ -113,24 +119,24 @@ export function fieldHost(post: Post, now: () => number): (message: ToWorker) =>
         // T1 is over when the field reaches main, so it goes before placement starts.
         if (outputs.S6) {
           const early = wire(outputs);
-          post({ t: 'stage', id, outputs: early.outputs as FieldOutputs }, early.transfer);
+          post({ t: 'stage', id, outputs: early.outputs as FieldOutputs, memory: memory() }, early.transfer);
           outputs = {};
         }
         outputs = { ...outputs, ...stages.run(keys, ['S7'], params, inputs, timings) };
       }
       const sent = wire(outputs);
-      post({ t: 'result', id, outputs: sent.outputs as FieldOutputs, cached: stages.cached(), heapBytes: null, timings }, sent.transfer);
+      post({ t: 'result', id, outputs: sent.outputs as FieldOutputs, cached: stages.cached(), heapBytes: null, timings, memory: memory() }, sent.transfer);
     } catch (error) {
       if (error instanceof StageMiss) {
-        post({ t: 'miss', id, stage: error.stage, cached: stages.cached() });
+        post({ t: 'miss', id, stage: error.stage, cached: stages.cached(), memory: memory() });
         return;
       }
       const e = error instanceof Error ? error : new Error(String(error));
       if (isInlineError(e) && outputs.S1) {
         const early = wire({ S1: outputs.S1 });
-        post({ t: 'stage', id, outputs: early.outputs as FieldOutputs }, early.transfer);
+        post({ t: 'stage', id, outputs: early.outputs as FieldOutputs, memory: memory() }, early.transfer);
       }
-      post({ t: 'error', id, name: e.name, message: e.message, inline: isInlineError(e), cached: stages.cached() });
+      post({ t: 'error', id, name: e.name, message: e.message, inline: isInlineError(e), cached: stages.cached(), memory: memory() });
     }
   };
 }

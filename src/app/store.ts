@@ -7,6 +7,8 @@ import { samePlane, type PlaneChoice } from '../workers/fieldStages';
 import { dragCheck, moldBox, openingLabel, type DragCheck } from './derived';
 import { downloadName, saveBytes } from './download';
 import { History, sameProject } from './history';
+import { realTimers, type Timers } from './jobGate';
+import { arrayBytes, type MemorySource, type WorkerMemory } from './memory';
 import type { Pipeline, Project } from './pipeline';
 import { projectFile, type ProjectFile } from './project';
 import { fileKind, holdsModel, PROJECT_EXTENSION } from './projectArchive';
@@ -147,6 +149,21 @@ export interface Replacing {
   model: string;
 }
 
+/** The memory meter's reading (MM1): what the app holds for the model, in bytes, in all and by where it is. */
+export interface MemoryReading {
+  total: number;
+  parts: Partial<Record<MemorySource, WorkerMemory>>;
+}
+
+/** What the memory meter needs of the page: whether it is hidden, and word when that changes. */
+export interface MeterPage {
+  hidden(): boolean;
+  onVisibility(listener: () => void): void;
+}
+
+/** The memory meter reads at most this often, in ms, unless a figure falls. */
+export const MEMORY_THROTTLE_MS = 500;
+
 /** The project a project file holds. */
 const projectOf = (file: ProjectFile): Project => ({ params: file.params, plane: file.plane, pins: file.pins, removed: file.removed });
 
@@ -213,6 +230,16 @@ export class Store {
   /** A file held back from replacing the model while it has changes not saved, until the maker answers. */
   readonly replacing = signal<Replacing | null>(null);
   private replaceWith: (() => void) | null = null;
+  /** What that file holds while it waits, its bytes or the opened project, which the memory meter counts. */
+  private replaceHeld: unknown = null;
+  /**
+   * The memory meter (MM1): main's arrays and the view's, counted here, with the workers' figures from the
+   * pipeline's ledger. Only set again when a figure changed, so the strip's item draws only then.
+   */
+  readonly memory = signal<MemoryReading>({ total: 0, parts: {} });
+  /** The view's arrays, which main.tsx hands over, as the store knows no scene. */
+  private viewRoots: () => unknown[] = () => [];
+  private meter: { page: MeterPage; timers: Timers; now: () => number; last: number; pending: unknown } | null = null;
   /** The project as the last save, load or Export ZIP holds it, to tell whether leaving the page loses anything. */
   private saved: Project | null = null;
   /** Bumped by every open and load: a file read or unpacked after a newer one was asked for is dropped. */
@@ -241,7 +268,86 @@ export class Store {
       const next = pipeline.project(), now = this.project.value;
       if (next.params !== now.params || next.plane !== now.plane || next.pins !== now.pins || next.removed !== now.removed) this.project.value = next;
       this.tick.value++;
+      this.scheduleMemory();
     });
+  }
+
+  /** The view's arrays for the memory meter, from main.tsx, which holds the scene. */
+  setViewRoots(roots: () => unknown[]): void {
+    this.viewRoots = roots;
+  }
+
+  /**
+   * Starts the memory meter (MM1). It reads after each change the pipeline makes and each figure a worker
+   * sends, at most every MEMORY_THROTTLE_MS; a figure that falls, as when a worker is ended, it shows at once,
+   * so the meter never stands above what the app holds for long. Main's arrays change only with the
+   * pipeline's results, and the workers' figures come with their messages, so with nothing happening it
+   * reads nothing; it has no clock of its own, as one ticking while main was busy changed which came first,
+   * a job's overrun check or its result, and so which jobs ran (docs/PLAN.md, MM1). While the page is hidden
+   * it reads nothing at all, and it reads again as soon as the page shows. Main.tsx starts it; Node tests
+   * start it with their own page and timers, or not at all.
+   */
+  startMemoryMeter(page: MeterPage, timers: Timers = realTimers, now: () => number = () => performance.now()): void {
+    if (this.meter) return;
+    const meter = (this.meter = { page, timers, now, last: -Infinity, pending: null as unknown });
+    this.pipeline.memory.subscribe((source, dropped) => {
+      // The page's own figure is the meter's reading itself.
+      if (source === 'page') return;
+      if (!dropped) this.scheduleMemory();
+      else if (!page.hidden()) this.measureMemory();
+    });
+    page.onVisibility(() => {
+      if (!page.hidden()) {
+        this.measureMemory();
+        return;
+      }
+      if (meter.pending !== null) meter.timers.clear(meter.pending);
+      meter.pending = null;
+    });
+    if (!page.hidden()) this.measureMemory();
+  }
+
+  /**
+   * One reading of the memory meter: main's arrays, the view's and a file waiting on the replace question,
+   * walked now, each buffer once, with what the workers last said. A tenth of a millisecond on main with the
+   * 3 million triangle test model loaded (MM1). It runs inside the handlers of the workers' messages and of
+   * the pipeline's changes, so it never throws: a walk that fails leaves the page's last figure standing.
+   */
+  measureMemory(): void {
+    const ledger = this.pipeline.memory;
+    try {
+      ledger.report('page', { wasm: 0, arrays: arrayBytes([...this.pipeline.heldArrays(), ...this.viewRoots(), this.replaceHeld]) });
+    } catch {
+      // The meter reads stale rather than stop a result, an export or a change on its way.
+    }
+    const meter = this.meter;
+    if (meter) {
+      meter.last = meter.now();
+      if (meter.pending !== null) meter.timers.clear(meter.pending);
+      meter.pending = null;
+    }
+    const total = ledger.total(), parts = ledger.parts(), shown = this.memory.value;
+    if (shown.total !== total || JSON.stringify(shown.parts) !== JSON.stringify(parts)) this.memory.value = { total, parts };
+  }
+
+  /** A reading now, as a figure fell, unless the meter is off or the page hidden. */
+  private memoryFell(): void {
+    if (this.meter && !this.meter.page.hidden()) this.measureMemory();
+  }
+
+  /** A reading soon: now if the last was MEMORY_THROTTLE_MS ago, else once that time is up. */
+  private scheduleMemory(): void {
+    const meter = this.meter;
+    if (!meter || meter.pending !== null || meter.page.hidden()) return;
+    const wait = MEMORY_THROTTLE_MS - (meter.now() - meter.last);
+    if (wait <= 0) {
+      this.measureMemory();
+      return;
+    }
+    meter.pending = meter.timers.set(() => {
+      meter.pending = null;
+      if (!meter.page.hidden()) this.measureMemory();
+    }, wait);
   }
 
   load(bytes: Uint8Array, name: string): void {
@@ -253,7 +359,8 @@ export class Store {
   /** What every new model resets: how the user was looking at the last one, and its history. */
   private beforeLoad(): void {
     this.opens++;
-    this.dropReplacing();
+    // The pipeline's load follows at once, and the meter reads after it.
+    this.dropReplacing(false);
     this.fileSteps = Infinity;
     this.projectName.value = null;
     this.fileNotice.value = null;
@@ -296,7 +403,7 @@ export class Store {
    */
   private async openStl(bytes: Uint8Array, name: string, ticket: number): Promise<void> {
     if (!this.files) {
-      this.replaceOrAsk(name, () => this.load(bytes, name));
+      this.replaceOrAsk(name, () => this.load(bytes, name), bytes);
       return;
     }
     this.fileNotice.value = null;
@@ -311,7 +418,7 @@ export class Store {
         // A large file's hash is known now, so the export is not sent a copy of it to hash.
         if (checked.sha256) this.pipeline.noteModelSha256(checked.bytes, checked.sha256);
         if (checked.warnings.length > 0) this.fileNotice.value = { severity: 'warning', message: `Opened ${name}, with a warning.`, notes: checked.warnings.map((message) => ({ severity: 'warning', message })) };
-      });
+      }, checked.bytes);
     } catch (error) {
       if (ticket !== this.opens) return;
       this.fileNotice.value =
@@ -328,13 +435,15 @@ export class Store {
    * has changes no file holds, which a new model would take with it, history and all; then the Model
    * section asks first. Settings alone never ask, as they are one step undo takes back.
    */
-  private replaceOrAsk(name: string, run: () => void): void {
+  private replaceOrAsk(name: string, run: () => void, held: unknown): void {
     if (!this.unsaved()) {
       run();
       return;
     }
     this.replaceWith = run;
+    this.replaceHeld = held;
     this.replacing.value = { name, model: this.projectName.value ?? this.pipeline.modelName! };
+    this.scheduleMemory();
   }
 
   /** The maker's answer: save the work first and then open, open without saving, or keep the model and drop the file. */
@@ -346,13 +455,17 @@ export class Store {
       // A save that failed keeps the question, with its reason under the file row; a newer file has its own.
       if (this.replaceWith !== run || this.unsaved()) return;
     }
-    this.dropReplacing();
+    // A file kept out leaves the meter at once; one that opens is the model's file once it loads.
+    this.dropReplacing(answer === 'cancel');
     if (answer !== 'cancel') run();
   }
 
-  private dropReplacing(): void {
+  private dropReplacing(fell = true): void {
+    const held = this.replaceHeld !== null;
     this.replaceWith = null;
+    this.replaceHeld = null;
     this.replacing.value = null;
+    if (held && fell) this.memoryFell();
   }
 
   private async openProject(bytes: Uint8Array, name: string, kind: 'zip' | 'json', ticket: number): Promise<void> {
@@ -370,7 +483,7 @@ export class Store {
       const opened = await this.files.open(bytes, name, kind, loaded);
       if (ticket !== this.opens) return;
       if (loaded && opened.loadedSha256) this.pipeline.noteModelSha256(loaded, opened.loadedSha256);
-      if (opened.stl) this.replaceOrAsk(name, () => this.loadOpened(opened, name));
+      if (opened.stl) this.replaceOrAsk(name, () => this.loadOpened(opened, name), opened);
       else this.applyOpened(opened, name);
     } catch (error) {
       if (ticket !== this.opens) return;

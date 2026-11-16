@@ -12,6 +12,11 @@ export class Picker {
   private mesh: PartGeometry | null = null;
   private bvh: MeshBVH | null = null;
 
+  /** The tree, once built, for the memory meter: its own buffers, as its geometry holds the model's arrays (MM1). */
+  heldArrays(): unknown[] {
+    return [this.bvh];
+  }
+
   setMesh(mesh: PartGeometry | null): void {
     if (mesh === this.mesh) return;
     this.mesh = mesh;

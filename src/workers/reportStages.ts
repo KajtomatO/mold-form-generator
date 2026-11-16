@@ -45,6 +45,11 @@ export class ReportStages {
     return this.s8 ? { S8: this.s8.key } : {};
   }
 
+  /** What it keeps between jobs, for the memory meter (MM1). */
+  heldArrays(): unknown[] {
+    return [this.s8];
+  }
+
   run(keys: Record<StageId, string>, params: Params, inputs: ReportsInputs, timings: Record<string, number> = {}): ReportsOutputs {
     if (this.s8?.key !== keys.S8) {
       const cell = params.quality.analysisCell;
