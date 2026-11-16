@@ -118,7 +118,7 @@ export function PourSection() {
   const flange = (store.pipeline.placement?.value.space.sizes.flangeRadius ?? 0) > 0;
   const removed = store.project.value.removed;
   return (
-    <Section id="pour" title="Pour & funnel">
+    <Section id="pour" title="Pour & funnel" reset={SECTION_PARAMS.pour}>
       {SECTION_PARAMS.pour.map((path) => (
         <ParamRow key={path} path={path} />
       ))}

@@ -1,5 +1,6 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { OpeningPin } from '../src/core/analysis/placement';
+import { defaultParams } from '../src/core/params/defaults';
 import { asciiStl, box, engravedBlock, join as joinMeshes, toSoup, withoutTriangles } from '../test/fixtures/synthetic';
 import { EXAMPLE_FILES, loadManifold, skipWithout } from '../test/fixtures/loadExamples';
 import { benchyLetterSpots } from './spots';
@@ -74,6 +75,29 @@ async function ringOnScreen(page: Page, id: string, tile: number): Promise<{ x: 
 /** The page point of a spot on the flat top, for a pointer move. */
 const topOnScreen = (page: Page, x: number, y: number): Promise<{ x: number; y: number }> =>
   app(page, (a, at: number[]) => (window as unknown as { __pipeline: { worldToScreen: (p: number[]) => { x: number; y: number } } }).__pipeline.worldToScreen([at[0], at[1], a.store.pipeline.field!.value.rim.Zt + a.scene.explodeOffsets().cover]), [x, y]);
+
+/** CS: the WCAG contrast of two CSS colours, each as rgb(), rgba() or #rrggbb. */
+function contrast(a: string, b: string): number {
+  const rgb = (c: string): number[] => (c.startsWith('#') ? [1, 3, 5].map((k) => parseInt(c.slice(k, k + 2), 16)) : c.match(/[\d.]+/g)!.slice(0, 3).map(Number));
+  const lum = (c: string): number => {
+    const [r, g, b] = rgb(c).map((v) => toLinear(v / 255));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * CS: where a part of a row, or of a section, stands within it, for the order of its parts and to see that
+ * nothing moved: from the row's or the section's own corner, as the sidebar may scroll in between. To 0.01 px,
+ * as Firefox's rects of one place carry a float residue of 1e-5 px once the sidebar has scrolled.
+ */
+const rectOf = (locator: Locator, within = '.row, .section'): Promise<{ x: number; y: number; width: number; height: number }> =>
+  locator.evaluate((el, selector) => {
+    const r = el.getBoundingClientRect(), o = el.parentElement!.closest(selector)!.getBoundingClientRect();
+    const at = (v: number): number => Math.round(v * 100) / 100;
+    return { x: at(r.x - o.x), y: at(r.y - o.y), width: at(r.width), height: at(r.height) };
+  }, within);
 
 /** The dev server serves the same UI code as the build; these run on the build only, to keep scripts/ci.sh within its time. */
 const DEV_SKIP = 'the build is what the user gets, and the dev server serves the same UI code';
@@ -699,6 +723,254 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
     expect(await app(page, (a) => a.scene.flangeOutlines())).toEqual([]);
     await above(dash, 40);
     expect(await share(dash, SLATE), 'no flange').toBeLessThanOrEqual(0.1);
+  });
+
+  test('@smoke marks on changed settings: a grey dot at the default, the name in its colour and a reset arrow between slider and number once changed, each reset one undo step, and Reset in the header sets every setting back as one step', async ({ page }) => {
+    await dropAndWait(page, EXAMPLE_FILES.jersey);
+    const row = (path: string): Locator => page.locator(`[data-param="${path}"]`);
+    const arrow = (path: string): Locator => row(path).locator('button.mark');
+    const depth = (): Promise<number> => app(page, (a) => a.store.history.depth.undo);
+    const start = await hooks(page, (h) => h.geometryHash().all);
+    const resetAll = page.getByTestId('reset-all');
+
+    // (a) At the defaults: one grey dot in every row, Advanced's and the bolts' too, no arrow, and Reset off.
+    await page.locator('.advanced > summary').click();
+    await hooks(page, (h) => h.setParam('bolts.enabled', true));
+    const rows = page.locator('[data-param]');
+    const settings = Object.values(defaultParams()).reduce((n, group) => n + Object.keys(group).length, 0);
+    await expect(rows).toHaveCount(settings);
+    await expect(page.locator('[data-param]:not([data-param="bolts.enabled"]) .mark.dot')).toHaveCount(settings - 1);
+    await expect(page.locator('.row button.mark')).toHaveCount(1);
+    await hooks(page, (h) => h.setParam('bolts.enabled', false));
+    await expect(page.locator('.row button.mark')).toHaveCount(0);
+    expect(await rows.evaluateAll((all) => all.filter((r) => r.querySelectorAll('.mark').length !== 1 || r.querySelector('.mark.dot') === null).length)).toBe(0);
+    await expect(row('silicone.t').locator('.mark.dot')).toHaveAttribute('title', 'At its default, 3 mm.');
+    await expect(row('base.pocketDepth').locator('.mark.dot')).toHaveAttribute('title', 'At its default: automatic.');
+    await expect(resetAll).toBeDisabled();
+    await expect(resetAll).toHaveAttribute('title', 'Every setting is at its default.');
+    await page.locator('.advanced > summary').click();
+    await expect(page.getByTestId('advanced-changed')).toHaveCount(0);
+
+    // (b) A slider row: its name takes the colour, and the arrow stands between the slider and the box, where the dot was.
+    const t = row('silicone.t'), slider = t.locator('input[type="range"]'), num = t.locator('input.num');
+    const atDefault = { slider: await rectOf(slider), num: await rectOf(num), mark: await rectOf(t.locator('.mark')) };
+    await num.fill('4');
+    await num.press('Enter');
+    await expect(t).toHaveAttribute('data-changed', '');
+    await expect(arrow('silicone.t')).toHaveAttribute('aria-label', 'Reset Silicone thickness');
+    await expect(arrow('silicone.t')).toHaveAttribute('title', 'Changed from its default, 3 mm. Click to reset it.');
+    const changed = { slider: await rectOf(slider), num: await rectOf(num), mark: await rectOf(arrow('silicone.t')) };
+    expect(changed.slider.x + changed.slider.width).toBeLessThanOrEqual(changed.mark.x);
+    expect(changed.mark.x + changed.mark.width).toBeLessThanOrEqual(changed.num.x);
+    expect([changed.slider, changed.num, changed.mark]).toEqual([atDefault.slider, atDefault.num, atDefault.mark]);
+    const colours = await page.evaluate(() => {
+      const css = getComputedStyle(document.documentElement);
+      const probe = document.createElement('i');
+      probe.style.color = 'var(--changed)';
+      document.body.append(probe);
+      const changedColour = getComputedStyle(probe).color;
+      probe.remove();
+      const colour = (selector: string): string => getComputedStyle(document.querySelector(selector)!).color;
+      return { changed: changedColour, accent: css.getPropertyValue('--accent').trim(), label: colour('[data-param="silicone.t"] > label'), unit: colour('[data-param="silicone.t"] .unit'), other: colour('[data-param="cover.wall"] > label') };
+    });
+    expect(colours.label).toBe(colours.changed);
+    expect(contrast(colours.changed, colours.accent)).toBe(1);
+    expect(colours.other).not.toBe(colours.label);
+    expect(colours.unit).not.toBe(colours.label);
+
+    // (c) The keyboard: Tab from the slider reaches the arrow, Enter resets, and focus stays on the slider.
+    await page.waitForTimeout(450);
+    await slider.focus();
+    await page.keyboard.press('Tab');
+    await expect(arrow('silicone.t')).toBeFocused();
+    expect(await arrow('silicone.t').evaluate((el) => el.matches(':focus-visible'))).toBe(true);
+    const before = await depth();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => hooks(page, (h) => h.params().silicone.t)).toBe(3);
+    await expect(t.locator('.mark.dot')).toHaveCount(1);
+    await expect(slider).toBeFocused();
+    expect(await depth()).toBe(before + 1);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', 'Undo resetting Silicone thickness (Ctrl+Z)');
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => hooks(page, (h) => h.params().silicone.t)).toBe(4);
+    await arrow('silicone.t').click();
+    await expect.poll(() => hooks(page, (h) => h.params().silicone.t)).toBe(3);
+    await expect(t).not.toHaveAttribute('data-changed');
+    // A double-click on the name is the same reset, a step of its own, and at the default no step at all.
+    await num.fill('4');
+    await num.press('Enter');
+    await expect(t).toHaveAttribute('data-changed', '');
+    await page.waitForTimeout(450);
+    const named = await depth();
+    await t.locator('label').dblclick();
+    await expect.poll(() => hooks(page, (h) => h.params().silicone.t)).toBe(3);
+    expect(await depth()).toBe(named + 1);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', 'Undo resetting Silicone thickness (Ctrl+Z)');
+    await t.locator('label').dblclick();
+    expect(await depth()).toBe(named + 1);
+    // An entry the box refused goes with the reset, and its error too.
+    await num.fill('4');
+    await num.press('Enter');
+    await num.fill('25');
+    await num.press('Enter');
+    await expect(t.locator('.note.error')).toHaveText('Enter a value from 1 to 20.');
+    await expect(num).toHaveAttribute('aria-invalid', 'true');
+    await arrow('silicone.t').click();
+    await expect.poll(() => hooks(page, (h) => h.params().silicone.t)).toBe(3);
+    await expect(num).toHaveValue('3');
+    await expect(t.locator('.note.error')).toHaveCount(0);
+    await expect(num).not.toHaveAttribute('aria-invalid');
+
+    // (d) An auto row: a pocket typed equal to the layer is the user's, and the arrow lets it follow the layer again.
+    const pocket = row('base.pocketDepth');
+    await pocket.locator('input.num').fill('0.2');
+    await pocket.locator('input.num').press('Enter');
+    await expect(pocket.locator('.tag')).toHaveText('set');
+    await expect(pocket).toHaveAttribute('data-changed', '');
+    await expect(arrow('base.pocketDepth')).toHaveAttribute('title', 'Set by you; its default is automatic. Click to make it automatic again.');
+    await arrow('base.pocketDepth').click();
+    await expect(pocket.locator('.tag')).toHaveText('auto');
+    await expect(pocket.locator('.mark.dot')).toHaveCount(1);
+    expect(await hooks(page, (h) => h.params().base.pocketDepth)).toBeNull();
+
+    // (e) A checkbox, the mode and the bolts' size and length.
+    await row('vents.enabled').locator('input').uncheck();
+    await expect(row('vents.enabled')).toHaveAttribute('data-changed', '');
+    await arrow('vents.enabled').click();
+    await expect(row('vents.enabled').locator('input')).toBeChecked();
+    await expect(row('vents.enabled').locator('input')).toBeFocused();
+    const mode = row('base.mode');
+    await mode.getByRole('button', { name: 'Merged (B)' }).click();
+    const modeBoxes = { group: await rectOf(mode.locator('.segmented')), mark: await rectOf(arrow('base.mode')) };
+    expect(modeBoxes.group.x + modeBoxes.group.width).toBeLessThanOrEqual(modeBoxes.mark.x);
+    // Each option on one line, as a column of its own for the mark would not leave room for "Merged (B)".
+    expect(await mode.locator('.segmented button').evaluateAll((all) => all.map((b) => b.scrollHeight - b.clientHeight))).toEqual([0, 0]);
+    await arrow('base.mode').click();
+    await expect(mode.getByRole('button', { name: 'Glue in (A)' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(mode.getByRole('button', { name: 'Glue in (A)' })).toBeFocused();
+    await row('bolts.enabled').locator('input').check();
+    await row('bolts.size').getByRole('button', { name: 'M4' }).click();
+    // The arrow's name holds no default, so M3 is still one button in its row.
+    await expect(row('bolts.size').getByRole('button', { name: 'M3' })).toHaveCount(1);
+    await expect(arrow('bolts.size')).toHaveAttribute('title', 'Changed from its default, M3. Click to reset it.');
+    await row('bolts.length').locator('select').selectOption('16');
+    await expect(row('bolts.length').locator('.tag')).toHaveText('set');
+    await arrow('bolts.length').click();
+    await expect(row('bolts.length').locator('select')).toHaveValue('auto');
+    await expect(row('bolts.length').locator('.tag')).toHaveText('auto');
+    await hooks(page, (h) => h.setParam('bolts.size', 'M3'));
+    await row('bolts.enabled').locator('input').uncheck();
+    await idle(page);
+
+    // (f) A section's Reset: on its heading's line, moving nothing, and setting back its own settings as one step.
+    const base = page.locator('[data-section="base"]'), silicone = page.locator('[data-section="silicone"]');
+    const heading = { title: await rectOf(base.locator('h2')), first: await rectOf(row('base.mode')) };
+    await expect(base.getByTestId('section-reset')).toHaveCount(0);
+    await page.waitForTimeout(450);
+    await row('base.thickness').locator('input.num').fill('5');
+    await row('base.thickness').locator('input.num').press('Enter');
+    await page.waitForTimeout(450);
+    await t.locator('input.num').fill('4');
+    await t.locator('input.num').press('Enter');
+    await expect(base.getByTestId('section-reset')).toHaveAttribute('title', 'Reset the setting changed in Base to its default: Thickness. Undo takes it back (Ctrl+Z).');
+    expect({ title: await rectOf(base.locator('h2')), first: await rectOf(row('base.mode')) }).toEqual(heading);
+    await mode.getByRole('button', { name: 'Merged (B)' }).click();
+    await expect(base.getByTestId('section-reset')).toHaveAttribute('title', 'Reset the 2 settings changed in Base to their defaults: Mode and Thickness. Undo takes it back (Ctrl+Z).');
+    const sectionBefore = await depth();
+    await base.getByTestId('section-reset').click();
+    await expect.poll(() => hooks(page, (h) => [h.params().base.mode, h.params().base.thickness, h.params().silicone.t])).toEqual(['glue', 4, 4]);
+    expect(await depth()).toBe(sectionBefore + 1);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', 'Undo resetting the Base settings (Ctrl+Z)');
+    await expect(base.getByTestId('section-reset')).toHaveCount(0);
+    await expect(silicone.getByTestId('section-reset')).toBeVisible();
+    // Focus goes to the section's first row, on the option pressed now, not the one pressed before.
+    await expect(mode.getByRole('button', { name: 'Glue in (A)' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(mode.getByRole('button', { name: 'Glue in (A)' })).toBeFocused();
+    // Advanced, closed, says how many of its settings are changed; open, its Reset sets them back as one step.
+    await hooks(page, (h) => h.setParam('print.infill', 0.1));
+    await expect(page.getByTestId('advanced-changed')).toHaveText('1 changed');
+    await page.locator('.advanced > summary').click();
+    await expect(page.getByTestId('advanced-reset')).toHaveAttribute('title', 'Reset the setting changed in Advanced to its default: Infill. Undo takes it back (Ctrl+Z).');
+    const advancedBefore = await depth();
+    await page.getByTestId('advanced-reset').click();
+    await expect.poll(() => hooks(page, (h) => h.params().print.infill)).toBe(0.05);
+    expect(await depth()).toBe(advancedBefore + 1);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', 'Undo resetting the Advanced settings (Ctrl+Z)');
+    await expect(page.getByTestId('advanced-reset')).toHaveCount(0);
+    await expect(page.getByTestId('advanced-changed')).toHaveCount(0);
+    await expect(row('base.minIsland').locator('input[type="range"]')).toBeFocused();
+    await page.locator('.advanced > summary').click();
+    // A bolts' setting changed while they are off, and so out of sight, still shows Cover & joint's Reset.
+    const cover = page.locator('[data-section="cover"]');
+    await hooks(page, (h) => h.setParam('bolts.size', 'M4'));
+    await expect(row('bolts.size')).toHaveCount(0);
+    await expect(cover.getByTestId('section-reset')).toHaveAttribute('title', 'Reset the setting changed in Cover & joint to its default: Bolt size. Undo takes it back (Ctrl+Z).');
+    await cover.getByTestId('section-reset').click();
+    await expect.poll(() => hooks(page, (h) => h.params().bolts.size)).toBe('M3');
+    await expect(cover.getByTestId('section-reset')).toHaveCount(0);
+    await hooks(page, (h) => h.setParam('print.infill', 0.1));
+
+    // (g) Reset in the header: every setting back as one step, the base face, moved openings and removed vents kept.
+    const openings = await hooks(page, (h) => h.openings());
+    const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+    await app(page, (a, ids: { pour: string; vent: string }) => {
+      const o = a.store.pipeline.placement!.value.placement.openings.find((x) => x.id === ids.pour)!;
+      a.store.moveOpening(ids.pour, o.x, o.y);
+      a.store.removeVent(ids.vent);
+      a.store.setParam('cover.wall', 4);
+      a.store.setParam('grid.nx', 2);
+    }, { pour: pour.id, vent: vent.id });
+    await idle(page);
+    const edited = await hooks(page, (h) => h.project());
+    await expect(resetAll).toBeEnabled();
+    await expect(resetAll).toHaveAttribute('title', 'Reset every setting to its default: 4 changed (Silicone thickness, Wall, Columns and Infill). The base face, moved openings and removed vents stay. Undo takes it back (Ctrl+Z).');
+    const allBefore = await depth();
+    await resetAll.click();
+    expect(await hooks(page, (h) => h.params())).toEqual(defaultParams());
+    expect(await depth()).toBe(allBefore + 1);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', 'Undo resetting every setting (Ctrl+Z)');
+    const reset = await hooks(page, (h) => h.project());
+    expect([reset.plane, reset.pins, reset.removed]).toEqual([edited.plane, edited.pins, edited.removed]);
+    expect(reset.pins.map((p) => p.id)).toEqual([pour.id]);
+    await expect(resetAll).toBeDisabled();
+    await expect(page.locator('.row button.mark')).toHaveCount(0);
+    await expect(page.getByTestId('section-reset')).toHaveCount(0);
+    // With the pin and the removed vent kept, the mold is the defaults' with those two, and with none, the load's.
+    await idle(page);
+    await page.keyboard.press('Control+z');
+    expect(await hooks(page, (h) => h.project())).toEqual(edited);
+    await page.keyboard.press('Control+Shift+z');
+    await app(page, (a) => {
+      a.store.restoreVents();
+      a.store.unpin(a.store.pipeline.project().pins[0].id);
+    });
+    await idle(page);
+    expect(await hooks(page, (h) => h.geometryHash().all)).toBe(start);
+
+    // (h) The colours, in both themes: the name and the arrow stand out from the panel, the dot can be seen.
+    for (const theme of ['dark', 'light']) {
+      if (theme === 'light') await page.getByTestId('theme').click();
+      await hooks(page, (h) => h.setParam('silicone.t', 4));
+      const seen = await page.evaluate(() => {
+        const css = getComputedStyle(document.documentElement);
+        return {
+          panel: getComputedStyle(document.querySelector('.sidebar')!).backgroundColor,
+          name: getComputedStyle(document.querySelector('[data-param="silicone.t"] > label')!).color,
+          arrow: getComputedStyle(document.querySelector('[data-param="silicone.t"] button.mark')!).color,
+          dot: getComputedStyle(document.querySelector('[data-param="cover.wall"] .mark.dot')!, '::before').backgroundColor,
+          plain: getComputedStyle(document.querySelector('[data-param="cover.wall"] > label')!).color,
+          accent: css.getPropertyValue('--accent').trim(),
+        };
+      });
+      console.log(`CS (${test.info().project.name}, ${theme}): name ${contrast(seen.name, seen.panel).toFixed(2)}:1, arrow ${contrast(seen.arrow, seen.panel).toFixed(2)}:1, dot ${contrast(seen.dot, seen.panel).toFixed(2)}:1 on the panel`);
+      expect(contrast(seen.name, seen.panel), theme).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(seen.arrow, seen.panel), theme).toBeGreaterThanOrEqual(3);
+      expect(contrast(seen.dot, seen.panel), theme).toBeGreaterThanOrEqual(3);
+      expect(seen.name, theme).not.toBe(seen.plain);
+      expect(contrast(seen.name, seen.accent), theme).toBe(1);
+      await hooks(page, (h) => h.setParam('silicone.t', 3));
+    }
+    await page.getByTestId('theme').click();
   });
 
   test('@smoke undo and redo: 20 edits come back to the same params and geometry, slider drags group, the shortcuts work outside text boxes, and a new file clears it', async ({ page }) => {

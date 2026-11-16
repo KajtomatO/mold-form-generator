@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { baseOptions, defaultParams, resolveAuto } from '../../src/core/params/defaults';
+import { changedPaths, PARAM_PATHS, paramDef, paramValue, setParamValue, type ParamPath } from '../../src/app/stages';
+import { baseOptions, defaultParams, isDefault, resolveAuto } from '../../src/core/params/defaults';
 import { PARAM_SCHEMA, type ParamDef } from '../../src/core/params/schema';
+import { sliderRange, stepOf } from '../../src/ui/layout';
 
 const entries = Object.entries(PARAM_SCHEMA).flatMap(([group, defs]) =>
   Object.entries(defs as Record<string, ParamDef>).map(([key, def]) => ({ path: `${group}.${key}`, def })),
@@ -178,3 +180,52 @@ describe('default parameters', () => {
     expect(baseOptions(p, BOUNDS)).toEqual({ planeTol: 0.5, minIsland: 0 });
   });
 });
+
+describe('the marks on changed settings (CS)', () => {
+  it('a setting is at its default while it holds the schema\'s default, and an auto one only while it is null, whatever its rule gives', () => {
+    expect(PARAM_PATHS).toEqual(entries.map(({ path }) => path));
+    for (const { path, def } of entries) {
+      expect(paramDef(path as ParamPath)).toBe(def);
+      expect(isDefault(def, def.default), path).toBe(true);
+      if (def.kind === 'number') {
+        // A step either way, where the range allows it, as the slider and the wheel would leave it.
+        const step = stepOf(path as ParamPath, def);
+        for (const off of [def.default + step, def.default - step]) {
+          if (off >= (def.min ?? 0) && off <= (def.max ?? Infinity)) expect(isDefault(def, Number(off.toFixed(6))), `${path} at ${off}`).toBe(false);
+        }
+      }
+      if (def.kind === 'flag') expect(isDefault(def, !def.default), path).toBe(false);
+      if (def.kind === 'choice') for (const option of def.options.filter((o) => o !== def.default)) expect(isDefault(def, option), `${path} ${option}`).toBe(false);
+      // Any number on an auto one is the user's, its slider's ends among them.
+      if (def.kind === 'auto') for (const value of [...sliderRange(path as ParamPath, def), ...(def.options ?? [])]) expect(isDefault(def, value), `${path} at ${value}`).toBe(false);
+    }
+    expect(changedPaths(defaultParams())).toEqual([]);
+    // One change at a time: the one changed, and nothing else.
+    for (const { path, def } of entries) {
+      const params = defaultParams();
+      const value = def.kind === 'flag' ? !def.default : def.kind === 'choice' ? def.options.find((o) => o !== def.default) : def.kind === 'auto' ? sliderRange(path as ParamPath, def)[1] : def.default + stepOf(path as ParamPath, def) <= (def.max ?? Infinity) ? def.default + stepOf(path as ParamPath, def) : def.default - stepOf(path as ParamPath, def);
+      setParamValue(params, path as ParamPath, value);
+      expect(changedPaths(params), path).toEqual([path]);
+      // A section's own paths see only its own changes.
+      expect(changedPaths(params, PARAM_PATHS.filter((other) => other !== path)), path).toEqual([]);
+    }
+    // A pocket typed equal to the layer no longer follows it: changed, though its depth is what the rule gives.
+    const typed = defaultParams();
+    typed.base.pocketDepth = 0.2;
+    expect(typed.print.layerHeight).toBe(0.2);
+    expect(changedPaths(typed)).toEqual(['base.pocketDepth']);
+    // Negative control: judged by the value the rule resolves to, the same pocket would read as at its default.
+    const BOUNDS100 = { min: [0, 0, 0] as [number, number, number], max: [100, 0, 0] as [number, number, number] };
+    const resolved = (params: typeof typed, path: ParamPath): boolean => {
+      const value = paramValue(params, path) ?? resolveAuto(params, BOUNDS100).pocketDepth;
+      return value === resolveAuto(defaultParams(), BOUNDS100).pocketDepth;
+    };
+    expect(resolved(typed, 'base.pocketDepth')).toBe(true);
+    expect(resolved(typed, 'base.pocketDepth')).not.toBe(isDefault(paramDef('base.pocketDepth'), typed.base.pocketDepth));
+    // The layer itself is judged by its own default, so a layer of 0.3 is changed, and the pocket that follows it is not.
+    const layer = defaultParams();
+    layer.print.layerHeight = 0.3;
+    expect(changedPaths(layer)).toEqual(['print.layerHeight']);
+  });
+});
+

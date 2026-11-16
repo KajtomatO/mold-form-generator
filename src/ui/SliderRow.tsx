@@ -3,6 +3,7 @@ import type { ShownDiagnostic } from '../app/pipeline';
 import type { AutoDef, NumberDef } from '../core/params/schema';
 import { formatNumber, units } from './format';
 import { parseEntry } from './layout';
+import { ResetMark, rowControl } from './ResetMark';
 
 export interface SliderRowProps {
   /** Becomes data-param and the ids, so tests and labels can find the row. */
@@ -21,6 +22,10 @@ export interface SliderRowProps {
   onChange: (value: number | null) => void;
   /** The slider pressed (true) and let go (false), so a drag of any length, pauses and all, is one step. */
   onHold?: (held: boolean) => void;
+  /** CS: whether the value is off its default, which colours the name and puts the arrow in place of the dot. */
+  changed: boolean;
+  /** Back to the default, or for an auto parameter to following its rule: the arrow and both double-clicks. */
+  onReset: () => void;
 }
 
 /** Rounds a stepped value to the step's own decimals, so 0.1 steps never show 3.0000000004. */
@@ -34,12 +39,13 @@ function clamp(value: number, def: NumberDef | AutoDef): number {
 }
 
 /**
- * One numeric parameter: label with its unit, slider, and a number box that takes typing. Double-click
- * on the label or slider resets to the default, which for an auto parameter means following its rule
- * again. The wheel steps the slider or the box once it has focus: Shift ten steps, Ctrl a tenth of one.
+ * One numeric parameter: label with its unit, slider, its mark, and a number box that takes typing. The mark
+ * is a grey dot at the default and a curved arrow once changed (CS), which resets it, as a double-click on the
+ * label or slider does; for an auto parameter that means following its rule again. The wheel steps the slider
+ * or the box once it has focus: Shift ten steps, Ctrl a tenth of one.
  */
 export function SliderRow(props: SliderRowProps) {
-  const { name, label, unit, def, value, auto, range, step, hint, problems = [], onChange, onHold } = props;
+  const { name, label, unit, def, value, auto, range, step, hint, problems = [], onChange, onHold, changed, onReset } = props;
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const row = useRef<HTMLDivElement>(null);
@@ -70,10 +76,11 @@ export function SliderRow(props: SliderRowProps) {
     return () => element.removeEventListener('wheel', wheel);
   }, []);
 
+  // A draft or an error in the box would outlast the reset on screen, so both go first.
   const reset = (): void => {
     setDraft(null);
     setError(null);
-    onChange(def.default);
+    onReset();
   };
 
   const commit = (): void => {
@@ -92,7 +99,7 @@ export function SliderRow(props: SliderRowProps) {
   const following = def.kind === 'auto' && value === null;
   const slider = shown === null ? range[0] : Math.min(range[1], Math.max(range[0], shown));
   return (
-    <div class="row" data-param={name} title={hint} ref={row}>
+    <div class="row" data-param={name} data-changed={changed ? '' : undefined} title={hint} ref={row}>
       <label for={id} onDblClick={reset}>
         {label}
         {unit ? <span class="unit">{units(unit)}</span> : null}
@@ -125,6 +132,8 @@ export function SliderRow(props: SliderRowProps) {
         }}
         onDblClick={reset}
       />
+      {/* Between the slider and the box, as the user asked; an auto row with no model yet keeps its slider off, so the box takes focus. */}
+      <ResetMark def={def} changed={changed} onReset={reset} control={(r) => (def.kind === 'auto' && auto === null ? (r?.querySelector<HTMLElement>('input.num') ?? null) : rowControl(r))} />
       <input
         id={id}
         class={`num${following ? ' auto' : ''}${error ? ' invalid' : ''}`}

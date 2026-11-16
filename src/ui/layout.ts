@@ -1,5 +1,5 @@
-import { PARAM_SCHEMA, type AutoDef, type NumberDef, type ParamDef } from '../core/params/schema';
-import type { ParamPath } from '../app/stages';
+import type { AutoDef, NumberDef, ParamDef } from '../core/params/schema';
+import { paramDef, type ParamPath } from '../app/stages';
 
 /**
  * Where every parameter of PARAM_SCHEMA has its one control, in the sidebar's workflow order. Rarely
@@ -140,10 +140,8 @@ const ENTRY_FLOORS: Partial<Record<ParamPath, number>> = {
   'print.tapeStrip': 0.1,
 };
 
-export function defOf(path: ParamPath): ParamDef {
-  const [group, key] = path.split('.');
-  return (PARAM_SCHEMA as unknown as Record<string, Record<string, ParamDef>>)[group][key];
-}
+/** A parameter's definition in the schema, as every row and check reads it. */
+export const defOf = paramDef;
 
 /** The definition a control checks entries against: the schema's, with a floor where it has no minimum of its own. */
 export function entryDef(path: ParamPath): ParamDef {
@@ -175,11 +173,11 @@ export const OPTION_LABELS: Record<string, string> = { glue: 'Glue in (A)', merg
 /** Tooltips: what each control does, where the label alone does not say. */
 export const HINTS: Partial<Record<ParamPath, string>> = {
   'base.mode': 'A: print the model on its own and glue it into a pocket in the base. B: the model is part of the base.',
-  'base.pocketDepth': 'Follows the layer height until you set it. Double-click to follow again.',
+  'base.pocketDepth': 'Follows the layer height until you set it. Click its arrow, or double-click, to follow again.',
   'base.planeTol': 'Corners this close to the base plane count as standing on it.',
   'silicone.t': 'The least silicone between the model and the cover, everywhere.',
   'silicone.wallDraftDeg': 'Lets the silicone slide out of the cover.',
-  'silicone.baseLayer': 'Silicone over the whole base plate inside the joint, which joins every copy and body into one mold. Follows the silicone thickness until you set it; 0 leaves it out. Double-click to follow again.',
+  'silicone.baseLayer': 'Silicone over the whole base plate inside the joint, which joins every copy and body into one mold. Follows the silicone thickness until you set it; 0 leaves it out. Click its arrow, or double-click, to follow again.',
   'silicone.baseLayerSlopeDeg': 'The top of the base layer rises towards the models by this angle, so air under it moves to them and out through their vents. 0 makes it flat.',
   'grid.spacing': 'Between the models\' bounding boxes. Auto keeps a printable wall between them.',
   'grid.edge': 'From the models to the outside of the box. A minimum: the joint may need more.',

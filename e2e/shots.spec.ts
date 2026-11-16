@@ -73,6 +73,8 @@ interface Shot {
   camera?: 'low' | 'far' | 'low-far';
   /** OL: in Top view, the vent beside the first pour held 10.2 mm from it, under the flange's reach, with the tip's line. */
   ventUnderFlange?: boolean;
+  /** CS: the keyboard's focus on Silicone thickness's reset arrow, reached by Tab from its slider. */
+  marksFocus?: boolean;
 }
 
 // The sidebar's lower sections and the empty state, at fewer sizes: their layout does not change with the model.
@@ -93,6 +95,10 @@ const M11C_SETS = (browser: Browser, width: number, theme: Theme): boolean => wi
 const FL_SETS = M11C_SETS;
 // VF's U2 views and flange outlines: the same sets.
 const VF_SETS = M11C_SETS;
+// CS's marks on changed settings: the same sets.
+const CS_SETS = M11C_SETS;
+/** CS: a few settings changed before the model is dropped: a slider, the mode, an auto row, a checkbox and one in Advanced. */
+const CS_CHANGES: [ParamPath, unknown][] = [['silicone.t', 4], ['base.mode', 'merged'], ['base.pocketDepth', 0.3], ['vents.enabled', false], ['print.infill', 0.1]];
 const V1_PROJECT = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 const CASES: Shot[] = [
@@ -155,6 +161,11 @@ const CASES: Shot[] = [
   { name: 'wolf', file: EXAMPLE_FILES.wolf, grid: [1, 1], only: VF_SETS },
   { name: 'x8-3-pours-top-view', file: EXAMPLE_FILES.x8, grid: [1, 1], settings: [['pour.perModel', 3]], topView: true, only: VF_SETS },
   { name: 'jersey-vent-under-flange', file: EXAMPLE_FILES.jersey, grid: [1, 1], topView: true, ventUnderFlange: true, only: VF_SETS },
+  // CS: the marks on changed settings: coloured names, the arrows between slider and box, the dots, the sections'
+  // Reset and the header's; the keyboard's focus on an arrow; and Advanced open, with how many in it are changed.
+  { name: 'jersey-marks', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: CS_CHANGES, scroll: 'base', only: CS_SETS },
+  { name: 'jersey-marks-focus', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: CS_CHANGES, scroll: 'base', marksFocus: true, only: CS_SETS },
+  { name: 'jersey-marks-advanced', file: EXAMPLE_FILES.jersey, grid: [1, 1], settings: CS_CHANGES, scroll: 'advanced', only: CS_SETS },
 ];
 
 /** The soup-mode L standing on its underside, or the 3 million triangle block in merged mode, by the Open button's input. */
@@ -287,6 +298,11 @@ test.describe('review screenshots', () => {
               const sections = section.closest('[data-testid="sections"]')!;
               sections.scrollTop = (section as HTMLElement).offsetTop - (sections as HTMLElement).offsetTop - lift;
             }, shot.scroll === 'flange' ? 40 : 0);
+          }
+          if (shot.marksFocus) {
+            await page.locator('[data-param="silicone.t"] input[type="range"]').focus();
+            await page.keyboard.press('Tab');
+            await expect(page.locator('[data-param="silicone.t"] button.mark')).toBeFocused();
           }
           if (shot.section) {
             await page.getByTestId('section').check();

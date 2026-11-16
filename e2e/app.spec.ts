@@ -10,6 +10,7 @@ import { PARAM_SCHEMA, type ParamDef } from '../src/core/params/schema';
 import { deriveRim, moldBounds, type Rim } from '../src/core/parts/rim';
 import { parseStl } from '../src/core/stl/parse';
 import { formatCount, formatNumber, formatSize } from '../src/ui/format';
+import { sliderRange, stepOf } from '../src/ui/layout';
 import { coplanarTriangles } from '../src/view/picking';
 import { orientedExample } from '../test/fixtures/fieldRuns';
 import { exampleBytes, EXAMPLE_FILES, EXAMPLE_IDS, skipWithout, type ExampleId } from '../test/fixtures/loadExamples';
@@ -22,6 +23,31 @@ const FULL = process.env.CFG_FULL === '1';
 const PATHS = Object.entries(PARAM_SCHEMA).flatMap(([group, defs]) => Object.keys(defs as Record<string, ParamDef>).map((key) => `${group}.${key}`));
 
 const row = (page: Page, path: string): Locator => page.locator(`[data-param="${path}"]`);
+
+/**
+ * CS: every setting off its default, so every row shows its name in colour and its arrow: a number one step on,
+ * or one back at the top of its range, a flag turned over, the next option, and an auto one at its slider's
+ * middle or the middle of its list. The bolts are on, so their rows show.
+ */
+function allChanged(): [string, unknown][] {
+  return PATHS.map((path) => {
+    const [group, key] = path.split('.');
+    const def = (PARAM_SCHEMA as unknown as Record<string, Record<string, ParamDef>>)[group][key];
+    if (def.kind === 'flag') return [path, !def.default];
+    if (def.kind === 'choice') return [path, def.options[(def.options.indexOf(def.default) + 1) % def.options.length]];
+    if (def.kind === 'auto' && def.options) return [path, def.options[Math.floor(def.options.length / 2)]];
+    const [low, high] = sliderRange(path as never, def), step = stepOf(path as never, def);
+    if (def.kind === 'auto') return [path, Number((Math.round((low + high) / 2 / step) * step).toFixed(4))];
+    const up = Number((def.default + step).toFixed(4));
+    return [path, up <= (def.max ?? Infinity) ? up : Number((def.default - step).toFixed(4))];
+  });
+}
+
+/** checkLayout once the window's new size has reached the page: Diagnostics counts its rows below on the resize event, which follows a frame later. */
+async function settledLayout(page: Page, watch: PageWatch): Promise<void> {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await checkLayout(page, watch);
+}
 const numberBox = (page: Page, path: string): Locator => row(page, path).locator('input.num');
 
 /** A slider set as a drag would leave it, with the input event the app listens to. */
@@ -97,6 +123,35 @@ test.describe('the app on index.html', () => {
       await page.setViewportSize(size);
       await checkLayout(page, watch);
     }
+    // CS: every setting changed, with the bolts on and Advanced open, so every row has its arrow and coloured
+    // name; then Reset in the header puts a dot back in every row. Both fit at both sizes, empty and loaded.
+    // Plane tolerance is under the Model section's face list, which shows with a model only.
+    const everyMark = async (rows: number): Promise<void> => {
+      await hooks(page, (h, list: [string, unknown][]) => list.forEach(([path, value]) => h.setParam(path as never, value)), allChanged());
+      await idle(page);
+      await page.locator('.advanced > summary').click();
+      await expect(page.locator('[data-param]')).toHaveCount(rows);
+      await expect(page.locator('.row button.mark')).toHaveCount(rows);
+      await expect(page.locator('.row[data-changed]')).toHaveCount(rows);
+      // A Reset on every section but Model, which has one setting, and Advanced's inside it.
+      expect(await page.getByTestId('section-reset').evaluateAll((all) => all.map((b) => b.closest('[data-section]')!.getAttribute('data-section')))).toEqual(['base', 'silicone', 'cover', 'pour', 'grid']);
+      await expect(page.getByTestId('advanced-reset')).toHaveCount(1);
+      for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
+        await page.setViewportSize(size);
+        await settledLayout(page, watch);
+      }
+      await page.getByTestId('reset-all').click();
+      await idle(page);
+      // The bolts' rows go with their toggle, and every row left has its dot.
+      await expect(page.locator('.row button.mark')).toHaveCount(0);
+      await expect(page.locator('.row .mark.dot')).toHaveCount(rows - 5);
+      await expect(page.getByTestId('section-reset')).toHaveCount(0);
+      await expect(page.getByTestId('advanced-reset')).toHaveCount(0);
+      await settledLayout(page, watch);
+      await page.locator('.advanced > summary').click();
+      await page.setViewportSize({ width: 1366, height: 768 });
+    };
+    await everyMark(PATHS.length - 1);
     await dropAndWait(page, EXAMPLE_FILES.jersey);
     for (const size of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
       await page.setViewportSize(size);
@@ -106,6 +161,7 @@ test.describe('the app on index.html', () => {
       await checkLayout(page, watch);
       await page.locator('.advanced > summary').click();
     }
+    await everyMark(PATHS.length);
     // The sidebar folds away and comes back, and the view takes its room.
     const before = (await page.getByTestId('viewport').boundingBox())!.width;
     await page.locator('.collapse-tab').click();

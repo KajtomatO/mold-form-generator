@@ -270,7 +270,8 @@ export function exportReadme(input: ReadmeInput): string {
   }
 
   out.push(...heading('Estimates'));
-  out.push(...wrap(`The ${mm(t, 2)} silicone thickness${t === 3 ? ', which is the default,' : ''} and the way the silicone fills the mold from the top are estimates. No published source shows that 3 mm holds up in use, and only a test pour shows how your silicone flows and where air stays. Make a test pour before you rely on this mold.`));
+  // CS: "the default" is the schema's, from defaults.json, so a tuned default is still the one named.
+  out.push(...wrap(`The ${mm(t, 2)} silicone thickness${t === PARAM_SCHEMA.silicone.t.default ? ', which is the default,' : ''} and the way the silicone fills the mold from the top are estimates. No published source shows that 3 mm holds up in use, and only a test pour shows how your silicone flows and where air stays. Make a test pour before you rely on this mold.`));
 
   out.push(...heading('Settings'));
   out.push(...wrap('Every setting this mold was made with, by the names the app gives them. project.json holds the same.'));

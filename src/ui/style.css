@@ -20,6 +20,9 @@
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --radius: 8px;
   --gutter: 16px;
+  /* CS: a changed setting's name and its reset arrow, in the accent of either theme (D22), as orange and
+     yellow mark selection in the view. Declared here once, so it follows the theme's accent. */
+  --changed: var(--accent);
   color-scheme: dark;
 }
 
@@ -268,8 +271,45 @@ a {
 }
 
 .section {
+  position: relative;
   padding: 14px var(--gutter);
   border-bottom: 1px solid var(--line);
+}
+
+/* CS: a section's Reset, on its heading's line at the right, out of the flow, so nothing moves as it comes and goes. */
+.section-reset {
+  position: absolute;
+  top: 12px;
+  right: calc(var(--gutter) - 4px);
+  height: 20px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--changed);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.section-reset:hover {
+  background: color-mix(in srgb, var(--changed) 16%, transparent);
+}
+
+.section-reset svg,
+.section-reset-inline svg {
+  width: 11px;
+  height: 11px;
+}
+
+.section-reset-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  color: var(--changed);
 }
 
 .section h2,
@@ -346,6 +386,22 @@ a {
 
 .advanced[open] > summary svg {
   transform: rotate(90deg);
+}
+
+/* CS: how many settings inside a closed Advanced are changed, as their marks are out of sight. Text, not a control. */
+.advanced > summary .changed-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--changed);
+}
+
+.advanced .advanced-reset {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 
 .lead {
@@ -478,7 +534,8 @@ a {
 
 .row {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) 56px;
+  /* Name, slider, the mark (CS), number box. */
+  grid-template-columns: 112px minmax(0, 1fr) 16px 56px;
   align-items: center;
   gap: 4px 8px;
   margin-bottom: 8px;
@@ -491,6 +548,47 @@ a {
   line-height: 1.25;
   overflow-wrap: anywhere;
   user-select: none;
+}
+
+/* CS: a changed setting's name; its unit and tag keep their own grey. */
+.row[data-changed] > label,
+.row[data-changed] > .label {
+  color: var(--changed);
+}
+
+/* CS: the mark between slider and box, after PrusaSlicer: a grey dot at the default, a curved arrow once
+   changed. Both fill the same 16 x 20 cell, so neither moves the slider or the box as it swaps. */
+.mark {
+  width: 16px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+}
+
+.mark.dot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--track);
+}
+
+.mark.reset {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--changed);
+  cursor: pointer;
+}
+
+.mark.reset:hover {
+  background: color-mix(in srgb, var(--changed) 16%, transparent);
+}
+
+.mark.reset svg {
+  width: 12px;
+  height: 12px;
 }
 
 .unit {
@@ -518,8 +616,18 @@ a {
 }
 
 .row > .wide {
-  grid-column: 2 / 4;
+  grid-column: 2 / 5;
+  grid-row: 1;
+  /* CS: the mark's 16 px and a gap, right after the control, as a column of its own would leave Mode too
+     narrow for "Merged (B)" on one line (D22). */
+  margin-right: 24px;
   min-width: 0;
+}
+
+.row > .wide ~ .mark {
+  grid-row: 1;
+  grid-column: 4;
+  justify-self: end;
 }
 
 input[type='checkbox'] {
@@ -738,6 +846,16 @@ input[type='range']:disabled {
 .header .history {
   display: flex;
   gap: 6px;
+}
+
+/* CS: Reset in the header carries its word, as its arrow alone could pass for Undo beside it. */
+.icon-btn.labelled {
+  width: auto;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
 }
 
 .icon-btn svg {

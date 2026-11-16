@@ -94,6 +94,19 @@ export function Redo() {
   );
 }
 
+/**
+ * CS: a setting back to its default. An open circle of 300 degrees turning counter-clockwise, its arrowhead at
+ * the upper left end, unlike Undo's hooked arrow, and a little heavier, so it reads at 12 px.
+ */
+export function ResetArrow() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...stroke} stroke-width="2.2">
+      <path d="M5.24 10.19A7 7 0 1 0 10.19 5.24" />
+      <path d="M13.47 1.25L10.19 5.24l4.83 1.81" />
+    </svg>
+  );
+}
+
 /** Looking down on a box from above: its outline with a ring on the top, for the top view. */
 export function TopView() {
   return (

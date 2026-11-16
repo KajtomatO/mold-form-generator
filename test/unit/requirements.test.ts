@@ -16,7 +16,7 @@ const folded = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ')
 const missing = (text: string, phrases: string[]): string[] => phrases.filter((phrase) => !folded(text).includes(folded(phrase)));
 
 describe('the requirement map in docs/REQUIREMENTS.md', () => {
-  it('maps every requirement R01 to R39 to test files and titles that exist, or to user checks section 10 lists', () => {
+  it('maps every requirement R01 to R40 to test files and titles that exist, or to user checks section 10 lists', () => {
     expect(mapProblems(requirements, read)).toEqual([]);
   });
 
@@ -59,7 +59,7 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(problems((rows) => rows.set('R11', 'U1'))).toEqual(['R11 names U1, but section 10 does not list R11 under it.']);
     expect(problems((rows) => rows.set('R02', '`test/unit/a.test.ts` "the box is closed"'))).toEqual(["Section 10 lists R02 under U1, but R02's row does not name U1."]);
     expect(problems((rows) => rows.set('R12', '`test/unit/a.test.ts` "reads the field"; M3 cover checks'))).toEqual(['R12: "M3 cover checks" is neither a backticked test file with quoted titles nor a user check\'s id.']);
-    expect(problems((rows) => rows.delete('R39'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R38, not R01 to R39 in order\.$/)]);
+    expect(problems((rows) => rows.delete('R40'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R39, not R01 to R40 in order\.$/)]);
   });
 
   it('section 10 is the fixed list of user checks, and every one covers a requirement', () => {
@@ -68,9 +68,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D21 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D22 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 21 }, (_, k) => `D${k + 1}`));
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 22 }, (_, k) => `D${k + 1}`));
     // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
     expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
@@ -87,6 +87,13 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(section(requirements, 2)).toContain('Which default Flange width?');
     expect(section(requirements, 2)).toContain('The user answered: "2 mm".');
     expect(tableRows(section(requirements, 8)!).find((cells) => cells[0].startsWith('2026-11-12, left over from run FL') && cells[1].includes('vent-low'))?.[2]).toMatch(/^Done in 0\.2\.0 \(`docs\/PLAN\.md`, VN; D21\)/);
+    // CS's, the Reset, the marks and the defaults' file, with the user's three answers of the same dialog, quoted as given.
+    expect(section(requirements, 4)).toContain('D22 records how the Reset, the marks on changed settings and the defaults\' file the user asked for on 2026-11-09 and 2026-11-16 were built');
+    for (const answer of ['The user answered: "Settings only (Recommended)".', 'The user answered: "Accent blue (Recommended)".', 'The user answered: "Your original file".', '> BTW: I wonder if it would be good to put all default values in some json file, so I could fine tune it later.']) expect(section(requirements, 2)).toContain(answer);
+    const future = tableRows(section(requirements, 8)!);
+    for (const item of ['A global Reset button', 'Marks on changed settings']) expect(future.find((cells) => cells[1].startsWith(item))?.[2], item).toMatch(/^Built in 0\.2\.0 \(R40, D22\)/);
+    // The user's third answer, for the simplify and the repair: the copy to print stays the user's own file.
+    for (const item of ['A live memory meter', 'Mesh remesh repair']) expect(future.find((cells) => cells[1].startsWith(item))?.[2], item).toContain('`model_oriented.stl` stays the user\'s original file');
     for (const cells of decisions) expect(cells[1].length, cells[0]).toBeGreaterThan(20);
     const open = tableRows(section(requirements, 9)!);
     // The user settled the M11a memory deviation and the project's licence on 2026-11-09.
@@ -198,6 +205,34 @@ describe('the docs', () => {
     expect(JSON.parse(doc('package.json')).license).toBe('MIT');
     expect(doc('docs/THIRD_PARTY.md')).toContain('under the MIT licence');
     for (const path of ['docs/WORKFLOW.md', 'docs/DEPLOY.md', 'docs/THIRD_PARTY.md', 'docs/BENCHMARKS.md', 'public/third-party-notices.txt']) expect(existsSync(join(root, path)), path).toBe(true);
+  });
+
+  it('README.md says how to tune the defaults: the file, a restart of the server, the check, null for an automatic setting, and the tests pinned at them', () => {
+    // CS: the build's message, schema.ts and the check all send a builder here (D22).
+    const readme = doc('README.md');
+    const start = readme.indexOf('\n## Tuning the defaults\n');
+    expect(start).toBeGreaterThan(0);
+    const tuning = readme.slice(start, readme.indexOf('\n## ', start + 1));
+    expect(
+      missing(tuning, [
+        '`src/core/params/defaults.json`',
+        'which Reset puts back',
+        'Infill is a fraction: 0.05 for 5 percent',
+        'Stop the running server',
+        'run `scripts/serve.sh` again',
+        'The build checks the file before it builds anything',
+        'Nothing is built or served until they are fixed',
+        'or in `serve.log` if you started it with `nohup`',
+        'stays `null` in the file',
+        'fail on purpose and must be measured again',
+        '`test/unit/params.test.ts`',
+        '`test/regression/golden.ts`',
+        '`test/unit/export.test.ts`',
+        '`ML` in `e2e/export.spec.ts`',
+      ]),
+    ).toEqual([]);
+    for (const path of ['src/core/params/defaults.json', 'src/core/params/schema.ts', 'scripts/serve.sh', 'test/unit/params.test.ts', 'test/regression/golden.ts', 'test/unit/export.test.ts', 'e2e/export.spec.ts']) expect(existsSync(join(root, path)), path).toBe(true);
+    expect(doc('e2e/export.spec.ts')).toMatch(/^const ML: /m);
   });
 
   it('docs/DEPLOY.md covers installing, serving, updating, other servers, plain http and the tests', () => {

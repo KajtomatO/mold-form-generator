@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -72,9 +72,14 @@ describe('source rules', () => {
       if (seen.has(path)) continue;
       seen.add(path);
       // A line that starts `import type` is erased at build time, so it pulls nothing in.
-      for (const [, from] of byPath.get(path)!.matchAll(/^import (?!type )[^;]*?from '([^']+)';/gm)) {
+      for (const [, from] of byPath.get(path)!.matchAll(/^import (?!type )[^;]*?from '([^']+)'(?: with \{ type: 'json' \})?;/gm)) {
         expect(from, `${path} loads ${from}`).not.toMatch(/^manifold-3d|^three/);
         if (!from.startsWith('.')) continue;
+        // CS: a JSON file, such as the defaults, is data, which loads nothing in its turn.
+        if (from.endsWith('.json')) {
+          expect(existsSync(join(root, dirname(path), from)), `${path} imports ${from}`).toBe(true);
+          continue;
+        }
         const target = join(dirname(path), from).replaceAll('\\', '/') + '.ts';
         expect(byPath.has(target), `${path} imports ${from}`).toBe(true);
         queue.push(target);
@@ -93,9 +98,14 @@ describe('source rules', () => {
       const path = queue.pop()!;
       if (seen.has(path)) continue;
       seen.add(path);
-      for (const [, from] of byPath.get(path)!.matchAll(/^import (?!type )[^;]*?from '([^']+)';/gm)) {
+      for (const [, from] of byPath.get(path)!.matchAll(/^import (?!type )[^;]*?from '([^']+)'(?: with \{ type: 'json' \})?;/gm)) {
         expect(from, `${path} loads ${from}`).not.toMatch(/^manifold-3d|^three/);
         if (!from.startsWith('.')) continue;
+        // CS: a JSON file, such as the defaults, is data, which loads nothing in its turn.
+        if (from.endsWith('.json')) {
+          expect(existsSync(join(root, dirname(path), from)), `${path} imports ${from}`).toBe(true);
+          continue;
+        }
         const target = join(dirname(path), from).replaceAll('\\', '/') + '.ts';
         expect(byPath.has(target), `${path} imports ${from}`).toBe(true);
         queue.push(target);

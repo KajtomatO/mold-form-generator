@@ -1,5 +1,6 @@
 import type { OpeningPin } from '../core/analysis/placement';
-import type { Params } from '../core/params/schema';
+import { isDefault } from '../core/params/defaults';
+import { PARAM_SCHEMA, type ParamDef, type Params } from '../core/params/schema';
 import { hashString } from './hash';
 
 /**
@@ -134,6 +135,33 @@ export const STAGES: readonly StageDef[] = [
 export const MAIN_ONLY: readonly ParamPath[] = ['print.bedX', 'print.bedY', 'print.bedZ', 'print.infill', 'print.density'];
 
 export const STAGE_BY_ID = new Map(STAGES.map((stage) => [stage.id, stage]));
+
+/** Every parameter by its path, in the schema's order, with its group, key and definition, split once. */
+const PARAMS_BY_PATH = new Map(
+  Object.entries(PARAM_SCHEMA as unknown as Record<string, Record<string, ParamDef>>).flatMap(([group, defs]) =>
+    Object.entries(defs).map(([key, def]) => [`${group}.${key}` as ParamPath, { group: group as keyof Params, key, def }] as const),
+  ),
+);
+
+/** Every parameter's path, in the schema's order. */
+export const PARAM_PATHS: readonly ParamPath[] = [...PARAMS_BY_PATH.keys()];
+
+/** A parameter's definition in the schema. */
+export function paramDef(path: ParamPath): ParamDef {
+  return PARAMS_BY_PATH.get(path)!.def;
+}
+
+/**
+ * The paths among `paths` whose setting is not at its default (isDefault), in their own order: what the
+ * marks, the section resets and Reset in the header show and set back (CS). The sidebar asks on every draw,
+ * so the paths are not split again each time.
+ */
+export function changedPaths(params: Params, paths: readonly ParamPath[] = PARAM_PATHS): ParamPath[] {
+  return paths.filter((path) => {
+    const { group, key, def } = PARAMS_BY_PATH.get(path)!;
+    return !isDefault(def, (params[group] as Record<string, unknown>)[key]);
+  });
+}
 
 export function paramValue(params: Params, path: ParamPath): unknown {
   const [group, key] = path.split('.') as [keyof Params, string];

@@ -36,3 +36,9 @@ export function formatNormal(normal: readonly number[]): string {
   const tilt = (Math.acos(Math.min(1, Math.abs(normal[axis]))) * 180) / Math.PI;
   return tilt < 0.05 ? name : `${name} ${tilt.toFixed(1)}°`;
 }
+
+/** Names as a sentence lists them: "A", "A and B", "A, B and C", or the first `shown` and how many more. */
+export function namedList(names: readonly string[], shown = 4): string {
+  if (names.length <= shown) return names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+  return `${names.slice(0, shown).join(', ')} and ${names.length - shown} more`;
+}

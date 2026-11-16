@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { defineConfig, type Plugin, type UserConfig } from 'vite';
+import { defineConfig, runnerImport, type Plugin, type UserConfig } from 'vite';
 
 const root = import.meta.dirname;
 
-// Nothing here imports the app's own code, so Vite loads this file the same with every config loader.
+// Nothing here imports the app's own code, so Vite loads this file the same with every config loader. The
+// defaults' check below loads it when it runs, through Vite's own module runner.
 /** Where a build is published, as src/app/buildInfo.ts reads it: the release site, the beta site, or anything else. */
 export type Channel = 'stable' | 'beta' | 'local';
 
@@ -74,6 +75,47 @@ export function buildDefines(build: BuildConstants): Record<string, string> {
   };
 }
 
+/** CS: every setting's default, which a builder may tune (README.md, "Tuning the defaults"). */
+export const DEFAULTS_FILE = 'src/core/params/defaults.json';
+
+/**
+ * CS: checks DEFAULTS_FILE before anything is built or served, so a mistake in it stops scripts/serve.sh, the
+ * GitHub Pages build (scripts/build-pages.sh) and the test servers with every problem printed, rather than a
+ * page that breaks when it opens. A file that is no JSON is said here, as the check's own code reads the file
+ * too and would not load; the rest is src/app/defaultsCheck.ts, which test/unit/defaultsFile.test.ts runs.
+ * `file` is for that test.
+ */
+export function checkDefaultsFile(file = resolve(root, DEFAULTS_FILE)): Plugin {
+  return {
+    name: 'cfg-check-defaults',
+    // As the config is read, before any file is built or the dev server listens, and where Vite reports the
+    // error as it is. A preview only serves a build already made, so it has nothing to check.
+    async config(_, env) {
+      if (env.isPreview) return;
+      // Without the byte-order mark an editor may save at its start, which Vite passes over too (defaultsCheck.ts's withoutBom).
+      const text = readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+      let problems: string[];
+      try {
+        JSON.parse(text);
+        problems = [];
+      } catch (error) {
+        // The same words as defaultsCheck.ts's jsonProblem, which the test holds them to.
+        problems = [`The file is not valid JSON: ${(error as Error).message}. JSON takes no comments, and no comma after a group's last value.`];
+      }
+      if (problems.length === 0) {
+        const { module } = await runnerImport<{ checkDefaultsText: (text: string) => string[] }>(resolve(root, 'src/app/defaultsCheck.ts'));
+        problems = module.checkDefaultsText(text);
+        if (problems.length === 0) return;
+      }
+      const said = `${DEFAULTS_FILE} has ${problems.length === 1 ? 'a mistake' : `${problems.length} mistakes`}, so nothing was built:\n${problems.map((problem) => `  - ${problem}`).join('\n')}\nEach setting's range and options are in src/core/params/schema.ts; README.md, "Tuning the defaults", says more.`;
+      // Only the sentences: a stack would point into this file, where nothing is wrong.
+      const error = new Error(said);
+      error.stack = said;
+      throw error;
+    },
+  };
+}
+
 /** Beta pages stay out of search results, which should show the stable site only. */
 export function noindex(): Plugin {
   return {
@@ -88,7 +130,7 @@ export default defineConfig((): UserConfig => {
     // Relative, so one build works at the root, at /mold-form-generator/ and at /mold-form-generator/beta/.
     base: './',
     define: buildDefines(build),
-    plugins: build.channel === 'beta' ? [noindex()] : [],
+    plugins: [checkDefaultsFile(), ...(build.channel === 'beta' ? [noindex()] : [])],
     oxc: { jsx: { runtime: 'automatic', importSource: 'preact' } },
     worker: { format: 'es' },
     server: { host: true },

@@ -1,6 +1,5 @@
 import { signal, type Signal } from '@preact/signals';
 import type { DropResult, OpeningKind } from '../core/analysis/validate';
-import { PARAM_SCHEMA, type ParamDef } from '../core/params/schema';
 import type { Rim } from '../core/parts/rim';
 import { DEFAULT_LAYERS, type LayerName, type LayerStyle } from '../view/layers';
 import type { ExportWant } from '../workers/exportJob';
@@ -13,7 +12,7 @@ import { projectFile, type ProjectFile } from './project';
 import { fileKind, holdsModel, PROJECT_EXTENSION } from './projectArchive';
 import { OPEN_INSTEAD, ProjectError, type ProjectNote } from './projectFile';
 import type { ProjectFiles } from './projectFiles';
-import { setParamValue, type ParamPath } from './stages';
+import { changedPaths, PARAM_PATHS, paramDef, setParamValue, type ParamPath } from './stages';
 import { READ_IN_WORKER_BYTES, readStl, type Opened } from '../workers/projectJob';
 
 export type Theme = 'dark' | 'light';
@@ -496,9 +495,44 @@ export class Store {
   }
 
   setParam(path: ParamPath, value: unknown): void {
-    const [group, key] = path.split('.');
-    const def = (PARAM_SCHEMA as unknown as Record<string, Record<string, ParamDef>>)[group][key];
-    this.change(`the change to ${def.label}`, paramGroup(path), () => this.pipeline.setParams((params) => setParamValue(params, path, value)));
+    this.change(`the change to ${paramDef(path).label}`, paramGroup(path), () => this.pipeline.setParams((params) => setParamValue(params, path, value)));
+  }
+
+  /**
+   * CS: one setting back to its default, an auto one to following its rule (null), from its row's arrow or a
+   * double-click. It takes the control's own group, so a reset within GROUP_MS of the same control's wheel step
+   * joins that step, and one that lands where the step began takes the step away, as a slider's double-click
+   * did before; otherwise it is a step of its own. A setting already at its default changes nothing, and the
+   * pipeline is not woken; nor while an opening is dragged, as Reset and undo.
+   */
+  resetParam(path: ParamPath): void {
+    if (this.drag.value || changedPaths(this.pipeline.params, [path]).length === 0) return;
+    const def = paramDef(path);
+    this.change(`resetting ${def.label}`, paramGroup(path), () => this.pipeline.setParams((params) => setParamValue(params, path, def.kind === 'auto' ? null : def.default)));
+  }
+
+  /**
+   * CS: every changed setting among `paths` back to its default in one change, so one undo step that never
+   * joins another, labelled for Undo's title. Only settings: the base face, pinned openings and removed vents
+   * stay (D22). Nothing changed, nothing is done, and the pipeline is not woken; nor during a drag, as undo.
+   */
+  resetParams(paths: readonly ParamPath[], label: string): void {
+    if (this.drag.value) return;
+    const changed = changedPaths(this.pipeline.params, paths);
+    if (changed.length === 0) return;
+    this.change(label, null, () =>
+      this.pipeline.setParams((params) => {
+        for (const path of changed) {
+          const def = paramDef(path);
+          setParamValue(params, path, def.kind === 'auto' ? null : def.default);
+        }
+      }),
+    );
+  }
+
+  /** CS: the header's Reset, every setting at once (D22). */
+  resetAll(): void {
+    this.resetParams(PARAM_PATHS, 'resetting every setting');
   }
 
   /** While a parameter's slider is held down, every change it makes is one step, however long the pointer rests. Null on release. */

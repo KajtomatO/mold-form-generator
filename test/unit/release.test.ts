@@ -163,13 +163,14 @@ describe('the version and the build', () => {
       }
     };
     const names = (c: UserConfig): string[] => (c.plugins as Plugin[]).map((p) => p.name);
+    // CS: every build checks the defaults first (test/unit/defaultsFile.test.ts).
     for (const channel of [undefined, 'local', 'stable']) {
       expect(make(channel).base, String(channel)).toBe('./');
-      expect(names(make(channel)), String(channel)).toEqual([]);
+      expect(names(make(channel)), String(channel)).toEqual(['cfg-check-defaults']);
     }
     const beta = make('beta');
     expect(beta.base).toBe('./');
-    expect(names(beta)).toEqual(['cfg-noindex']);
+    expect(names(beta)).toEqual(['cfg-check-defaults', 'cfg-noindex']);
     expect(Object.keys(beta.define!)).toEqual(['__CFG_VERSION__', '__CFG_CHANNEL__', '__CFG_COMMIT__', '__CFG_BUILD_DATE__']);
     expect(beta.define!.__CFG_CHANNEL__).toBe('"beta"');
     expect(beta.define!.__CFG_VERSION__).toBe(JSON.stringify(JSON.parse(doc('package.json')).version));

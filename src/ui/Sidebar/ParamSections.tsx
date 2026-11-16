@@ -1,4 +1,5 @@
 import { boltFigure, clampFigure, exportPitch, previewSilicone } from '../../app/derived';
+import { changedPaths } from '../../app/stages';
 import { PARAM_SCHEMA } from '../../core/params/schema';
 import { SEAL_SPACING_MM } from '../../core/report/clamp';
 import { useContext } from 'preact/hooks';
@@ -7,7 +8,7 @@ import { formatNumber } from '../format';
 import { Chevron } from '../icons';
 import { GROUP_NOTES, GROUP_TITLES, SECTION_PARAMS, type SectionId } from '../layout';
 import { ParamRow } from '../ParamRow';
-import { Section } from './Section';
+import { Section, SectionReset } from './Section';
 
 function Rows({ section }: { section: SectionId }) {
   return (
@@ -21,7 +22,7 @@ function Rows({ section }: { section: SectionId }) {
 
 export function BaseSection() {
   return (
-    <Section id="base" title="Base">
+    <Section id="base" title="Base" reset={SECTION_PARAMS.base}>
       <Rows section="base" />
     </Section>
   );
@@ -31,7 +32,7 @@ export function SiliconeSection() {
   const store = useStore();
   const silicone = previewSilicone(store.pipeline);
   return (
-    <Section id="silicone" title="Silicone">
+    <Section id="silicone" title="Silicone" reset={SECTION_PARAMS.silicone}>
       <Rows section="silicone" />
       <p class="figure" data-testid="silicone-figure" title="From the preview field, less the model and any air it seals off, with the silicone in the bores.">
         {silicone ? (
@@ -86,7 +87,7 @@ export function CoverSection() {
   // Only the toggle while the bolts are off: the rest has nothing to say then.
   const bolts = SECTION_PARAMS.cover.filter((path) => path.startsWith('bolts.') && (on || path === 'bolts.enabled'));
   return (
-    <Section id="cover" title="Cover & joint">
+    <Section id="cover" title="Cover & joint" reset={SECTION_PARAMS.cover}>
       {joint.map((path) => (
         <ParamRow key={path} path={path} />
       ))}
@@ -124,7 +125,7 @@ export function GridSection() {
   const pitch = bounds && grid ? exportPitch(params, bounds) : null;
   const walls = pipeline.wallStatus();
   return (
-    <Section id="grid" title="Grid">
+    <Section id="grid" title="Grid" reset={SECTION_PARAMS.grid}>
       <Rows section="grid" />
       {pitch ? (
         <p class="figure" data-testid="pitch" title="From one copy to the next, at full export detail, which is where the parts are placed.">
@@ -147,11 +148,15 @@ export function GridSection() {
 }
 
 export function AdvancedSection() {
+  const store = useStore();
   const groups = Object.keys(PARAM_SCHEMA).filter((group) => SECTION_PARAMS.advanced.some((path) => path.startsWith(`${group}.`)));
   // Advanced is closed by default, so its summary says when a row inside has something to say.
   const problems = useContext(ProblemsContext);
   const inside = SECTION_PARAMS.advanced.flatMap((path) => problems.get(path) ?? []);
   const worst = inside.some((d) => d.severity === 'error') ? 'error' : inside.some((d) => d.severity === 'warning') ? 'warning' : 'info';
+  // CS: and how many of its settings are changed, as its marks are out of sight while it is closed. Text only:
+  // a button in a summary would be a control inside a control, so its Reset is the first line inside.
+  const changed = changedPaths(store.project.value.params, SECTION_PARAMS.advanced).length;
   return (
     <details class="section advanced" data-section="advanced">
       <summary>
@@ -162,7 +167,18 @@ export function AdvancedSection() {
             {inside.length}
           </span>
         ) : null}
+        {changed > 0 ? (
+          <span class="changed-count" data-testid="advanced-changed" title={`${changed === 1 ? 'A setting in here is' : `${changed} settings in here are`} changed from ${changed === 1 ? 'its default' : 'their defaults'}: open to see.`}>
+            {changed} changed
+          </span>
+        ) : null}
       </summary>
+      {changed > 0 ? (
+        <p class="lead advanced-reset">
+          {changed === 1 ? 'One setting changed in here.' : `${changed} settings changed in here.`}
+          <SectionReset paths={SECTION_PARAMS.advanced} title="Advanced" inline />
+        </p>
+      ) : null}
       {groups.map((group) => (
         <div key={group}>
           <h3>{GROUP_TITLES[group]}</h3>

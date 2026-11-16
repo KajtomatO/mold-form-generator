@@ -7,6 +7,7 @@ import { explodeDistance, explodeMax, sectionPlane, Store } from '../../src/app/
 import { dropOpening } from '../../src/core/analysis/validate';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Rim } from '../../src/core/parts/rim';
+import { SECTION_PARAMS } from '../../src/ui/layout';
 import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES, skipWithout } from '../fixtures/loadExamples';
@@ -347,6 +348,158 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     store.cancelDrag();
     expect(JSON.stringify(p.project())).toBe(project);
     expect(flangeOutlines(sizes, O, openingRings(p, store.drag.value))).toEqual(outlines);
+  });
+
+  it('a row\'s reset is one step back to its default, an auto one back to following its rule, and within 400 ms it joins the same control\'s change', async () => {
+    const { store, tick, advance } = await loaded();
+    const p = store.pipeline;
+    tick();
+    store.setParam('silicone.t', 4);
+    tick();
+    store.resetParam('silicone.t');
+    expect(p.params.silicone.t).toBe(3);
+    expect(store.history.depth).toEqual({ undo: 2, redo: 0 });
+    expect(store.history.undoLabel).toBe('resetting Silicone thickness');
+    store.undo();
+    expect(p.params.silicone.t).toBe(4);
+    store.redo();
+    expect(p.params.silicone.t).toBe(3);
+    // An auto setting goes back to null, so it follows its rule again; undo brings back the value typed.
+    tick();
+    store.setParam('base.pocketDepth', 0.4);
+    tick();
+    store.resetParam('base.pocketDepth');
+    expect(p.params.base.pocketDepth).toBeNull();
+    expect(store.history.undoLabel).toBe('resetting Pocket depth');
+    store.undo();
+    expect(p.params.base.pocketDepth).toBe(0.4);
+    store.redo();
+    expect(store.history.depth).toEqual({ undo: 4, redo: 0 });
+    // 100 ms after a wheel step on the same control, the reset joins that step, which then ends where it began, so no step is left.
+    tick();
+    store.setParam('silicone.t', 4);
+    expect(store.history.depth.undo).toBe(5);
+    advance(100);
+    store.resetParam('silicone.t');
+    expect(p.params.silicone.t).toBe(3);
+    expect(store.history.depth).toEqual({ undo: 4, redo: 0 });
+    expect(store.history.undoLabel).toBe('resetting Pocket depth');
+    // At its default, a reset records nothing and does not wake the pipeline, where setting the same value does.
+    await p.idle();
+    tick();
+    const woken = store.tick.value;
+    store.resetParam('silicone.t');
+    store.resetParam('base.pocketDepth');
+    store.resetAll();
+    store.resetParams(SECTION_PARAMS.base, 'resetting the Base settings');
+    expect(store.tick.value).toBe(woken);
+    expect(store.history.depth).toEqual({ undo: 4, redo: 0 });
+    store.setParam('silicone.t', 3);
+    expect(store.tick.value).toBeGreaterThan(woken);
+    expect(store.history.depth).toEqual({ undo: 4, redo: 0 });
+    await p.idle();
+  });
+
+  it('Reset sets every setting back as one step, keeps the base face, moved openings and removed vents, and builds the defaults\' mold', async () => {
+    const { store, tick } = await loaded();
+    const p = store.pipeline;
+    const start = p.geometryHash().all;
+    const edits: [Parameters<Store['setParam']>[0], unknown][] = [
+      ['silicone.t', 4], ['silicone.wallDraftDeg', 2], ['base.mode', 'merged'], ['base.pocketDepth', 0.4], ['vents.enabled', false],
+      ['grid.nx', 2], ['grid.spacing', 12], ['bolts.enabled', true], ['bolts.size', 'M4'], ['funnel.flangeWidth', 0],
+    ];
+    for (const [path, value] of edits) {
+      tick();
+      store.setParam(path, value);
+    }
+    expect(store.history.depth.undo).toBe(edits.length);
+    const before = JSON.stringify(p.project());
+    tick();
+    store.resetAll();
+    // toEqual, as a project opened from a file may hold its keys in another order.
+    expect(p.params).toEqual(defaultParams());
+    expect(store.history.depth).toEqual({ undo: edits.length + 1, redo: 0 });
+    expect(store.history.undoLabel).toBe('resetting every setting');
+    await p.idle();
+    expect(p.geometryHash().all).toBe(start);
+    store.undo();
+    expect(JSON.stringify(p.project())).toBe(before);
+    store.redo();
+    expect(p.params).toEqual(defaultParams());
+    await p.idle();
+
+    // Another base face, a moved pour, a removed vent and a setting: Reset sets the setting back and keeps the rest.
+    tick();
+    store.setPlane({ rank: 1, upper: false });
+    await p.idle();
+    const openings = p.placement!.value.placement.openings;
+    const pour = openings.find((o) => o.kind === 'pour')!, vent = openings.find((o) => o.kind === 'vent')!;
+    tick();
+    store.moveOpening(pour.id, pour.x, pour.y);
+    tick();
+    store.removeVent(vent.id);
+    tick();
+    store.setParam('silicone.t', 3.5);
+    const kept = (({ plane, pins, removed }) => JSON.stringify({ plane, pins, removed }))(p.project());
+    expect(JSON.parse(kept)).toMatchObject({ plane: { rank: 1, upper: false }, removed: [vent.id] });
+    expect(p.project().pins).toHaveLength(1);
+    const depth = store.history.depth.undo;
+    tick();
+    store.resetAll();
+    expect(p.params).toEqual(defaultParams());
+    expect((({ plane, pins, removed }) => JSON.stringify({ plane, pins, removed }))(p.project())).toBe(kept);
+    expect(store.history.depth.undo).toBe(depth + 1);
+    // Again, with nothing changed: no step.
+    tick();
+    store.resetAll();
+    expect(store.history.depth.undo).toBe(depth + 1);
+
+    // A section's Reset sets back its own settings only, as one step of its own.
+    tick();
+    store.setParam('base.thickness', 5);
+    tick();
+    store.setParam('silicone.t', 4);
+    tick();
+    store.resetParams(SECTION_PARAMS.base, 'resetting the Base settings');
+    expect([p.params.base.thickness, p.params.silicone.t]).toEqual([4, 4]);
+    expect(store.history.undoLabel).toBe('resetting the Base settings');
+    expect(store.history.depth.undo).toBe(depth + 4);
+    // While an opening is dragged, Reset waits, as undo does, and so does a row's reset.
+    const moving = p.placement!.value.placement.openings.find((o) => o.kind === 'pour')!;
+    store.dragOpening(moving.id, moving.x, moving.y, { x: 0, y: 0 });
+    store.resetAll();
+    store.resetParams(SECTION_PARAMS.silicone, 'resetting the Silicone settings');
+    store.resetParam('silicone.t');
+    expect(p.params.silicone.t).toBe(4);
+    expect(store.history.depth.undo).toBe(depth + 4);
+    store.cancelDrag();
+    store.resetAll();
+    expect(p.params.silicone.t).toBe(3);
+    await p.idle();
+
+    // A section's Reset and the header's never join the step before, however soon after it they come, even one
+    // of the same control, nor each other: with no time between them, each is a step of its own.
+    const steps = store.history.depth.undo;
+    tick();
+    store.setParam('silicone.t', 4);
+    store.resetParams(SECTION_PARAMS.silicone, 'resetting the Silicone settings');
+    expect(p.params.silicone.t).toBe(3);
+    expect(store.history.depth.undo).toBe(steps + 2);
+    store.setParam('base.thickness', 5);
+    store.setParam('grid.nx', 2);
+    store.resetParams(SECTION_PARAMS.base, 'resetting the Base settings');
+    store.resetParams(SECTION_PARAMS.grid, 'resetting the Grid settings');
+    expect(store.history.depth.undo).toBe(steps + 6);
+    store.setParam('silicone.t', 4);
+    store.resetAll();
+    expect(store.history.depth.undo).toBe(steps + 8);
+    expect(store.history.undoLabel).toBe('resetting every setting');
+    store.undo();
+    expect(p.params.silicone.t).toBe(4);
+    store.undo();
+    expect(p.params.silicone.t).toBe(3);
+    expect(store.history.undoLabel).toBe('resetting the Grid settings');
+    await p.idle();
   });
 
   it('a change of base plane undoes to the old plane with the pins and removed vents it had, and redoes to the new one without them', async () => {

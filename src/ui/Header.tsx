@@ -1,11 +1,22 @@
 import { BUILD, buildTitle } from '../app/buildInfo';
+import { changedPaths, paramDef, type ParamPath } from '../app/stages';
 import { APP_NAME } from '../app/version';
 import { useStore } from './context';
-import { Logo, Moon, Redo, Sun, Undo } from './icons';
+import { namedList } from './format';
+import { Logo, Moon, Redo, ResetArrow, Sun, Undo } from './icons';
+
+/** CS: what Reset in the header says it will do, naming what it sets back and what it keeps (D22). */
+export function resetAllTitle(changed: readonly ParamPath[]): string {
+  if (changed.length === 0) return 'Every setting is at its default.';
+  return `Reset every setting to its default: ${changed.length} changed (${namedList(changed.map((path) => paramDef(path).label))}). The base face, moved openings and removed vents stay. Undo takes it back (Ctrl+Z).`;
+}
 
 export function Header() {
   const store = useStore();
   void store.historyTick.value;
+  // CS: one step of every setting back to its default, with no question asked, as Undo beside it takes it back.
+  const changed = changedPaths(store.project.value.params);
+  const resetTitle = resetAllTitle(changed);
   const light = store.theme.value === 'light';
   const undo = store.history.undoLabel, redo = store.history.redoLabel;
   // Each button's title names the step it takes back or puts back.
@@ -34,6 +45,10 @@ export function Header() {
         )}
       </div>
       <div class="spacer" />
+      <button type="button" class="icon-btn labelled" data-testid="reset-all" aria-label="Reset every setting" title={resetTitle} disabled={changed.length === 0} onClick={() => store.resetAll()}>
+        <ResetArrow />
+        Reset
+      </button>
       <div class="history" role="group" aria-label="History">
         <button type="button" class="icon-btn" data-testid="undo" aria-label={undoTitle} title={undoTitle} disabled={!undo} onClick={() => store.undo()}>
           <Undo />
