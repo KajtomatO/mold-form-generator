@@ -171,7 +171,7 @@ test.describe('hardening on index.html', () => {
     await expect(page.getByTestId('diagnostics')).toContainText('merged mode cannot be used with it');
     // The hole in the L's side has a Show, which marks it in the view.
     const hole = page.getByTestId('diagnostics').locator('[data-code="missing-surface"]');
-    await expect(hole).toContainText('The surface has 1 hole of 30.0 mm². Close it in the program that made the model, or with a mesh repair, and open the file again.');
+    await expect(hole).toContainText('The surface has 1 hole of 30.0 mm². Use Repair mesh in the Model section, or close it in the program that made the model and open the file again.');
     await expect(hole.getByRole('button', { name: 'Show' })).toBeVisible();
 
     const rim = await app(page, (a) => a.store.pipeline.field!.value.rim);
@@ -202,7 +202,7 @@ test.describe('hardening on index.html', () => {
     });
     await idle(page);
     const below = page.locator('[data-section="model"] [data-param="base.planeTol"] [data-code="below-plane-soup"]');
-    await expect(below).toContainText('an open mesh cannot be trimmed, so please choose another base face, or repair the mesh and open it again.');
+    await expect(below).toContainText('an open mesh cannot be trimmed, so please choose another base face, or use Repair mesh in the Model section.');
     await expect(page.getByTestId('export-zip')).toBeDisabled();
   });
 });

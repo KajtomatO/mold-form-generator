@@ -123,7 +123,7 @@ export function orientToBase(mesh: WeldedMesh, candidate: BaseCandidate, options
     diagnostics.push({
       code: 'below-plane-soup',
       severity: 'error',
-      message: `${vertexCount} vertices lie up to ${depth.toFixed(2)} mm below this plane, and an open mesh cannot be trimmed, so please choose another base face, or repair the mesh and open it again.`,
+      message: `${vertexCount} vertices lie up to ${depth.toFixed(2)} mm below this plane, and an open mesh cannot be trimmed, so please choose another base face, or use Repair mesh in the Model section.`,
     });
   } else if (needsTrim) {
     diagnostics.push({
@@ -154,7 +154,7 @@ export function orientToBase(mesh: WeldedMesh, candidate: BaseCandidate, options
     diagnostics.push({
       code: 'missing-top-surface',
       severity: 'warning',
-      message: `On this plane ${upward.toFixed(1)} mm2 of holes face upward, and the cavity will be too low where a top surface is missing. Repair the mesh to close them, and open it again.`,
+      message: `On this plane ${upward.toFixed(1)} mm2 of holes face upward, and the cavity will be too low where a top surface is missing. Use Repair mesh in the Model section to close them.`,
     });
   }
   return { mesh: { positions, indices: mesh.indices }, transform, below: { vertexCount, depth }, needsTrim, usable: !(needsTrim && soup), diagnostics };

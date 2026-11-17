@@ -233,7 +233,7 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
     diagnostics.push({
       code: 'missing-surface',
       severity: 'info',
-      message: `${audit.openLoops.length === 1 ? `The surface has 1 hole of ${audit.openArea.toFixed(1)} mm2` : `The surface has ${audit.openLoops.length} holes totalling ${audit.openArea.toFixed(1)} mm2`}. Close ${audit.openLoops.length === 1 ? 'it' : 'them'} in the program that made the model, or with a mesh repair, and open the file again.`,
+      message: `${audit.openLoops.length === 1 ? `The surface has 1 hole of ${audit.openArea.toFixed(1)} mm2` : `The surface has ${audit.openLoops.length} holes totalling ${audit.openArea.toFixed(1)} mm2`}. Use Repair mesh in the Model section, or close ${audit.openLoops.length === 1 ? 'it' : 'them'} in the program that made the model and open the file again.`,
     });
   }
 

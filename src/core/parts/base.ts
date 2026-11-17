@@ -222,7 +222,7 @@ export function buildMergedBase(arena: Arena, body: Manifold, model: Manifold | 
       base: null,
       filledVoid: 0,
       modelOverhangArea: 0,
-      diagnostics: [{ code: 'mode-b-disabled', severity: 'error', message: 'Merged mode needs a closed solid, and this mesh is open, so please use glue mode or repair the file.' }],
+      diagnostics: [{ code: 'mode-b-disabled', severity: 'error', message: 'Merged mode needs a closed solid, and this mesh is open, so please use glue mode, or use Repair mesh in the Model section.' }],
     };
   }
   const diagnostics: Diagnostic[] = [];

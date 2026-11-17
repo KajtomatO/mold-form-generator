@@ -858,7 +858,7 @@ describe('the export of jersey in Node', () => {
     }
     expect(p.modelClosed()).toBe(false);
     const error = allDiagnostics(p).find((d) => d.code === 'below-plane-soup')!;
-    expect(error).toMatchObject({ severity: 'error', message: expect.stringMatching(/below this plane, and an open mesh cannot be trimmed, so please choose another base face, or repair the mesh and open it again\.$/) });
+    expect(error).toMatchObject({ severity: 'error', message: expect.stringMatching(/below this plane, and an open mesh cannot be trimmed, so please choose another base face, or use Repair mesh in the Model section\.$/) });
     expect(DIAGNOSTIC_PARAM['below-plane-soup']).toBe('base.planeTol');
     expect(exportBlocked(p)).toBe(`Fix this first: ${error.message}`);
   }, 60_000);
