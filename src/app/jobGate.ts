@@ -16,6 +16,18 @@ export interface GateTarget {
   rev: number;
   /** The model and plane it is for. A result for another is rejected. */
   modelKey: string;
+  /**
+   * What the job builds, one entry per stage it is asked for, each under the key it is built for (MM2). A
+   * request the running job already builds all of is no newer request: it waits for nothing and ends
+   * nothing. Nor is one that asks for everything the running job builds and more, as ending that job would
+   * only build the same again. Without it, only the same id counts as the same work.
+   */
+  builds?: readonly string[];
+}
+
+/** Whether every entry of `part` is one of `whole`'s, for targets of one model and plane. */
+function within<T extends GateTarget>(part: T, whole: T): boolean {
+  return part.builds !== undefined && whole.builds !== undefined && part.modelKey === whole.modelKey && part.builds.every((entry) => whole.builds!.includes(entry));
 }
 
 export interface Timers {
@@ -115,7 +127,8 @@ export class JobGate<T extends GateTarget> {
   }
 
   request(target: T): void {
-    if (this.running?.target.id === target.id) {
+    // The running job builds it already, as the field job does its own placement once its field is in (MM2).
+    if (this.running && (this.running.target.id === target.id || within(target, this.running.target))) {
       this.pending = null;
       return;
     }
@@ -249,7 +262,10 @@ export class JobGate<T extends GateTarget> {
     }, Math.max(RECHECK_MS, left + 1));
   }
 
-  /** Rule 4: only with a newer request waiting, and only past the budget. */
+  /**
+   * Rule 4: only with a newer request waiting, and only past the budget. A request that wants everything the
+   * running job builds, under the same keys, is not newer than it: ending the job would only start it again.
+   */
   private checkOverrun(): void {
     const running = this.running;
     if (!running) return;
@@ -258,7 +274,7 @@ export class JobGate<T extends GateTarget> {
       if (this.killTimer === null) this.armOverrun();
       return;
     }
-    if (!this.pending || this.pending.id === running.target.id) return;
+    if (!this.pending || this.pending.id === running.target.id || within(running.target, this.pending)) return;
     this.running = null;
     this.log('terminated', running.job, running.target, `after ${Math.round(ms)} ms`);
     this.respawn('terminated');

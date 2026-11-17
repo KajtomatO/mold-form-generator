@@ -14,10 +14,11 @@ import { transformPositions, trimToBase, type OrientedModel, type RigidTransform
 import { buildField } from '../core/field/build';
 import { fieldSettings, planField, type Field, type FieldPlan, type FieldSettings } from '../core/field/grid';
 import { moldSilicone } from '../core/field/silicone';
-import type { MeshAudit } from '../core/mesh/audit';
-import { importSolid, sharedVolume, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
+import { auditEdges, type MeshAudit } from '../core/mesh/audit';
+import { DEVIATION_CELL_MM, SurfaceIndex } from '../core/mesh/deviation';
+import { importSolid, reversed, sharedVolume, signedVolumeAbout, type ImportedSolid, type SolidReport } from '../core/mesh/shells';
 import { HEAVY_LIMITS, importFromCopy, manifoldPathSolid, simplifyForManifold, type HeavyLimits, type ManifoldPath, type MeshSimplifier } from '../core/mesh/simplify';
-import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
+import { meshBounds, weld, type WeldedMesh } from '../core/mesh/weld';
 import { resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
@@ -35,7 +36,11 @@ import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartA
 import { exportReadme } from '../core/report/readme';
 import { withArena, type Arena } from '../core/solid/arena';
 import { buildToolMesh, toolSolid } from '../core/solid/tool';
+import { parseStl } from '../core/stl/parse';
+import { writeBinaryStl } from '../core/stl/write';
+import { simplifiedEntry, type OriginalFacts, type OriginalSource, type SimplifiedRecord } from '../app/simplified';
 import { InlineError, type PlaneChoice } from './fieldStages';
+import { originalBytes } from './prepareJob';
 
 /** G4: minGap runs against the model decimated to at most this many triangles. */
 export const MIN_GAP_TRIANGLES = 60_000;
@@ -76,6 +81,16 @@ export interface ExportInputs {
    * only the simplified copy every Manifold step uses, as the whole solid would hold 1.3 GB of its heap.
    */
   importReport?: SolidReport | null;
+  /**
+   * MM2: a simplified model's proved error, in mm, which widens G4's margin as the preview's does. Only for a
+   * simplified model: the welded mesh above is then its copy.
+   */
+  modelErrorMm?: number;
+  /**
+   * MM2: the maker's own file a simplified model was made from, for a glue-mode Export ZIP, whose
+   * model_oriented.stl it is: read here, checked against its hash, and turned as the copy is.
+   */
+  original?: { source: OriginalSource; sha256: string; facts: OriginalFacts; wholeSolid?: boolean } | null;
 }
 
 /** What main knows and the export does not, for the README, report.json and project.json. */
@@ -92,6 +107,8 @@ export interface ExportMeta {
   plane: { normal: [number, number, number]; offset: number; area: number; planeTol: number };
   /** The diagnostics in force on main, which the README and report list with the export's own. */
   notes: Diagnostic[];
+  /** MM2: a simplified model's file and copy, which report.json, README.txt and project.json name. Only when simplified. */
+  simplified?: { from: OriginalFacts; record: SimplifiedRecord };
 }
 
 /** The funnel and the fit test need no model, so they come with no inputs and no meta. */
@@ -110,6 +127,11 @@ export interface Clearance {
   error: number;
   /** By how much the margin was raised for a second build, or 0. */
   raisedBy: number;
+  /**
+   * MM2, glue mode: how far the simplified copy the mold was made from lies from the maker's file, measured, also
+   * taken off, so `measured` holds for the file. Only for a simplified model.
+   */
+  simplify?: number;
 }
 
 /** report.json: every number of the export, for the maker to check and for M9 and support to read. */
@@ -117,7 +139,7 @@ export interface ExportReport {
   app: string;
   appVersion: string;
   schemaVersion: number;
-  model: { file: string; format: 'binary' | 'ascii'; trianglesInFile: number; triangles: number; bodies: number; volumeMm3: number | null };
+  model: { file: string; format: 'binary' | 'ascii'; trianglesInFile: number; triangles: number; bodies: number; volumeMm3: number | null; simplified?: SimplifiedRecord };
   params: Params;
   plane: { choice: PlaneChoice; normal: [number, number, number]; offset: number; areaMm2: number; planeTol: number };
   /** Each copy's shift from the first, in mm. */
@@ -134,7 +156,7 @@ export interface ExportReport {
   plastic: PlasticEstimate;
   /** M10: the bolts as cut, the walls they leave and the advice on them, or null with the bolts off. */
   bolts: ExportBolts | null;
-  clearance: { asked: number; measured: number | null; minGap: number | null; decimationError: number | null; marginRaisedBy: number; searchMm: number | null };
+  clearance: { asked: number; measured: number | null; minGap: number | null; decimationError: number | null; simplifyErrorMm?: number; marginRaisedBy: number; searchMm: number | null };
   parts: Record<string, { triangles: number; volumeMm3: number | null }>;
   diagnostics: Diagnostic[];
   /** In ms, per step of this export, and the total until the ZIP is packed, which is the one step left out. */
@@ -176,8 +198,13 @@ export interface ExportOutputs {
 
 export type ProgressReport = (step: string, done: number, total: number) => void;
 
-/** The steps each request goes through, in order, which the stage bar counts. */
-export function exportSteps(request: ExportRequest): string[] {
+/**
+ * The steps each request goes through, in order, which the stage bar counts. MM2: a simplified model's glue-mode
+ * ZIP reads the maker's file for model_oriented.stl, `original`: before the build where the plane trims it, as
+ * that needs its whole solid, whose heap the build then reuses; otherwise after the clearance, so its STL is
+ * never held through the build.
+ */
+export function exportSteps(request: ExportRequest, original: 'before' | 'after' | null = null): string[] {
   switch (request.want) {
     case 'funnel':
       return ['funnel'];
@@ -188,8 +215,14 @@ export function exportSteps(request: ExportRequest): string[] {
     case 'base':
       return ['import', 'field', 'tool', 'cover', 'base', 'clearance', 'files'];
     default:
-      return ['import', 'field', 'tool', 'cover', 'base', 'clearance', 'files', ...(request.fitTest ? ['fit-test'] : []), 'zip'];
+      return ['import', ...(original === 'before' ? ['original'] : []), 'field', 'tool', 'cover', 'base', 'clearance', ...(original === 'after' ? ['original'] : []), 'files', ...(request.fitTest ? ['fit-test'] : []), 'zip'];
   }
+}
+
+/** Where an export reads the maker's file, if it does: see exportSteps. */
+export function originalStep(job: Pick<ExportJob, 'want' | 'inputs'>): 'before' | 'after' | null {
+  if (job.want !== 'zip' || !job.inputs?.original) return null;
+  return job.inputs.needsTrim || job.inputs.original.wholeSolid ? 'before' : 'after';
 }
 
 interface Built {
@@ -232,8 +265,9 @@ function unique(list: Diagnostic[]): Diagnostic[] {
  * from the clearance on, and the files. A raise's build takes the first one's place there once it is done,
  * so `holding` keeps nothing alive that the export itself has let go, and it changes nothing the export makes.
  */
-export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job: ExportJob, progress: ProgressReport, now: () => number, timings: Record<string, number> = {}, limits: HeavyLimits = HEAVY_LIMITS, holding: unknown[] = []): ExportOutputs {
-  const steps = exportSteps(job);
+export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job: ExportJob, progress: ProgressReport, now: () => number, timings: Record<string, number> = {}, limits: HeavyLimits = HEAVY_LIMITS, holding: unknown[] = [], readBlob: (blob: Blob) => Uint8Array = noReader): ExportOutputs {
+  const reads = originalStep(job);
+  const steps = exportSteps(job, reads);
   // After a raise of the margin the build runs again. Its steps show as one, 'raise', where the clearance
   // stands, so the stage bar never runs backwards. A step is reported once, when it begins.
   let raising = false;
@@ -313,6 +347,8 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         wholeVolume = imported.solid.volume() - overlap;
       }
     }
+    // MM2: the maker's own file for model_oriented.stl, where the plane trims it, before the build: see exportSteps.
+    const original = reads === 'before' ? timed('original', () => readOriginal(api, inputs, imported.report, overlap, readBlob, holding)) : null;
     // G1.8: past the limit every Manifold step after the import uses a simplified copy.
     const path: ManifoldPath = fromCopy ? { solid: fromCopy.solid, heavy: true, diagnostics: fromCopy.simplified, errorMm: fromCopy.errorMm } : timed('import', () => manifoldPathSolid(arena, imported, simplifier, limits.limit, limits.target));
     // The copy stands in for the whole solid from here on. One that is no closed solid leaves the whole one in use.
@@ -375,34 +411,45 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       return { ...shaped, cover, base, diagnostics: own };
     };
 
-    let built = build(printMargin);
+    // MM2: a simplified model's copy lies up to its proved error from the maker's file, so the cavity planned on
+    // it is widened by that much, as the preview's is: it then holds the file too. 0 adds nothing.
+    const extra = inputs.modelErrorMm ?? 0;
+    let built = build(printMargin + extra);
     holding[slot] = built;
     let clearance: Clearance | null = null;
     const search = Math.max(8, scaled.silicone.t + SEARCH_PAST_T);
+    // MM2: a simplified model's gap is measured through its copy, with both errors measured, not meshoptimizer's
+    // figure: in glue mode the maker's file lies within `extra` of the copy, which lies within the decimation's
+    // error of what minGap measures. In merged mode the base carries the copy, so the copy is the model in the mold.
+    const simplified = inputs.modelErrorMm !== undefined;
+    const throughCopy = simplified && scaled.base.mode === 'glue' ? extra : null;
     // Decimating a heavy model is part of measuring it, so it shows as that step.
-    const probe = model ? timed('clearance', () => decimate(arena, simplifier, mesh, { solid: model, error: path.errorMm }, inputs.needsTrim)) : null;
+    const probe = model ? timed('clearance', () => decimate(arena, simplifier, mesh, { solid: model, error: path.errorMm }, inputs.needsTrim, simplified)) : null;
     if (probe) {
       const gapOf = (b: Built): number => timed('clearance', () => {
         const copies = b.offsets.map(([x, y]) => arena.track(probe.solid.translate([x, y, 0])));
-        return arena.track(arena.api.Manifold.compose(copies)).minGap(b.cover, search) - probe.error;
+        const gap = arena.track(arena.api.Manifold.compose(copies)).minGap(b.cover, search) - probe.error;
+        return throughCopy === null ? gap : gap - throughCopy;
       });
       let measured = gapOf(built);
       let raisedBy = 0;
       if (measured < scaled.silicone.t) {
         raisedBy = scaled.silicone.t - measured + RAISE_EXTRA;
         raising = true;
-        built = build(printMargin + raisedBy);
+        built = build(printMargin + extra + raisedBy);
         holding[slot] = built;
         raising = false;
         measured = gapOf(built);
         diagnostics.push({ code: 'margin-raised', severity: 'warning', message: `The silicone measured thinner than ${scaled.silicone.t} mm in places, so the safety margin was raised by ${raisedBy.toFixed(2)} mm and the mold built again, a little larger than the preview shows.` });
       }
-      clearance = { measured, error: probe.error, raisedBy };
+      clearance = { measured, error: probe.error, raisedBy, ...(throughCopy === null ? {} : { simplify: throughCopy }) };
       if (measured < scaled.silicone.t) diagnostics.push({ code: 'clearance-short', severity: 'error', message: `Even after a wider safety margin, the silicone is only ${measured.toFixed(2)} mm thick at its thinnest, under the ${scaled.silicone.t} mm asked for. Raise Print margin under Advanced, Silicone, and export again.` });
     } else {
       diagnostics.push({ code: 'clearance-unverified', severity: 'warning', message: `The model's mesh has holes, so the silicone thickness could not be measured: the mold is planned to leave at least ${scaled.silicone.t} mm, but that is not checked.` });
     }
     diagnostics.push(...built.diagnostics);
+    // MM2: the maker's file, where the plane does not trim it, now the build is done: see exportSteps.
+    const originalModel = original ?? (reads === 'after' ? timed('original', () => readOriginal(api, inputs, imported.report, overlap, readBlob, holding)) : null);
 
     const funnel = want === 'zip' && scaled.funnel.generate && !crossParameterErrors(scaled).some((d) => d.code.startsWith('funnel-')) ? buildFunnel(arena, scaled) : null;
     const files = timed('files', () => {
@@ -410,7 +457,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
       if (want !== 'base') out['cover.stl'] = poseToStl(api, built.cover, coverPose(built.rim));
       if (built.base && want !== 'cover') out['base.stl'] = poseToStl(api, built.base, basePose(built.rim));
       if (funnel) out['funnel.stl'] = poseToStl(api, funnel, funnelPose(scaled));
-      if (want === 'zip' && scaled.base.mode === 'glue') out['model_oriented.stl'] = trimmedStl ?? modelOrientedStl({ mesh, needsTrim: inputs.needsTrim } as OrientedModel, model);
+      if (want === 'zip' && scaled.base.mode === 'glue') out['model_oriented.stl'] = originalModel?.stl ?? trimmedStl ?? modelOrientedStl({ mesh, needsTrim: inputs.needsTrim } as OrientedModel, model);
       return out;
     });
     holding.push(files, trimmedStl);
@@ -456,7 +503,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         'cover.stl': built.cover.volume(),
         'base.stl': built.base!.volume(),
         'funnel.stl': funnel ? funnel.volume() : null,
-        'model_oriented.stl': wholeVolume ?? (model ? model.volume() - shared : null),
+        'model_oriented.stl': originalModel ? originalModel.volume : wholeVolume ?? (model ? model.volume() - shared : null),
       };
       const found = reports ? (({ diagnostics: _shown, ...rest }) => rest)(reports) : null;
       const report = buildReport(params, inputs, meta, { imported, modelVolume: wholeVolume ?? (model ? model.volume() - shared : null), built, clearance, search: probe ? search : null, silicone: { ml, boresMl, sealedAirMl: (silicone.sealedAir * built.plan.nx * built.plan.ny) / 1000 }, reports: found, reportsError, plastic, bolts: bolts ? exportBolts(built, bolts.advice, scaled.quality.tinTolFinal) : null, files, volumes, diagnostics: inForce, timings: { ...timings, total: now() - started } });
@@ -492,12 +539,13 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         plastic,
         diagnostics: inForce,
         parts: { count: imported.report.shells.filter((shell) => shell.kind !== 'void').length, bodies: imported.report.bodies },
+        ...(meta.simplified ? { simplified: { ...meta.simplified, merged: scaled.base.mode === 'merged', ...(originalModel && inputs.needsTrim ? { trimmedTo: originalModel.triangles } : {}) } } : {}),
       });
       const text = new TextEncoder();
       files['README.txt'] = text.encode(readme);
       files['report.json'] = text.encode(`${JSON.stringify(report, null, 2)}\n`);
       const modelSha256 = meta.modelSha256 ?? (inputs.stl ? sha256(inputs.stl) : null);
-      files['project.json'] = text.encode(projectJson(projectFile(meta.project, meta.model, { modelSha256, basePlane: meta.basePlane })));
+      files['project.json'] = text.encode(projectJson(projectFile(meta.project, meta.model, { modelSha256, basePlane: meta.basePlane, ...(meta.simplified ? { simplified: simplifiedEntry(meta.simplified) } : {}) })));
       return { want, files, zip: zip(files), clearance, rim: built.rim, diagnostics, report, modelSha256 };
     });
   });
@@ -528,7 +576,7 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
     app: APP_NAME,
     appVersion: BUILD.version,
     schemaVersion: SCHEMA_VERSION,
-    model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: m.imported.report.bodies, volumeMm3: m.modelVolume },
+    model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: m.imported.report.bodies, volumeMm3: m.modelVolume, ...(meta.simplified ? { simplified: meta.simplified.record } : {}) },
     params,
     plane: { choice: meta.project.plane, normal: meta.plane.normal, offset: meta.plane.offset, areaMm2: meta.plane.area, planeTol: meta.plane.planeTol },
     tiles: space.offsets,
@@ -545,8 +593,10 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
     clearance: {
       asked: params.silicone.t,
       measured: m.clearance?.measured ?? null,
-      minGap: m.clearance ? m.clearance.measured + m.clearance.error : null,
+      // MM2: a gap measured through a simplified copy gave up the copy's error too.
+      minGap: m.clearance ? (m.clearance.simplify === undefined ? m.clearance.measured + m.clearance.error : m.clearance.measured + m.clearance.error + m.clearance.simplify) : null,
       decimationError: m.clearance?.error ?? null,
+      ...(m.clearance?.simplify === undefined ? {} : { simplifyErrorMm: m.clearance.simplify }),
       marginRaisedBy: m.clearance?.raisedBy ?? 0,
       searchMm: m.search,
     },
@@ -584,15 +634,82 @@ function exportBolts(built: Built, advice: BoltAdvice, raise: number): ExportBol
  * decimated copy is no solid. `model.error` is how far the model's solid may lie from the mesh: 0, or
  * past G1.8's limit the simplified copy's error, which a gap measured on it must give up.
  */
-function decimate(arena: Arena, simplifier: MeshSimplifier, mesh: WeldedMesh, model: { solid: Manifold; error: number }, needsTrim: boolean): { solid: Manifold; error: number } {
+function decimate(arena: Arena, simplifier: MeshSimplifier, mesh: WeldedMesh, model: { solid: Manifold; error: number }, needsTrim: boolean, measure = false): { solid: Manifold; error: number } {
   const simplified = simplifyForManifold(mesh, simplifier, MIN_GAP_TRIANGLES);
   if (!simplified) return model;
   try {
     const solid = arena.manifold(new arena.api.Mesh({ numProp: 3, vertProperties: simplified.mesh.positions, triVerts: simplified.mesh.indices }));
-    return { solid: needsTrim ? trimToBase(arena, solid) : solid, error: simplified.errorMm };
+    // MM2: for a simplified model, how far the model lies from the decimated copy, proved, as meshoptimizer's
+    // figure is not a bound (docs/PLAN.md, MM2). Models loaded as they are keep G4's figure, and their bytes.
+    return { solid: needsTrim ? trimToBase(arena, solid) : solid, error: measure ? measuredError(mesh, simplified.mesh) : simplified.errorMm };
   } catch (error) {
     // A simplified copy can fold onto itself. Measuring the model's own solid is slower, and as close as its error.
     if (error instanceof Error && error.name === 'ManifoldError') return model;
     throw error;
   }
+}
+
+const noReader = (): Uint8Array => {
+  throw new Error('This worker cannot read files.');
+};
+
+/**
+ * MM2: how far `mesh`'s surface lies from `copy`'s at most, proved over every point of it (SurfaceIndex.bound), with
+ * a reach that grows until no point is beyond it.
+ */
+export function measuredError(mesh: WeldedMesh, copy: WeldedMesh): number {
+  for (let reach = 0.5; ; reach *= 2) {
+    const found = new SurfaceIndex(copy, reach, Math.max(DEVIATION_CELL_MM, reach)).bound(mesh, null);
+    if (!found.beyond) return found.bound;
+  }
+}
+
+/**
+ * MM2: model_oriented.stl of a simplified model is the maker's own file (the user's answer of 2026-11-16): read
+ * again from where it was opened, checked against its hash, parsed and welded as a load does, and turned by the
+ * plan's transform, with the import's flip, into the same writer's STL. Where the plane trims the model, or the
+ * copy's import flipped an inside-out separate body (`copy`'s 'shell-inverted', which only the whole solid can
+ * do again: MM2's review), the file takes the whole-solid path a model loaded as it is takes, trimmed if need be.
+ * Its volume less what its parts share is what report.json gives. Its arrays go in one slot of `holding`, which
+ * each step replaces.
+ */
+function readOriginal(api: ManifoldToplevel, inputs: ExportInputs, copy: SolidReport, overlap: number, readBlob: (blob: Blob) => Uint8Array, holding: unknown[]): { stl: Uint8Array; volume: number; triangles: number } {
+  const { source, sha256: expected, facts } = inputs.original!;
+  const slot = holding.push(null) - 1;
+  const changed = (): InlineError => new InlineError('original-unreadable', `${facts.name} could not be read again for model_oriented.stl, so nothing was saved: it may have been moved, renamed or changed since you opened it. Open it again, then export.`);
+  let bytes: Uint8Array | null;
+  try {
+    bytes = originalBytes(source, facts.name, readBlob);
+  } catch {
+    throw changed();
+  }
+  holding[slot] = bytes;
+  if (sha256(bytes) !== expected) throw changed();
+  const parsed = parseStl(bytes);
+  bytes = null;
+  holding[slot] = parsed.positions;
+  const welded = weld(parsed.positions);
+  holding[slot] = welded;
+  if (inputs.needsTrim || inputs.original!.wholeSolid || copy.diagnostics.some((d) => d.code === 'shell-inverted')) {
+    const read = withArena(api, (scratch) => {
+      const whole = importSolid(scratch, welded, auditEdges(welded));
+      const mesh: WeldedMesh = { positions: transformPositions(whole.mesh.positions, inputs.transform), indices: whole.mesh.indices };
+      holding[slot] = [welded, mesh];
+      if (!inputs.needsTrim) return { stl: writeBinaryStl(mesh.positions, mesh.indices), volume: whole.solid ? whole.solid.volume() - whole.report.overlapVolume : 0 };
+      const trimmed = orientedSolid(scratch, whole, { transform: inputs.transform, needsTrim: true });
+      const stl = modelOrientedStl({ mesh, needsTrim: true } as OrientedModel, trimmed);
+      if (!trimmed) return { stl, volume: 0 };
+      const shared = whole.report.overlapVolume > 0 ? sharedVolume(scratch, trimmed) : 0;
+      return { stl, volume: trimmed.volume() - shared };
+    });
+    holding[slot] = read.stl;
+    return { ...read, triangles: (read.stl.length - 84) / 50 };
+  }
+  const mesh: WeldedMesh = { positions: transformPositions(welded.positions, inputs.transform), indices: copy.flipped ? reversed(welded.indices) : welded.indices };
+  holding[slot] = mesh;
+  const stl = writeBinaryStl(mesh.positions, mesh.indices);
+  holding[slot] = stl;
+  const { min, max } = meshBounds(mesh.positions);
+  const volume = signedVolumeAbout(mesh, null, (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2) - overlap;
+  return { stl, volume, triangles: mesh.indices.length / 3 };
 }

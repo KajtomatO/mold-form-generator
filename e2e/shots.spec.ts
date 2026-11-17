@@ -181,6 +181,8 @@ async function openM11(page: Page, kind: 'soup' | 'heavy', project: string): Pro
     await writeFile(path, heightBlockStl());
     try {
       await input.setInputFiles(path);
+      // MM2: past the warning point the app asks first; Load anyway reads it as before.
+      await page.getByTestId('large-load').click();
       await expect(page.getByTestId('file-name')).toContainText('3,011,040 triangles', { timeout: 300_000 });
       await hooks(page, (h) => h.idle());
       await hooks(page, (h) => h.setParam('base.mode', 'merged'));

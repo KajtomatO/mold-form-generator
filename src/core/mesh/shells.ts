@@ -146,7 +146,7 @@ function tryManifold(arena: Arena, mesh: Mesh): Manifold | ErrorStatus {
 }
 
 /** Signed volume, summed about one point. An open surface's result depends on that point. */
-function signedVolumeAbout(mesh: WeldedMesh, triangles: ArrayLike<number> | null, cx: number, cy: number, cz: number): number {
+export function signedVolumeAbout(mesh: WeldedMesh, triangles: ArrayLike<number> | null, cx: number, cy: number, cz: number): number {
   const { positions: p, indices } = mesh;
   const count = triangles ? triangles.length : indices.length / 3;
   let sum = 0;

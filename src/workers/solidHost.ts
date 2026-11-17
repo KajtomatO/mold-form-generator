@@ -1,6 +1,7 @@
 import type { ManifoldToplevel } from 'manifold-3d';
 import { HEAVY_LIMITS, type HeavyLimits, type MeshSimplifier } from '../core/mesh/simplify';
 import { runExport } from './exportJob';
+import { runPrepareJob } from './prepareJob';
 import type { Post } from './fieldHost';
 import { StageMiss } from './fieldStages';
 import { usedHeap } from './heapProbe';
@@ -34,11 +35,19 @@ export function solidMemory(heap: ArrayBuffer | null, held: unknown[]): WorkerMe
   return { wasm: heap?.byteLength ?? 0, arrays: arrayBytes(held, new Set<ArrayBufferLike>(heap ? [heap] : [])) };
 }
 
+/** A worker's own way to read a file it is handed, at once: FileReaderSync in a browser (MM2). */
+export type ReadBlob = (blob: Blob) => Uint8Array;
+
+const noReader: ReadBlob = () => {
+  throw new Error('This worker cannot read files.');
+};
+
 /**
  * solid.worker's message handler, apart from `self` and the WASM boot, so a Node test can drive the same code.
- * `heap` is the WebAssembly memory's buffer as it stands, or null where the glue hides it.
+ * `heap` is the WebAssembly memory's buffer as it stands, or null where the glue hides it. `readBlob` reads the
+ * maker's own file, for a prepare job and for an export's model_oriented.stl of a simplified model (MM2).
  */
-export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heap: () => ArrayBuffer | null, post: Post, now: () => number, limits: HeavyLimits = HEAVY_LIMITS): (message: ToWorker) => void {
+export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, heap: () => ArrayBuffer | null, post: Post, now: () => number, limits: HeavyLimits = HEAVY_LIMITS, readBlob: ReadBlob = noReader): (message: ToWorker) => void {
   const stages = new SolidStages(api, now, simplifier, limits);
   const heapBytes = (): number | null => heap()?.byteLength ?? null;
   const memory = (extra: unknown[] = []): WorkerMemory | undefined => figureOrNone(() => solidMemory(heap(), [...stages.heldArrays(), ...extra]));
@@ -47,12 +56,23 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
       post({ t: 'heap', id: message.id, capacity: heapBytes(), used: usedHeap(api, heapBytes), held: stages.heldEntries(), handles: Arena.live });
       return;
     }
-    if (message.t !== 'solid' && message.t !== 'export') return;
+    if (message.t !== 'solid' && message.t !== 'export' && message.t !== 'prepare') return;
     const { id } = message;
     const timings: Record<string, number> = {};
     try {
       injectedCrash(message.fault);
       applyDelay(message.fault, now);
+      if (message.t === 'prepare') {
+        // MM2: what it holds as each step begins, for the memory meter's 'simplify', as an export's does.
+        const holding: unknown[] = [];
+        const progress = (step: string, done: number, total: number): void => {
+          post({ t: 'progress', id, step, done, total, memory: memory([holding]) });
+          applyDelay(message.fault, now, step);
+        };
+        const prepared = runPrepareJob(api, simplifier, message, readBlob, progress, now, holding);
+        post({ t: 'prepared', id, ...prepared }, buffersOf(prepared.stl));
+        return;
+      }
       if (message.t === 'export') {
         // MM1: its inputs, and what it has built so far, which it adds to as it goes.
         const holding: unknown[] = [];
@@ -60,7 +80,7 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
           post({ t: 'progress', id, step, done, total, memory: memory([message, holding]) });
           applyDelay(message.fault, now, step);
         };
-        const outputs = runExport(api, simplifier, message, progress, now, timings, limits, holding);
+        const outputs = runExport(api, simplifier, message, progress, now, timings, limits, holding, readBlob);
         post({ t: 'exported', id, outputs, timings }, buffersOf(outputs.zip, ...Object.values(outputs.files)));
         return;
       }

@@ -124,6 +124,85 @@ describe('JobGate', () => {
     expect(log.filter((e) => e.event === 'terminated')).toHaveLength(1);
   });
 
+  describe('MM2: a request the running job already builds under the same keys is not newer', () => {
+    const stage = (id: number): FromWorker => ({ t: 'stage', id, outputs: {} });
+    const builds = (name: string, rev: number, entries: string[]): T => ({ id: name, rev, modelKey: 'm', name, builds: entries });
+
+    it('a field job past its budget is not ended for its own placement, which main asks for once the field is in', () => {
+      const { gate, worker, workers, clock, log, events, last } = setup(new Budgets(true, { terminateFloorMs: 8_000 }));
+      worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0 });
+      gate.request(builds('A', 1, ['S1:a', 'S2:b', 'S6:c:d', 'S7:e']));
+      const job = last().id;
+      clock.advance(5_000);
+      // The job sends its field, and main asks for what it still lacks: the placement, which the job is building.
+      worker().reply(stage(job));
+      gate.request(builds('B', 1, ['S7:e']));
+      clock.advance(4_000);
+      expect(log.some((e) => e.event === 'terminated')).toBe(false);
+      expect(workers).toHaveLength(1);
+      expect(worker().terminated).toBe(false);
+      worker().reply(result(job));
+      expect(events.map((e) => [e.kind, e.target.name])).toEqual([['stage', 'A'], ['result', 'A']]);
+      // B waited for nothing: the job that built its placement was all there was to run.
+      expect(worker().received).toHaveLength(1);
+      expect(gate.busy).toBe(false);
+    });
+
+    it('a placement under another key is newer, and still ends the job past its budget', () => {
+      const { gate, worker, workers, clock, log, last } = setup(new Budgets(true, { terminateFloorMs: 8_000 }));
+      worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0 });
+      gate.request(builds('A', 1, ['S1:a', 'S2:b', 'S6:c:d', 'S7:e']));
+      clock.advance(5_000);
+      worker().reply(stage(last().id));
+      gate.request(builds('C', 2, ['S7:x']));
+      clock.advance(3_001);
+      expect(log.filter((e) => e.event === 'terminated')).toHaveLength(1);
+      expect(workers[0].terminated).toBe(true);
+      expect(last().want).toEqual(['C']);
+    });
+
+    it('a solid import past its budget is not ended for a request that wants it and the parts after it, under the same keys', () => {
+      const { gate, worker, workers, clock, log, last, events } = setup(new Budgets(true, { terminateFloorMs: 8_000 }));
+      worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0 });
+      gate.request(builds('import', 1, ['S1:a', 'S2:b']));
+      const job = last().id;
+      clock.advance(5_000);
+      gate.request(builds('parts', 1, ['S1:a', 'S2:b', 'S13:c', 'S15:d', 'S16:e']));
+      clock.advance(4_000);
+      expect(log.some((e) => e.event === 'terminated')).toBe(false);
+      expect(workers).toHaveLength(1);
+      // The import ends in its own time, and the parts go next to the same worker.
+      worker().reply(result(job, { S1: 'a', S2: 'b' }));
+      expect(events.map((e) => [e.kind, e.target.name])).toEqual([['result', 'import']]);
+      expect(last().want).toEqual(['parts']);
+      expect(last().big).toBe('field');
+    });
+
+    it('a field under another rim is newer: the field\'s entry names the rim it is taken on, so the job past its budget ends', () => {
+      const { gate, worker, workers, clock, log, last } = setup(new Budgets(true, { terminateFloorMs: 8_000 }));
+      worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0 });
+      gate.request(builds('A', 1, ['S1:a', 'S2:b', 'S6:c:d']));
+      clock.advance(5_000);
+      worker().reply(stage(last().id));
+      // The same field key c, on rim x: not what the job builds.
+      gate.request(builds('B', 2, ['S6:c:x']));
+      clock.advance(3_001);
+      expect(log.filter((e) => e.event === 'terminated')).toHaveLength(1);
+      expect(workers[0].terminated).toBe(true);
+      expect(last().want).toEqual(['B']);
+    });
+
+    it('a request for the same stages under another model is newer, whatever it builds', () => {
+      const { gate, worker, clock, log } = setup(new Budgets(true, { terminateFloorMs: 8_000 }));
+      worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0 });
+      gate.request(builds('import', 1, ['S1:a', 'S2:b']));
+      clock.advance(5_000);
+      gate.request({ ...builds('other', 2, ['S1:a', 'S2:b', 'S13:c']), modelKey: 'n' });
+      clock.advance(3_001);
+      expect(log.filter((e) => e.event === 'terminated')).toHaveLength(1);
+    });
+  });
+
   it('a check that fires early, as timers do against Firefox\'s rounded clock, checks again and still ends the job', () => {
     const { gate, target, worker, clock, log } = setup(new Budgets(true, { terminateFloorMs: 1_000 }), 2);
     worker().reply({ t: 'ready', bootMs: 0, cached: {}, heapBytes: 0 });

@@ -18,7 +18,14 @@ class InProcessWorker implements WorkerLike {
   private handle: ((message: ToWorker) => void) | null = null;
   private readonly queue: ToWorker[] = [];
 
-  constructor(boot: (post: Post) => Promise<(message: ToWorker) => void>) {
+  /**
+   * `before` runs ahead of each message's delivery, as a worker's own synchronous reads cannot be made in Node:
+   * the files a message hands over are read here first (MM2), as FileReaderSync would read them.
+   */
+  constructor(
+    boot: (post: Post) => Promise<(message: ToWorker) => void>,
+    private readonly before: (message: ToWorker) => Promise<void> = async () => {},
+  ) {
     const post: Post = (message, transfer = []) => {
       const copy = structuredClone(message, { transfer: transfer as Transferable[] }) as FromWorker;
       setTimeout(() => {
@@ -39,7 +46,7 @@ class InProcessWorker implements WorkerLike {
     const fault = 'fault' in copy ? copy.fault : undefined;
     const delay = fault?.kind === 'delay' ? fault.ms : 0;
     if (delay > 0) delete (copy as { fault?: unknown }).fault;
-    this.chain = this.chain.then(() => new Promise<void>((resolve) => setTimeout(() => {
+    this.chain = this.chain.then(() => this.before(copy).catch(() => {})).then(() => new Promise<void>((resolve) => setTimeout(() => {
       if (this.alive) {
         if (this.handle) this.deliver(copy);
         else this.queue.push(copy);
@@ -74,8 +81,33 @@ export function inProcessField(): WorkerLike {
   });
 }
 
+/**
+ * MM2: a worker's synchronous reader of the files it is handed, for Node, which has no FileReaderSync: each Blob a
+ * message carries is read before the message is delivered, and the reader gives those bytes, or fails as a file
+ * that can no longer be read does.
+ */
+function blobReader(): { before: (message: ToWorker) => Promise<void>; read: (blob: Blob) => Uint8Array } {
+  const read = new Map<Blob, Uint8Array>();
+  const blobs = (value: unknown, found: Blob[] = [], depth = 0): Blob[] => {
+    if (value instanceof Blob) found.push(value);
+    else if (value && typeof value === 'object' && !ArrayBuffer.isView(value) && !(value instanceof ArrayBuffer) && depth < 4) for (const item of Object.values(value)) blobs(item, found, depth + 1);
+    return found;
+  };
+  return {
+    before: async (message) => {
+      for (const blob of blobs(message)) read.set(blob, new Uint8Array(await blob.arrayBuffer()));
+    },
+    read: (blob) => {
+      const bytes = read.get(blob);
+      if (!bytes) throw Object.assign(new Error('The file could not be read.'), { name: 'NotReadableError' });
+      return bytes;
+    },
+  };
+}
+
 /** A fresh WASM instance per worker, as a respawn in the browser gets. `limits` brings G1.8's path within a test's reach. */
 export function inProcessSolid(limits?: HeavyLimits): WorkerLike {
+  const files = blobReader();
   return new InProcessWorker(async (post) => {
     let memory: WebAssembly.Memory | null = null;
     const api: ManifoldToplevel = await Module({
@@ -92,16 +124,17 @@ export function inProcessSolid(limits?: HeavyLimits): WorkerLike {
     api.setup();
     await MeshoptSimplifier.ready;
     const heap = (): ArrayBuffer | null => (memory ? memory.buffer : null);
-    const handle = solidHost(api, MeshoptSimplifier, heap, post, now, limits);
+    const handle = solidHost(api, MeshoptSimplifier, heap, post, now, limits, files.read);
     post({ t: 'ready', bootMs: 0, cached: {}, heapBytes: heap()?.byteLength ?? null, memory: solidMemory(heap(), []) });
     return handle;
-  });
+  }, files.before);
 }
 
 /** project.worker's own job code, in this process. */
 export function inProcessProject(): WorkerLike {
+  const files = blobReader();
   return new InProcessWorker(async (post) => (message) => {
-    const { reply, transfer } = runProjectJob(message as ProjectJob);
+    const { reply, transfer } = runProjectJob(message as ProjectJob, files.read);
     post(reply, transfer);
-  });
+  }, files.before);
 }

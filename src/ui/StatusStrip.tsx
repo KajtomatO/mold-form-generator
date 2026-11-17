@@ -8,9 +8,12 @@ import { formatCount, formatSize, memoryText, memoryTitle } from './format';
  * and nothing else of the strip. Amber while it reads MEMORY_WARN_BYTES or more, with advice in its tooltip.
  */
 function MemoryItem() {
-  const reading = useStore().memory.value;
+  const store = useStore();
+  const reading = store.memory.value;
+  // MM2: past the warning figure the advice points at Simplify… where the Model section offers it. A reading
+  // follows every change the pipeline makes, so this item draws again as the model changes.
   return (
-    <span class={reading.total >= MEMORY_WARN_BYTES ? 'item memory warn' : 'item memory'} data-testid="status-memory" title={memoryTitle(reading)}>
+    <span class={reading.total >= MEMORY_WARN_BYTES ? 'item memory warn' : 'item memory'} data-testid="status-memory" title={memoryTitle(reading, MEMORY_WARN_BYTES, store.canSimplify())}>
       {memoryText(reading)}
     </span>
   );
@@ -43,7 +46,12 @@ export function StatusStrip() {
           <span class="item" data-testid="status-file">
             <b>{pipeline.modelName}</b>
           </span>
-          {parsed ? <span class="item" data-testid="status-triangles">{formatCount(parsed.triangles)} triangles</span> : null}
+          {parsed ? (
+            // MM2: a simplified copy says so, as its count is not the file's.
+            <span class="item" data-testid="status-triangles" title={pipeline.modelOrigin() ? `The copy the mold is made from; ${pipeline.modelName} has ${formatCount(pipeline.modelOrigin()!.from.triangles)}.` : undefined}>
+              {formatCount(parsed.triangles)} triangles{pipeline.modelOrigin() ? ' (simplified)' : ''}
+            </span>
+          ) : null}
           {oriented ? <span class="item" data-testid="status-size">{formatSize(modelSize(oriented.bounds))}</span> : null}
           {rim ? <span class="item" data-testid="status-box">box {formatSize(moldBox(rim))}</span> : null}
           {silicone ? <span class="item" data-testid="status-silicone">{silicone.ml.toFixed(1)} ml silicone</span> : null}

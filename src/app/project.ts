@@ -3,6 +3,7 @@ import type { StoredPlane } from '../core/base/storedPlane';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import type { PlaneChoice } from '../workers/fieldStages';
 import { BUILD } from './buildInfo';
+import type { SimplifiedEntry } from './simplified';
 
 export type { StoredPlane } from '../core/base/storedPlane';
 
@@ -29,11 +30,17 @@ export interface ProjectFile extends Project {
   modelSha256: string | null;
   /** The plane `plane` chose, for a later version that ranks or welds differently; null if none was found. */
   basePlane: StoredPlane | null;
+  /**
+   * MM2: the mold was made from a simplified copy of `model` (R42), which a .moldproj holds as simplified.stl
+   * beside the file itself; `plane`, `pins` and `removed` are the copy's. Only for a simplified model, so the
+   * project.json of any other keeps its bytes, and the format stays 6.
+   */
+  simplified?: SimplifiedEntry;
 }
 
 /** The fields in the order project.json lists them, so the file reads from what it is about to what it holds. */
-export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null }): ProjectFile {
-  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...project };
+export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null; simplified?: SimplifiedEntry }): ProjectFile {
+  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...(identity.simplified ? { simplified: identity.simplified } : {}), ...project };
 }
 
 /** project.json's text, as both a .moldproj and the export ZIP write it. */

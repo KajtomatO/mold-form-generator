@@ -7,7 +7,8 @@ import { allDiagnostics, DIAGNOSTIC_PARAM, exportBlocked, moldBox, previewSilico
 import { downloadName, REVOKE_MS, saveBytes } from '../../src/app/download';
 import { INIT_TIMEOUT_MS, realTimers } from '../../src/app/jobGate';
 import { Pipeline, type ExportProgress, type ExportResult, type PipelineOptions } from '../../src/app/pipeline';
-import { projectFile } from '../../src/app/project';
+import { projectFile, projectJson } from '../../src/app/project';
+import { packProject } from '../../src/app/projectArchive';
 import { BUILD } from '../../src/app/buildInfo';
 import { APP_NAME } from '../../src/app/version';
 import { defaultParams } from '../../src/core/params/defaults';
@@ -1170,4 +1171,144 @@ describe('models of parts that overlap, exported in Node', () => {
     expect(readme).toContain('It keeps the 4 parts your file is made of, some of which overlap or touch, as the file has them: slicers print overlapping parts as one.');
     expect(readme).toContain('The file is made of 4 parts, some of which overlap by 1000.0 mm3, as models split for multi-colour printing often are. The mold treats parts that overlap or touch as one model, so it makes 2 models of them, 20200 mm3 in all.');
   }, 120_000);
+});
+
+describe('MM2: a model loaded as it is exports what 92724e8 exported: every STL byte for byte, the texts with the version masked, README.txt by its words', () => {
+  /**
+   * SHA-256 of every file of the ZIP with the fit test, of report.json without its timings, and of the .moldproj
+   * Save project packs, each text with the build's version string masked, and README.txt by its words alone, its
+   * line breaks collapsed, as a version of another length wraps its lines elsewhere: as captured at 92724e8 before
+   * MM2's first change. Benchy, over G4's 60,000 triangles, takes the decimated clearance (MM2's review). A
+   * simplified model's keys and sentences appear only when a model was simplified, and a margin widened by 0 is the
+   * margin. Update them only for a change that means to change the export.
+   */
+  const PINNED: Record<string, Record<string, string>> = {
+    'jersey at defaults': {
+      'base.stl': '4d8259f426a740b9ecfc364321b8babd2e6c9d73b20299bfced77a639ae5ca46',
+      'cover.stl': '2610f31a91c297c5eaeb9599d6ced9b46de5c25de9ef345445d0cecfcfb2eff5',
+      'fit_test/groove-0.25-taper-0.10_base.stl': 'cc6993e14bae4532a75fd0b48178cb5cbb53e7b9dbafcf775cc818b11d0850ae',
+      'fit_test/groove-0.25-taper-0.10_cover.stl': '4ffb4b5220caa4aa3708e212f2dcd7bc1cc329db8389dfa9e5db415461ece903',
+      'fit_test/groove-0.35-taper-0.10_base.stl': '4e140572130f4086918a6d7655185812e360d7d4e4cf69e353440a3bb09efd0a',
+      'fit_test/groove-0.35-taper-0.10_cover.stl': 'dbb44764fc6091e4b0dd02ee504367d25fce49a5e12f988cce82eda5023096fe',
+      'fit_test/groove-0.45-taper-0.10_base.stl': '0ae132ac3ed9a70ece30c17c3b386a1631503003d32953cdac486ae62c12bc49',
+      'fit_test/groove-0.45-taper-0.10_cover.stl': 'adadedb74b82ebcacc243dc32b92e4037950460c2a75ca2ba18bc87c4e54af00',
+      'fit_test/groove-0.55-taper-0.10_base.stl': 'd479f0c8b617e99cb604d75a57974f7d4a7b7877de8e64bae70af0cf1ebe5fe5',
+      'fit_test/groove-0.55-taper-0.10_cover.stl': '9f37a4d782a22ce0235f2b32fa255c24881da70653ac2262db4b79779b1289c4',
+      'fit_test/README.txt': 'cc2bedb13778d88c3392de582aa2a1f4dfe72e155c4e7530738c2b03515b2f84',
+      'fit_test/taper-0.10_base.stl': 'f9e58680f68d75a6f2f21fb26edbe68002d92187c5a65d946cd607c3355c99af',
+      'fit_test/taper-0.10_cover.stl': 'fd4da66f22b2e7f62793f38b655114454d8b6fbc91d7c46aede00baeebaa7fe2',
+      'fit_test/taper-0.20_base.stl': '9ee382cc61fa941f5009cd277935b7f988f381a524c3df088d4242e7355ac13d',
+      'fit_test/taper-0.20_cover.stl': 'de6418798c6a26a5465c7dedaeec68fd6892bee78f2a2d78473e65cf88c53672',
+      'fit_test/taper-0.30_base.stl': 'e7b346ad63f3af23b00204d56ad5cb5c60d1bc37c3f69e1b240cd19c2af0ac4d',
+      'fit_test/taper-0.30_cover.stl': '1f8801e328ec0aefadc9fe90c21eacc55fda1c81fafe7d28d6f1f83b3b764e4a',
+      'fit_test/taper-0.40_base.stl': '09b53870488d03786e93ed4468392c0b265c16b619d24650ae3459f58ca8bb85',
+      'fit_test/taper-0.40_cover.stl': '12d7a0b01ac9b83e5614ab67a32a347eb690096ee83d0d61002346c224417673',
+      'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
+      'model_oriented.stl': '6e5fe345fcbe5844e4c51d164324f8a1546e022df41b80d2cd1c1c881680dee9',
+      'README.txt': 'b8dd3c1afba66debf1083a4957f0d791da550422d1c267c4d4d5400d3ce8a3c0',
+      'project.json': '515dbd0eb1ee591ac20383e59f1b83d77effe9e067bb507663feb285332358c4',
+      'report.json': 'affbcf47c9037662599895a14237b41ffa963789e5e565b22eaaeb5e6641c662',
+      '.moldproj': '56554ba1eb58957a757be8bb580d265bc103081fa0afd6466b01e30e7ce6a9ee',
+    },
+    'jersey changed': {
+      'base.stl': 'aca5c541ddd45157cb98230795e63bbecb4627d2e124eed8852cbdd6e54a4176',
+      'cover.stl': 'fca260272bb143e5f80acbc645b5059b96bbbd7bb656f13ab65cb73968015f2d',
+      'fit_test/bolt_coupon_base.stl': '5b109f352a13916bc21a6996f84b82f09d2000f91507e2f2ba7d6fb21de037f3',
+      'fit_test/bolt_coupon_cover.stl': '3f78d04e978836bb372c7995df45463ea8b7eb072fb619b876a90c699779fc2f',
+      'fit_test/groove-0.25-taper-0.10_base.stl': 'cc6993e14bae4532a75fd0b48178cb5cbb53e7b9dbafcf775cc818b11d0850ae',
+      'fit_test/groove-0.25-taper-0.10_cover.stl': '3b628b6917de002d81cec7a47f6a8bd88da53734078d7266e8e95c02fd3a07cf',
+      'fit_test/groove-0.35-taper-0.10_base.stl': '4e140572130f4086918a6d7655185812e360d7d4e4cf69e353440a3bb09efd0a',
+      'fit_test/groove-0.35-taper-0.10_cover.stl': '4a84726abfee73b8ad5cc2b2826ab4294ef998c56e3a26e558cbbcebbf41bf57',
+      'fit_test/groove-0.45-taper-0.10_base.stl': '0ae132ac3ed9a70ece30c17c3b386a1631503003d32953cdac486ae62c12bc49',
+      'fit_test/groove-0.45-taper-0.10_cover.stl': '0392a91b2f3770d0ca5e8b6af4881c8a45a57d5ab350db8fe6e1ea7e1bdabb59',
+      'fit_test/groove-0.55-taper-0.10_base.stl': 'd479f0c8b617e99cb604d75a57974f7d4a7b7877de8e64bae70af0cf1ebe5fe5',
+      'fit_test/groove-0.55-taper-0.10_cover.stl': '5c4602219965d78bf5f8619be34f1bbe41e850417321794e4df514816b77cbaf',
+      'fit_test/README.txt': '8e508b94aa2536d3172ae3ba25e0d811dac17f60f3fedab41d3110c8f1bfc258',
+      'fit_test/taper-0.10_base.stl': 'f9e58680f68d75a6f2f21fb26edbe68002d92187c5a65d946cd607c3355c99af',
+      'fit_test/taper-0.10_cover.stl': '15099623a8eae40bc1823bf58e73b520b623921edaa4f14611922d6a8ef6c87a',
+      'fit_test/taper-0.20_base.stl': '9ee382cc61fa941f5009cd277935b7f988f381a524c3df088d4242e7355ac13d',
+      'fit_test/taper-0.20_cover.stl': '6b01294b0ede9a09ec271c302a6a2eaf250dab2200109563a064fb19c5cb777a',
+      'fit_test/taper-0.30_base.stl': 'e7b346ad63f3af23b00204d56ad5cb5c60d1bc37c3f69e1b240cd19c2af0ac4d',
+      'fit_test/taper-0.30_cover.stl': '3e27a35ac83473f827561166111f50c6144b67cdc0131d8e8c9bb41f781dc39f',
+      'fit_test/taper-0.40_base.stl': '09b53870488d03786e93ed4468392c0b265c16b619d24650ae3459f58ca8bb85',
+      'fit_test/taper-0.40_cover.stl': '57941b9a47f28693353211961ac833ffdb3a2b5e9afbff1bb5e8015f1bb936a5',
+      'funnel.stl': 'da48da8a675c463add92d1b03a1cd5eae5d1ff4335a690376d5d3ce6910e6df9',
+      'README.txt': 'ccd50d4554755b9c6cc1bd47a0c478de5643a364c024776606ba19f4f4d17ca4',
+      'project.json': '8552acc6963d907ae1fb8b2b4716604b57179bd74745598fddfe494375673d27',
+      'report.json': 'b90264ae8914720bcebc785de34fd2de2e5e5c5180428280c230d13ec67cdfda',
+      '.moldproj': '0f6f2440b34022952a85eb2bf71934cadab68b18849808ab103edc4e8147c471',
+    },
+    'Benchy at defaults': {
+      '.moldproj': '7558fe63c70cb7e4c4e9a4303b2704a64c6441c404a99a4e55ea6c4072aed4b4',
+      'README.txt': '64a21e4853be57e3406afd0c2edd4ce5d28df83cd6f047a97905b848179f73b2',
+      'base.stl': '143eb64a7f369f45681adf8baad516f4e0aec9c07211d045fb7ede8890537deb',
+      'cover.stl': 'dcc9adc508455d02e9b77423e9cf4483232e62356e051813597f45c71f2007f6',
+      'fit_test/README.txt': 'cc2bedb13778d88c3392de582aa2a1f4dfe72e155c4e7530738c2b03515b2f84',
+      'fit_test/groove-0.25-taper-0.10_base.stl': 'cc6993e14bae4532a75fd0b48178cb5cbb53e7b9dbafcf775cc818b11d0850ae',
+      'fit_test/groove-0.25-taper-0.10_cover.stl': '4ffb4b5220caa4aa3708e212f2dcd7bc1cc329db8389dfa9e5db415461ece903',
+      'fit_test/groove-0.35-taper-0.10_base.stl': '4e140572130f4086918a6d7655185812e360d7d4e4cf69e353440a3bb09efd0a',
+      'fit_test/groove-0.35-taper-0.10_cover.stl': 'dbb44764fc6091e4b0dd02ee504367d25fce49a5e12f988cce82eda5023096fe',
+      'fit_test/groove-0.45-taper-0.10_base.stl': '0ae132ac3ed9a70ece30c17c3b386a1631503003d32953cdac486ae62c12bc49',
+      'fit_test/groove-0.45-taper-0.10_cover.stl': 'adadedb74b82ebcacc243dc32b92e4037950460c2a75ca2ba18bc87c4e54af00',
+      'fit_test/groove-0.55-taper-0.10_base.stl': 'd479f0c8b617e99cb604d75a57974f7d4a7b7877de8e64bae70af0cf1ebe5fe5',
+      'fit_test/groove-0.55-taper-0.10_cover.stl': '9f37a4d782a22ce0235f2b32fa255c24881da70653ac2262db4b79779b1289c4',
+      'fit_test/taper-0.10_base.stl': 'f9e58680f68d75a6f2f21fb26edbe68002d92187c5a65d946cd607c3355c99af',
+      'fit_test/taper-0.10_cover.stl': 'fd4da66f22b2e7f62793f38b655114454d8b6fbc91d7c46aede00baeebaa7fe2',
+      'fit_test/taper-0.20_base.stl': '9ee382cc61fa941f5009cd277935b7f988f381a524c3df088d4242e7355ac13d',
+      'fit_test/taper-0.20_cover.stl': 'de6418798c6a26a5465c7dedaeec68fd6892bee78f2a2d78473e65cf88c53672',
+      'fit_test/taper-0.30_base.stl': 'e7b346ad63f3af23b00204d56ad5cb5c60d1bc37c3f69e1b240cd19c2af0ac4d',
+      'fit_test/taper-0.30_cover.stl': '1f8801e328ec0aefadc9fe90c21eacc55fda1c81fafe7d28d6f1f83b3b764e4a',
+      'fit_test/taper-0.40_base.stl': '09b53870488d03786e93ed4468392c0b265c16b619d24650ae3459f58ca8bb85',
+      'fit_test/taper-0.40_cover.stl': '12d7a0b01ac9b83e5614ab67a32a347eb690096ee83d0d61002346c224417673',
+      'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
+      'model_oriented.stl': 'b06bd96e52efc3488426a636930e4e89c98fc590dd4e09635682f9e8840c376d',
+      'project.json': '63ff6b3649aacc864384dc98d1a6f2ae2b3071d0f8671dd8764120b8f9141d53',
+      'report.json': '0d2f228c1ca2f02adad06bb9c110349a34caa844fc8cf80682cbc2753508aaef',
+    },
+  };
+  const CHANGES: Record<string, (p: Params) => void> = {
+    'jersey at defaults': () => {},
+    'Benchy at defaults': () => {},
+    'jersey changed': (p) => {
+      p.silicone.t = 4;
+      p.bolts.enabled = true;
+      p.bolts.size = 'M4';
+      p.base.mode = 'merged';
+      p.grid.nx = 2;
+      p.base.pocketDepth = 0.4;
+      p.funnel.flangeWidth = 4;
+      p.print.infill = 0.2;
+    },
+  };
+  const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+  const masked = (bytes: Uint8Array): string => sha(new TextEncoder().encode(text(bytes).split(BUILD.version).join('VERSION')));
+
+  for (const name of Object.keys(PINNED)) {
+    it(name, async (ctx) => {
+      const example = name.startsWith('Benchy') ? 'benchy' : 'jersey';
+      ctx.skip(example === 'benchy' && process.env.CFG_FULL !== '1', 'Benchy\'s export with the fit test takes about 15 s: CFG_FULL=1 runs it');
+      const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+      try {
+        p.load(exampleBytes(example), EXAMPLE_FILES[example]);
+        await p.idle();
+        p.setParams(CHANGES[name]);
+        await p.idle();
+        const files = unzipSync((await p.exportParts(() => {}, undefined, { want: 'zip', fitTest: true })).zip);
+        const report = JSON.parse(text(files['report.json'])) as ExportReport;
+        const timings = JSON.stringify(report.timings, null, 2).replace(/\n/g, '\n  ');
+        const found: Record<string, string> = {};
+        for (const [file, bytes] of Object.entries(files)) {
+          if (file === 'report.json') found[file] = masked(new TextEncoder().encode(text(bytes).replace(timings, 'T')));
+          else if (file === 'README.txt') found[file] = sha(new TextEncoder().encode(text(bytes).split(BUILD.version).join('VERSION').replace(/\r\n\s*/g, ' ')));
+          else if (file === 'project.json') found[file] = masked(bytes);
+          else found[file] = sha(bytes);
+        }
+        const json = projectJson(projectFile(p.project(), EXAMPLE_FILES[example], { modelSha256: p.modelSha256, basePlane: p.storedPlane() }));
+        found['.moldproj'] = sha(packProject(json.split(BUILD.version).join('VERSION'), p.stlBytes!));
+        expect(found).toEqual(PINNED[name]);
+      } finally {
+        p.dispose();
+      }
+    }, 120_000);
+  }
 });

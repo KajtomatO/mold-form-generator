@@ -6,6 +6,7 @@ import type { ExportJob, ExportOutputs } from './exportJob';
 import type { ReportsInputs, ReportsOutputs } from './reportStages';
 import type { WallCheck, WallInputs } from './wallCheck';
 import type { ProjectJob, ProjectReply } from './projectJob';
+import type { PrepareJob, Prepared } from './prepareJob';
 import type { WorkerMemory } from '../app/memory';
 
 /**
@@ -49,6 +50,22 @@ export interface ExportJobMessage extends ExportJob {
 }
 
 /**
+ * MM2: a model prepared before it loads, its simplified copy made, in a fresh solid worker of its own that is
+ * terminated when it answers. Its progress carries `memory` as an export's does, for the meter's 'simplify'.
+ */
+export interface PrepareJobMessage extends PrepareJob {
+  t: 'prepare';
+  id: number;
+  fault?: Fault;
+}
+
+/** The prepared model: the copy's STL, which is transferred, with the original's facts and the copy's record. */
+export interface PreparedMessage extends Prepared {
+  t: 'prepared';
+  id: number;
+}
+
+/**
  * Test-only: how much of the WASM heap is in use. Each reading grows the heap a step, so the memory meter
  * never asks for one: it reads `memory` off the messages the workers send anyway.
  */
@@ -78,7 +95,7 @@ export interface ReportsJobMessage {
   fault?: Fault;
 }
 
-export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | HeapProbeMessage | WallsJobMessage | ReportsJobMessage | ProjectJob;
+export type ToWorker = FieldJobMessage | SolidJobMessage | ExportJobMessage | PrepareJobMessage | HeapProbeMessage | WallsJobMessage | ReportsJobMessage | ProjectJob;
 
 export type Cached = Partial<Record<StageId, string>>;
 
@@ -163,7 +180,7 @@ export interface WallsResultMessage {
   result: WallCheck;
 }
 
-export type FromWorker = ReadyMessage | StageMessage | ResultMessage | MissMessage | ErrorMessage | ProgressMessage | ExportResultMessage | HeapMessage | WallsResultMessage | ProjectReply;
+export type FromWorker = ReadyMessage | StageMessage | ResultMessage | MissMessage | ErrorMessage | ProgressMessage | ExportResultMessage | PreparedMessage | HeapMessage | WallsResultMessage | ProjectReply;
 
 /** The part of Worker the pipeline uses, so tests can stand an in-process worker in for it. */
 export interface WorkerLike {

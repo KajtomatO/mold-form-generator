@@ -4,6 +4,8 @@ import { PARAM_SCHEMA, SCHEMA_VERSION, type ParamDef, type Params } from '../cor
 import { DEFAULT_PLANE, type PlaneChoice } from '../workers/fieldStages';
 import { entryDef } from '../ui/layout';
 import type { ProjectFile, StoredPlane } from './project';
+import type { SimplifiedEntry } from './simplified';
+import { TARGET_RANGE } from './largeModel';
 import type { ParamPath } from './stages';
 
 /**
@@ -278,7 +280,45 @@ function readPins(raw: unknown): OpeningPin[] {
   });
 }
 
-const KNOWN = new Set(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
+const KNOWN = new Set(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'simplified', 'params', 'plane', 'pins', 'removed']);
+
+/** Said when a project's record of its simplified copy cannot be used: the file then opens as it is. */
+export function simplifiedDropped(model: string): string {
+  return `The simplified copy saved with this project could not be used, so ${model} opened as it is. Use Simplify… in the Model section to simplify it again.`;
+}
+
+/** The original's count a record's target must be under. */
+const r0 = (from: unknown): number => (isObject(from) && typeof from.triangles === 'number' ? from.triangles : 0);
+
+/**
+ * MM2: the record of a simplified copy (R42), checked: whole counts, finite figures, a target in the question's
+ * range and under the file's own count, and a SHA-256. One that fails is left out with a warning, as the file itself still makes a mold.
+ */
+function readSimplified(raw: unknown, model: string, notes: ProjectNote[]): SimplifiedEntry | undefined {
+  if (raw === undefined) return undefined;
+  const count = (value: unknown): value is number => finite(value) && Number.isInteger(value) && value > 0;
+  const from = isObject(raw) ? raw.from : null;
+  const valid =
+    isObject(raw) && isObject(from) &&
+    (from.format === 'binary' || from.format === 'ascii') && count(from.trianglesInFile) && count(from.triangles) &&
+    count(raw.triangles) && count(raw.target) && raw.target <= TARGET_RANGE.max && raw.target < r0(from) &&
+    finite(raw.maxErrorMm) && raw.maxErrorMm > 0 && finite(raw.errorMm) && raw.errorMm >= 0 &&
+    (raw.stoppedBy === 'target' || raw.stoppedBy === 'error') && typeof raw.sha256 === 'string' && /^[0-9a-f]{64}$/.test(raw.sha256);
+  if (!valid) {
+    notes.push({ severity: 'warning', message: simplifiedDropped(model) });
+    return undefined;
+  }
+  const r = raw as Json & { from: Json };
+  return {
+    from: { format: r.from.format as 'binary' | 'ascii', trianglesInFile: r.from.trianglesInFile as number, triangles: r.from.triangles as number },
+    triangles: r.triangles as number,
+    target: r.target as number,
+    maxErrorMm: r.maxErrorMm as number,
+    errorMm: r.errorMm as number,
+    stoppedBy: r.stoppedBy as 'target' | 'error',
+    sha256: r.sha256 as string,
+  };
+}
 
 /**
  * A migrated project.json checked field by field: the project, or a ProjectError naming `name` with the
@@ -310,12 +350,14 @@ function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
   if (!Array.isArray(removed) || !removed.every((id) => typeof id === 'string')) refuse('its removed vents are not a list of vents', '"removed" must be a list of vent ids.');
   const extra = Object.keys(file).filter((key) => !KNOWN.has(key));
   if (extra.length > 0) notes.push({ severity: 'warning', message: `Fields this version does not know, left out: ${extra.join(', ')}.` });
+  const simplified = readSimplified(file.simplified, file.model, notes);
   return {
     schemaVersion: SCHEMA_VERSION,
     appVersion,
     model: file.model,
     modelSha256: sha,
     basePlane: readBasePlane(file.basePlane ?? null),
+    ...(simplified ? { simplified } : {}),
     params: readParams(file.params, notes),
     plane: missing('plane') ? DEFAULT_PLANE : readPlane(file.plane),
     pins: readPins(file.pins ?? []),

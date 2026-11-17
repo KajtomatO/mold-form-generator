@@ -70,6 +70,11 @@ export interface FieldInputs {
   cellScale: number;
   pins: OpeningPin[];
   removed: string[];
+  /**
+   * MM2: how far a simplified model's copy lies from the maker's file, measured, which widens G4's margin; 0 for
+   * a model loaded as it is. The file's own, so every key from S1 down already tells it apart.
+   */
+  modelErrorMm?: number;
 }
 
 export interface ParsedModel {
@@ -325,7 +330,8 @@ export class FieldStages {
       if (!(cell > 0) || !Number.isFinite(cell)) throw new InlineError('cell', `A preview cell of ${cell} mm cannot be built: give it a value above 0.`);
       return cell;
     };
-    const settingsOf = (oriented: OrientedStage, cell: number): FieldSettings => fieldSettings(params, oriented.bounds, cell);
+    const extra = inputs.modelErrorMm ?? 0;
+    const settingsOf = (oriented: OrientedStage, cell: number): FieldSettings => fieldSettings(params, oriented.bounds, cell, extra);
 
     const s3 = (): Lattice => {
       if (this.s3?.key === keys.S3) return this.s3.value;
@@ -394,7 +400,7 @@ export class FieldStages {
       const oriented = s2();
       const value = timed('S10', () => {
         // Always the export plan's bounds and offsets, whatever cell the preview runs at.
-        const mold = moldBounds(oriented.oriented.mesh, oriented.bounds, fieldSettings(params, oriented.bounds));
+        const mold = moldBounds(oriented.oriented.mesh, oriented.bounds, fieldSettings(params, oriented.bounds, undefined, extra));
         return { mold, rim: deriveRim(mold, params) };
       });
       this.s10 = { key: keys.S10, value };

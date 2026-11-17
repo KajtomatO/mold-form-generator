@@ -10,12 +10,20 @@ import { History, sameProject } from './history';
 import { realTimers, type Timers } from './jobGate';
 import { arrayBytes, type MemorySource, type WorkerMemory } from './memory';
 import type { Pipeline, Project } from './pipeline';
-import { projectFile, type ProjectFile } from './project';
-import { fileKind, holdsModel, PROJECT_EXTENSION } from './projectArchive';
+import { projectFile, type ProjectFile, type StoredPlane } from './project';
+import { fileKind, fileKindOfHead, holdsModel, PROJECT_EXTENSION } from './projectArchive';
 import { OPEN_INSTEAD, ProjectError, type ProjectNote } from './projectFile';
 import type { ProjectFiles } from './projectFiles';
 import { changedPaths, PARAM_PATHS, paramDef, setParamValue, type ParamPath } from './stages';
-import { READ_IN_WORKER_BYTES, readStl, type Opened } from '../workers/projectJob';
+import { PACK_FAILED, READ_IN_WORKER_BYTES, readStl, type Opened } from '../workers/projectJob';
+import type { PrepareStep } from '../workers/prepareJob';
+import { estimateTriangles } from '../core/stl/estimate';
+import { clampTarget, defaultTarget, HEAD_BYTES, isLarge, LARGE_MODEL, minBytesToLook, SIMPLIFY_MAX_ERROR_MM, simplifiedName, type LargeLimits } from './largeModel';
+import type { ModelSimplifier } from './modelSimplifier';
+import { simplifiedEntry, type ModelOrigin, type OriginalSource } from './simplified';
+import { SCHEMA_VERSION } from '../core/params/schema';
+import { BUILD } from './buildInfo';
+import type { SavedBy } from './version';
 
 export type Theme = 'dark' | 'light';
 
@@ -164,8 +172,59 @@ export interface MeterPage {
 /** The memory meter reads at most this often, in ms, unless a figure falls. */
 export const MEMORY_THROTTLE_MS = 500;
 
+/**
+ * MM2: a model past the warning point, held back until the maker answers (R42): an STL not read yet, a
+ * .moldproj opened but its model not handed over, or the model on screen, from Simplify….
+ */
+export interface LargePrompt {
+  kind: 'stl' | 'moldproj' | 'loaded';
+  /** The file chosen: the STL, or the .moldproj. */
+  name: string;
+  /** The STL's own name. */
+  model: string;
+  /** The STL's size in bytes. */
+  size: number;
+  triangles: number;
+  /** False where the count is estimated from a text file's first bytes. */
+  exact: boolean;
+  format: 'binary' | 'ascii';
+  /** The count the copy is asked for, which the question's number box holds. */
+  target: number;
+  /** Why simplifying did not work, after which only Load anyway and Cancel are offered. */
+  refused?: string;
+}
+
+/** MM2: a copy being made: of which file, to how many triangles, and how far it is. */
+export interface Simplifying {
+  name: string;
+  target: number;
+  step: PrepareStep;
+  round: number;
+}
+
+/** A project carried onto another model of the same object: the copy, or the file again (MM2). */
+interface Carried {
+  project: Project;
+  stored: StoredPlane | null;
+  savedBy: SavedBy;
+}
+
+/** What the large-model question holds while it waits: the file, unread, and for a .moldproj what it opened to. */
+interface LargeWaiting {
+  file: Blob;
+  source: OriginalSource;
+  opened?: Opened;
+}
+
 /** The project a project file holds. */
 const projectOf = (file: ProjectFile): Project => ({ params: file.params, plane: file.plane, pins: file.pins, removed: file.removed });
+
+/** MM2: a .moldproj's project, carried onto the copy of its model: a picked face becomes the plane it is found on. */
+function carriedFrom(opened: Opened): Carried {
+  const { file } = opened;
+  const plane = 'pick' in file.plane ? { rank: 0, upper: file.plane.upper } : file.plane;
+  return { project: { ...projectOf(file), plane }, stored: file.basePlane, savedBy: { format: opened.from, appVersion: file.appVersion } };
+}
 
 /** The history group of one parameter's control, so its slider and wheel steps join one step. */
 function paramGroup(path: ParamPath): string {
@@ -232,6 +291,18 @@ export class Store {
   private replaceWith: (() => void) | null = null;
   /** What that file holds while it waits, its bytes or the opened project, which the memory meter counts. */
   private replaceHeld: unknown = null;
+  /** MM2: a model past the warning point, waiting for the maker's answer (R42). */
+  readonly large = signal<LargePrompt | null>(null);
+  private largeWaiting: LargeWaiting | null = null;
+  /** MM2: a simplified copy being made, which the Model section says with a Cancel button. */
+  readonly simplifying = signal<Simplifying | null>(null);
+  /** MM2: the warning point, which the test hooks lower so a small model reaches it. */
+  largeLimits: LargeLimits = LARGE_MODEL;
+  /**
+   * MM2: the maker's file the model on screen came from, kept unread: Simplify… and Save project of a copy read
+   * it in their workers. Null for a load by bytes, which then gives a Blob of the bytes when one is needed.
+   */
+  private source: OriginalSource | null = null;
   /**
    * The memory meter (MM1): main's arrays and the view's, counted here, with the workers' figures from the
    * pipeline's ledger. Only set again when a figure changed, so the strip's item draws only then.
@@ -255,6 +326,8 @@ export class Store {
     now?: () => number,
     /** Saving and opening project files, in a worker per job. Null where none can be spawned. */
     readonly files: ProjectFiles | null = null,
+    /** MM2: the simplified copy of a large model, in a worker per job. Null where none can be spawned. */
+    readonly simplifier: ModelSimplifier | null = null,
   ) {
     this.history = new History(now);
     this.project = signal(pipeline.project());
@@ -350,9 +423,10 @@ export class Store {
     }, wait);
   }
 
-  load(bytes: Uint8Array, name: string): void {
+  load(bytes: Uint8Array, name: string, source: OriginalSource | null = null): void {
     this.beforeLoad();
     this.pipeline.load(bytes, name);
+    this.source = source;
     this.saved = this.pipeline.project();
   }
 
@@ -361,6 +435,11 @@ export class Store {
     this.opens++;
     // The pipeline's load follows at once, and the meter reads after it.
     this.dropReplacing(false);
+    // A question about another file, or a copy being made of one, is for a model that is not coming.
+    this.dropLarge();
+    this.simplifier?.cancel();
+    this.simplifying.value = null;
+    this.source = null;
     this.fileSteps = Infinity;
     this.projectName.value = null;
     this.fileNotice.value = null;
@@ -386,14 +465,220 @@ export class Store {
    */
   async openFile(file: File): Promise<void> {
     const ticket = ++this.opens;
-    // A newer file supersedes one still waiting for an answer.
+    // A newer file supersedes one still waiting for an answer, and a copy being made of another.
     this.dropReplacing();
+    this.dropLarge();
+    this.cancelSimplify();
+    // MM2: a file that could pass the warning point is counted from its first bytes before it is read whole (R42).
+    if (file.size >= minBytesToLook(this.largeLimits)) {
+      const head = new Uint8Array(await file.slice(0, HEAD_BYTES).arrayBuffer());
+      if (ticket !== this.opens) return;
+      if (fileKindOfHead(file.name, head, file.size) === 'stl') {
+        const estimate = estimateTriangles(head, file.size);
+        if (isLarge(estimate.triangles, file.size, this.largeLimits)) {
+          this.askLarge({ kind: 'stl', name: file.name, model: file.name, size: file.size, ...estimate, target: defaultTarget(estimate.triangles) }, { file, source: { kind: 'stl', blob: file } });
+          return;
+        }
+      }
+    }
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (ticket !== this.opens) return;
     const kind = fileKind(file.name, bytes);
-    if (kind === 'stl') await this.openStl(bytes, file.name, ticket);
+    if (kind === 'stl') await this.openStl(bytes, file.name, ticket, { kind: 'stl', blob: file });
     else if (kind === 'other') this.fileNotice.value = { severity: 'error', message: `${file.name} is not an STL or a project file, so it was not opened. ${OPEN_INSTEAD}`, notes: [] };
-    else await this.openProject(bytes, file.name, kind, ticket);
+    else await this.openProject(bytes, file.name, kind, ticket, file);
+  }
+
+  /** MM2: the question before a large model loads, which the Model section shows. */
+  private askLarge(prompt: LargePrompt, waiting: LargeWaiting): void {
+    this.fileNotice.value = null;
+    this.fileBusy.value = null;
+    this.largeWaiting = waiting;
+    this.large.value = prompt;
+  }
+
+  private dropLarge(): void {
+    this.largeWaiting = null;
+    this.large.value = null;
+  }
+
+  /** The maker's count in the question's number box, kept in range. */
+  setLargeTarget(target: number): void {
+    const prompt = this.large.value;
+    if (prompt) this.large.value = { ...prompt, target: clampTarget(target, prompt.triangles) };
+  }
+
+  /**
+   * MM2: the maker's answer to the large-model question. Load anyway goes on as any file does, from reading it;
+   * Simplify makes the copy and loads it; Cancel leaves the page as it was. A newer file drops the question.
+   */
+  async answerLarge(answer: 'simplify' | 'load' | 'cancel', target?: number): Promise<void> {
+    const prompt = this.large.value, waiting = this.largeWaiting;
+    if (!prompt || !waiting) return;
+    this.dropLarge();
+    // The model on screen is loaded already: its question has no Load anyway.
+    if (answer === 'cancel' || (answer === 'load' && prompt.kind === 'loaded')) return;
+    const ticket = ++this.opens;
+    if (answer === 'simplify') {
+      await this.simplifyFrom(prompt, waiting, clampTarget(target ?? prompt.target, prompt.triangles), ticket);
+      return;
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await waiting.file.arrayBuffer());
+    } catch (error) {
+      if (ticket === this.opens) this.fileNotice.value = { severity: 'error', message: `${prompt.name} could not be read: it may have been moved, renamed or changed since you chose it. Open it again.`, notes: [], details: error instanceof Error ? error.message : String(error) };
+      return;
+    }
+    if (ticket !== this.opens) return;
+    if (prompt.kind === 'stl') await this.openStl(bytes, prompt.name, ticket, waiting.source);
+    else await this.openProject(bytes, prompt.name, 'zip', ticket, waiting.file, false);
+  }
+
+  /** MM2: ends the copy being made, leaving the page as it was. */
+  cancelSimplify(): void {
+    if (!this.simplifying.value) return;
+    this.simplifying.value = null;
+    this.simplifier?.cancel();
+  }
+
+  /**
+   * MM2: makes the copy in its worker and loads it: from the question on opening, after the replace question
+   * as any file; from Simplify…, at once, with the project on screen carried. A copy the job refuses, as one that
+   * would open holes, leaves the question up with the reason, offering Load anyway and Cancel.
+   */
+  private async simplifyFrom(prompt: LargePrompt, waiting: LargeWaiting, target: number, ticket: number): Promise<void> {
+    const simplifier = this.simplifier;
+    if (!simplifier) {
+      this.fileNotice.value = { severity: 'error', message: `${prompt.model} cannot be simplified: this page has no way to start the geometry engine for it.`, notes: [] };
+      return;
+    }
+    this.fileNotice.value = null;
+    this.simplifying.value = { name: prompt.model, target, step: 'read', round: 0 };
+    // A heavy preview's solid worker goes first, so its heap never stands beside the job's (the export's rule).
+    if (prompt.kind === 'loaded') this.pipeline.recycleForPrepare();
+    try {
+      const prepared = await simplifier.run(waiting.source, prompt.model, { target, maxErrorMm: SIMPLIFY_MAX_ERROR_MM }, (progress) => {
+        if (ticket === this.opens && this.simplifying.value) this.simplifying.value = { ...this.simplifying.value, step: progress.step, round: progress.round };
+      });
+      if (ticket !== this.opens) return;
+      this.simplifying.value = null;
+      // The project as it stands now the copy is made: the page stays editable while it is made, and an edit made
+      // meanwhile is the maker's (MM2's review).
+      const carried = prompt.kind === 'loaded' ? this.carried() : waiting.opened ? carriedFrom(waiting.opened) : null;
+      const origin: ModelOrigin = { kind: 'simplified', original: waiting.source, from: prepared.from, record: prepared.record };
+      const projectName = prompt.kind === 'moldproj' ? prompt.name : prompt.kind === 'loaded' ? this.projectName.value : null;
+      const run = (): void => this.loadSimplified(prepared.stl, origin, carried, projectName, prompt.kind === 'loaded');
+      if (prompt.kind === 'loaded') run();
+      else this.replaceOrAsk(prompt.model, run, prepared.stl);
+    } catch (error) {
+      if (ticket !== this.opens) return;
+      this.simplifying.value = null;
+      const e = error instanceof Error ? error : new Error(String(error));
+      if (e.name === 'Cancelled') return;
+      // The job's own reason is a maker's sentence; anything else is the engine's, kept for Details.
+      const inline = e.name === 'InlineError' || e.name === 'StlError';
+      if (prompt.kind !== 'loaded' && inline) {
+        this.askLarge({ ...prompt, refused: e.message }, waiting);
+        return;
+      }
+      this.fileNotice.value = inline
+        ? { severity: 'error', message: e.message, notes: [] }
+        : { severity: 'error', message: `${prompt.model} could not be simplified, as the geometry engine failed. ${prompt.kind === 'loaded' ? 'The model on screen stays as it was.' : 'Try again, or load it anyway.'}`, notes: [], details: e.message };
+    }
+  }
+
+  /**
+   * MM2: the copy loads as a model of its own, named after the file, with the project carried where there is one.
+   * Simplify… (`again`) keeps what counts as saved, as the project is the one on screen; a file opened afresh has
+   * nothing to lose yet.
+   */
+  private loadSimplified(stl: Uint8Array, origin: ModelOrigin, carried: Carried | null, projectName: string | null, again: boolean): void {
+    const keepSaved = this.saved;
+    this.beforeLoad();
+    if (carried) this.pipeline.loadProject(stl, origin.from.name, carried.project, carried.stored, origin.from.sha256, carried.savedBy, origin, 'simplified');
+    else this.pipeline.load(stl, origin.from.name, origin);
+    this.source = origin.original;
+    this.saved = again ? keepSaved : this.pipeline.project();
+    this.fileSteps = carried ? this.history.nextSeq : Infinity;
+    this.projectName.value = projectName;
+  }
+
+  /**
+   * MM2: the project on screen, to carry onto the copy or back onto the file: the settings, the base face as the
+   * plane itself, the moved openings and the removed vents. A picked face's triangle means nothing on another
+   * mesh, so it becomes the ranked face its plane is found on.
+   */
+  private carried(): Carried {
+    const project = this.pipeline.project();
+    const plane = 'pick' in project.plane ? { rank: 0, upper: project.plane.upper } : project.plane;
+    return { project: { ...project, plane }, stored: this.pipeline.storedPlane(), savedBy: { format: SCHEMA_VERSION, appVersion: BUILD.version } };
+  }
+
+  /** MM2: whether Simplify… is offered: a model past the warning point that is no copy already. */
+  canSimplify(): boolean {
+    const parsed = this.pipeline.parsed?.value;
+    if (!this.simplifier || !parsed || !this.pipeline.modelParsed() || this.pipeline.modelOrigin() || this.simplifying.value || this.large.value) return false;
+    return isLarge(parsed.triangles, this.pipeline.fileBytes, this.largeLimits);
+  }
+
+  /** MM2: Simplify… in the Model section: the question in its form for the model on screen. */
+  simplifyLoaded(): void {
+    const parsed = this.pipeline.parsed?.value, bytes = this.pipeline.stlBytes, model = this.pipeline.modelName;
+    if (!this.canSimplify() || !parsed || !bytes || model === null) return;
+    const source = this.source ?? { kind: 'stl' as const, blob: new Blob([bytes as Uint8Array<ArrayBuffer>]) };
+    this.askLarge({ kind: 'loaded', name: model, model, size: bytes.length, triangles: parsed.triangles, exact: true, format: parsed.format, target: defaultTarget(parsed.triangles) }, { file: source.blob, source });
+  }
+
+  /**
+   * MM2: Use the original: the maker's file again, as it is, with the project on screen carried, and no question,
+   * however large it is. The undo history is cleared, as for any other model.
+   */
+  async useOriginal(): Promise<void> {
+    const origin = this.pipeline.modelOrigin();
+    if (!origin || !this.files) return;
+    const ticket = ++this.opens;
+    const name = origin.from.name, projectName = this.projectName.value;
+    this.fileNotice.value = null;
+    this.fileBusy.value = `Reading ${name}…`;
+    try {
+      const raw = new Uint8Array(await origin.original.blob.arrayBuffer());
+      if (ticket !== this.opens) return;
+      let bytes: Uint8Array, sha: string | null;
+      if (origin.original.kind === 'stl') {
+        const checked = raw.length < READ_IN_WORKER_BYTES ? { bytes: raw, ...readStl(raw, name, true) } : await this.files.check(raw, name, true);
+        bytes = checked.bytes;
+        sha = checked.sha256;
+      } else {
+        const opened = await this.files.open(raw, projectName ?? name, 'zip', null, { original: true });
+        bytes = opened.stl!;
+        sha = opened.stlSha256;
+      }
+      if (ticket !== this.opens) return;
+      // The project as it stands once the file is read, with any edit made meanwhile (MM2's review).
+      const carried = this.carried(), keepSaved = this.saved;
+      this.beforeLoad();
+      this.pipeline.loadProject(bytes, name, carried.project, carried.stored, sha, carried.savedBy, null, 'simplified');
+      this.source = origin.original;
+      this.saved = keepSaved;
+      this.fileSteps = this.history.nextSeq;
+      this.projectName.value = projectName;
+    } catch (error) {
+      if (ticket !== this.opens) return;
+      this.fileNotice.value =
+        error instanceof ProjectError
+          ? { severity: 'error', message: error.message, notes: [], details: error.details }
+          : { severity: 'error', message: `${name} could not be read again: it may have been moved, renamed or changed since you opened it. Open it again.`, notes: [], details: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (ticket === this.opens) this.fileBusy.value = null;
+    }
+  }
+
+  /** MM2: Save simplified STL: the copy the mold is made from, as <name>-simplified.stl. */
+  saveSimplified(): void {
+    const origin = this.pipeline.modelOrigin(), bytes = this.pipeline.stlBytes;
+    if (!origin || !bytes) return;
+    saveBytes(simplifiedName(origin.from.name), bytes, 'application/octet-stream');
   }
 
   /**
@@ -401,9 +686,9 @@ export class Store {
    * model on screen as it was; one that reads with a warning, such as a header count its size does not
    * fit, loads and says so there, naming the file.
    */
-  private async openStl(bytes: Uint8Array, name: string, ticket: number): Promise<void> {
+  private async openStl(bytes: Uint8Array, name: string, ticket: number, source: OriginalSource | null = null): Promise<void> {
     if (!this.files) {
-      this.replaceOrAsk(name, () => this.load(bytes, name), bytes);
+      this.replaceOrAsk(name, () => this.load(bytes, name, source), bytes);
       return;
     }
     this.fileNotice.value = null;
@@ -414,7 +699,7 @@ export class Store {
       const checked = bytes.length < READ_IN_WORKER_BYTES ? { bytes, ...readStl(bytes, name, loaded) } : await this.files.check(bytes, name, loaded);
       if (ticket !== this.opens) return;
       this.replaceOrAsk(name, () => {
-        this.load(checked.bytes, name);
+        this.load(checked.bytes, name, source);
         // A large file's hash is known now, so the export is not sent a copy of it to hash.
         if (checked.sha256) this.pipeline.noteModelSha256(checked.bytes, checked.sha256);
         if (checked.warnings.length > 0) this.fileNotice.value = { severity: 'warning', message: `Opened ${name}, with a warning.`, notes: checked.warnings.map((message) => ({ severity: 'warning', message })) };
@@ -468,7 +753,7 @@ export class Store {
     if (held && fell) this.memoryFell();
   }
 
-  private async openProject(bytes: Uint8Array, name: string, kind: 'zip' | 'json', ticket: number): Promise<void> {
+  private async openProject(bytes: Uint8Array, name: string, kind: 'zip' | 'json', ticket: number, file: Blob | null = null, ask = true): Promise<void> {
     if (!this.files) {
       this.fileNotice.value = { severity: 'error', message: `${name} cannot be opened: this page has no way to read project files.`, notes: [] };
       return;
@@ -479,11 +764,19 @@ export class Store {
     // none. A ZIP that brings its own model needs none, so only one without is sent the model's bytes.
     const unknown = this.pipeline.modelName !== null && this.pipeline.modelSha256 === null;
     const loaded = unknown && (kind === 'json' || !holdsModel(bytes)) ? this.pipeline.stlBytes : null;
+    // MM2: the file a .moldproj's model is kept as, for its model_oriented.stl, before its bytes go to the worker.
+    const source: OriginalSource = { kind: 'moldproj', blob: file ?? new Blob([bytes.slice() as Uint8Array<ArrayBuffer>]) };
     try {
-      const opened = await this.files.open(bytes, name, kind, loaded);
+      // MM2: a .moldproj's model past the warning point is counted in the worker and asked about first (R42).
+      const opened = await this.files.open(bytes, name, kind, loaded, { large: ask && file && kind === 'zip' ? this.largeLimits : null });
       if (ticket !== this.opens) return;
       if (loaded && opened.loadedSha256) this.pipeline.noteModelSha256(loaded, opened.loadedSha256);
-      if (opened.stl) this.replaceOrAsk(name, () => this.loadOpened(opened, name), opened);
+      if (opened.large && file) {
+        const { triangles, exact, format, bytes: size } = opened.large;
+        this.askLarge({ kind: 'moldproj', name, model: opened.file.model, size, triangles, exact, format, target: defaultTarget(triangles) }, { file, source, opened });
+        return;
+      }
+      if (opened.stl) this.replaceOrAsk(name, () => this.loadOpened(opened, name, source), opened);
       else this.applyOpened(opened, name);
     } catch (error) {
       if (ticket !== this.opens) return;
@@ -496,11 +789,24 @@ export class Store {
     }
   }
 
-  /** A .moldproj: its model and its project in one load, which clears the history as a new file does. */
-  private loadOpened(opened: Opened, name: string): void {
+  /**
+   * A .moldproj: its model and its project in one load, which clears the history as a new file does. MM2: a
+   * simplified project's copy loads as the copy of its model.stl, which `source` keeps for model_oriented.stl.
+   */
+  private loadOpened(opened: Opened, name: string, source: OriginalSource): void {
     const { file } = opened;
     this.beforeLoad();
-    this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion });
+    const entry = opened.simplified?.entry;
+    const origin: ModelOrigin | null = entry && opened.stlSha256
+      ? {
+          kind: 'simplified',
+          original: source,
+          from: { name: file.model, bytes: opened.simplified!.bytes, sha256: opened.stlSha256, ...entry.from },
+          record: { triangles: entry.triangles, target: entry.target, maxErrorMm: entry.maxErrorMm, errorMm: entry.errorMm, stoppedBy: entry.stoppedBy, sha256: entry.sha256 },
+        }
+      : null;
+    this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion }, origin);
+    this.source = source;
     this.saved = this.pipeline.project();
     // The history is empty, so every step from here stands on the file's choice until the user picks.
     this.fileSteps = this.history.nextSeq;
@@ -539,6 +845,14 @@ export class Store {
     this.fileSteps = this.history.nextSeq;
     // The file opens again to this project, so leaving now loses nothing.
     this.saved = this.pipeline.project();
+    // MM2: the hash is the file's, whether a copy or the file itself is on screen, so the settings may have been
+    // made on the other one, whose faces and bodies are numbered differently: nothing is simplified for it.
+    const onScreen = this.pipeline.modelOrigin()?.record ?? null;
+    if ((file.simplified?.sha256 ?? null) !== (onScreen?.sha256 ?? null)) {
+      const made = file.simplified ? `a copy of ${file.model} simplified to ${file.simplified.triangles.toLocaleString('en-US')} triangles` : `${file.model} as it is`;
+      const shown = onScreen ? `a copy of it simplified to ${onScreen.triangles.toLocaleString('en-US')} triangles` : `${file.model} as it is`;
+      notes.push({ severity: 'info', message: `These settings were made on ${made}; the model on screen is ${shown}, so check the base face and the openings before you export.` });
+    }
     if (file.modelSha256 === null) notes.push({ severity: 'info', message: `${name} does not record its model's contents, so it was matched to ${current} by the file name alone.` });
     this.fileNotice.value = { severity: notes.some((note) => note.severity === 'warning') ? 'warning' : 'info', message: `Applied the settings of ${name} to ${current}.`, notes };
   }
@@ -562,8 +876,10 @@ export class Store {
         return;
       }
       const project = this.pipeline.project();
-      const file = projectFile(project, model, { modelSha256: this.pipeline.modelSha256, basePlane: this.pipeline.storedPlane() });
-      const { zip, sha256 } = await this.files.pack(file, bytes);
+      // MM2: a copy's project keeps the maker's file as model.stl, which the worker reads, and the copy beside it.
+      const origin = this.pipeline.modelOrigin();
+      const file = projectFile(project, model, { modelSha256: this.pipeline.modelSha256, basePlane: this.pipeline.storedPlane(), ...(origin ? { simplified: simplifiedEntry(origin) } : {}) });
+      const { zip, sha256 } = await this.files.pack(file, bytes, origin?.original ?? null);
       // A type of its own, so no browser renames the file after the ZIP inside.
       saveBytes(name, zip, 'application/octet-stream');
       this.pipeline.noteModelSha256(bytes, sha256);
@@ -571,8 +887,12 @@ export class Store {
       this.saved = project;
       this.fileNotice.value = { severity: 'info', message: `Saved ${name}.`, notes: [], saved: name };
     } catch (error) {
-      const details = error instanceof ProjectError ? [error.message, error.details].filter(Boolean).join(' ') : error instanceof Error ? error.message : String(error);
-      this.fileNotice.value = { severity: 'error', message: `${name} could not be saved. Try again; Export ZIP keeps every setting too, in its project.json.`, notes: [], details };
+      // MM2: a maker's file moved or changed since it was opened says so, as trying again would not help.
+      if (error instanceof ProjectError && error.message !== PACK_FAILED) this.fileNotice.value = { severity: 'error', message: error.message, notes: [], details: error.details };
+      else {
+        const details = error instanceof ProjectError ? [error.message, error.details].filter(Boolean).join(' ') : error instanceof Error ? error.message : String(error);
+        this.fileNotice.value = { severity: 'error', message: `${name} could not be saved. Try again; Export ZIP keeps every setting too, in its project.json.`, notes: [], details };
+      }
     } finally {
       this.saving.value = false;
     }

@@ -16,7 +16,7 @@ const folded = (text: string): string => text.toLowerCase().replace(/\s+/g, ' ')
 const missing = (text: string, phrases: string[]): string[] => phrases.filter((phrase) => !folded(text).includes(folded(phrase)));
 
 describe('the requirement map in docs/REQUIREMENTS.md', () => {
-  it('maps every requirement R01 to R41 to test files and titles that exist, or to user checks section 10 lists', () => {
+  it('maps every requirement R01 to R42 to test files and titles that exist, or to user checks section 10 lists', () => {
     expect(mapProblems(requirements, read)).toEqual([]);
   });
 
@@ -59,18 +59,18 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(problems((rows) => rows.set('R11', 'U1'))).toEqual(['R11 names U1, but section 10 does not list R11 under it.']);
     expect(problems((rows) => rows.set('R02', '`test/unit/a.test.ts` "the box is closed"'))).toEqual(["Section 10 lists R02 under U1, but R02's row does not name U1."]);
     expect(problems((rows) => rows.set('R12', '`test/unit/a.test.ts` "reads the field"; M3 cover checks'))).toEqual(['R12: "M3 cover checks" is neither a backticked test file with quoted titles nor a user check\'s id.']);
-    expect(problems((rows) => rows.delete('R40'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R39, R41, not R01 to R41 in order\.$/)]);
+    expect(problems((rows) => rows.delete('R40'))).toEqual([expect.stringMatching(/^Section 3 lists R01, .*, R39, R41, R42, not R01 to R42 in order\.$/)]);
   });
 
   it('section 10 is the fixed list of user checks, and every one covers a requirement', () => {
     const users = tableRows(section(requirements, 10)!).filter((cells) => /^U\d+$/.test(cells[0]));
-    expect(users.map((cells) => cells[0])).toEqual(['U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']);
+    expect(users.map((cells) => cells[0])).toEqual(['U1', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', 'U10']);
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D23 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D24 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 23 }, (_, k) => `D${k + 1}`));
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 24 }, (_, k) => `D${k + 1}`));
     // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
     expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
@@ -104,12 +104,14 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     // The user decided on 2026-11-11: the source is public, with the example models whose source is known, and the name stands.
     expect(open.find((cells) => cells[0].startsWith('Source publication and the example models'))?.[2]).toMatch(/^answered 2026-11-11: public/);
     expect(open.find((cells) => cells[0].startsWith('The name\'s spelling'))?.[2]).toMatch(/^answered 2026-11-11: confirmed/);
-    // The live memory meter is built in 0.2.0 (MM1), its warning and simplify still to come (MM2), with what the browser allows.
+    // The live memory meter (MM1), the warning before loading and the one-click simplify (MM2), all built in 0.2.0, with what the browser allows.
     expect(section(requirements, 8)).toMatch(/### Future work[\s\S]*live memory meter[\s\S]*measureUserAgentSpecificMemory[\s\S]*cross-origin isolation[\s\S]*meshoptimizer/);
     expect(section(requirements, 4)).toContain('D23 records how the live memory meter the user asked for on 2026-11-09 was built');
+    expect(section(requirements, 4)).toContain('D24 records how the warning before a large model loads and its one-click simplify were built');
     const meter = future.find((cells) => cells[1].startsWith('A live memory meter'))?.[2];
-    expect(meter).toMatch(/^The meter is built in 0\.2\.0 \(MM1; R41, D23\)/);
-    expect(meter).toContain('The warning before loading and the one-click simplify follow in 0.2.0, as MM2.');
+    expect(meter).toMatch(/^Built in 0\.2\.0 \(MM1 and MM2; R41, R42, D23, D24\)/);
+    // MM2's answers of 2026-11-16, as recorded in section 2: the copy's count, the warning point, and Simplify… for a model loaded anyway.
+    for (const answer of ['from 10,000 to 1,000,000 triangles, 300,000 by default', 'set from the memory curve measured at MM2', 'a Simplify… button in the Model section']) expect(section(requirements, 2)).toContain(answer);
     // So are the user's reset button and the marks on changed settings, after PrusaSlicer.
     expect(section(requirements, 8)).toMatch(/global Reset button[\s\S]*PrusaSlicer: a grey dot/);
   });

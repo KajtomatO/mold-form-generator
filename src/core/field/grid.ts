@@ -64,12 +64,17 @@ export interface FieldSettings {
   minVolumeMl: number;
 }
 
-export function fieldSettings(params: Params, bounds: Bounds, cell: number = params.quality.cellFinal): FieldSettings {
+/**
+ * The field's settings from the parameters. `extraMarginMm` widens G4's margin for a simplified model by how far
+ * its copy lies from the maker's file, measured (MM2), so the cavity planned from the copy holds the file too;
+ * 0, as for every model loaded as it is, adds nothing and leaves every figure as it was.
+ */
+export function fieldSettings(params: Params, bounds: Bounds, cell: number = params.quality.cellFinal, extraMarginMm = 0): FieldSettings {
   return {
     cell,
     cellFinal: params.quality.cellFinal,
     t: params.silicone.t,
-    printMargin: resolveAuto(params, bounds).printMargin,
+    printMargin: resolveAuto(params, bounds).printMargin + extraMarginMm,
     tinTol: params.quality.tinTolFinal,
     margin: true,
     draftDeg: params.silicone.wallDraftDeg,

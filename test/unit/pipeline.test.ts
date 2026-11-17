@@ -172,6 +172,67 @@ describe('the pipeline in one process, on the real stage code', () => {
     expect(p.geometryHash().all).toBe(await fresh(p));
   }, 120_000);
 
+  it('MM2: a field job that has sent its field is not ended at its budget for the placement it is building, which main asks for once the field is in', async () => {
+    // The first field job's result is held back, as a 3 million triangle model's placement takes seconds after its
+    // field: main asks for the placement alone as the field arrives, under the keys the job is building it for.
+    let held = false;
+    const slowResult = (): WorkerLike => {
+      const real = inProcessField();
+      const worker: WorkerLike = { onmessage: null, onerror: null, postMessage: (m, t) => real.postMessage(m, t), terminate: () => real.terminate() };
+      real.onmessage = (event) => {
+        if (event.data.t === 'result' && !held) {
+          held = true;
+          setTimeout(() => worker.onmessage?.(event), 1_200);
+          return;
+        }
+        worker.onmessage?.(event);
+      };
+      real.onerror = (event) => worker.onerror?.(event);
+      return worker;
+    };
+    const p = pipeline(slowResult);
+    p.budgets.freeze({ terminateFloorMs: 300 });
+    load(p, 'jersey');
+    await until(() => logged(p, 'field', 'stage') === 1);
+    // The placement is asked for, and the job that builds it is the one running.
+    expect(p.placement).toBeNull();
+    await p.idle();
+    expect(held).toBe(true);
+    expect(logged(p, 'field', 'terminated')).toBe(0);
+    expect(logged(p, 'field', 'dispatch')).toBe(1);
+    expect(applied(p, 'placement').map((e) => e.rev)).toEqual([applied(p, 'field')[0].rev]);
+    expect(p.status()).toMatchObject({ stale: false, error: null });
+  }, 60_000);
+
+  it('MM2 review: a field job past its budget is still ended for a rim it is not building: the field\'s entry carries the rim key it is taken on', async () => {
+    let held = false;
+    const slowResult = (): WorkerLike => {
+      const real = inProcessField();
+      const worker: WorkerLike = { onmessage: null, onerror: null, postMessage: (m, t) => real.postMessage(m, t), terminate: () => real.terminate() };
+      real.onmessage = (event) => {
+        if (event.data.t === 'result' && !held) {
+          held = true;
+          setTimeout(() => worker.onmessage?.(event), 1_200);
+          return;
+        }
+        worker.onmessage?.(event);
+      };
+      real.onerror = (event) => worker.onerror?.(event);
+      return worker;
+    };
+    const p = pipeline(slowResult);
+    p.budgets.freeze({ terminateFloorMs: 300 });
+    load(p, 'jersey');
+    await until(() => logged(p, 'field', 'stage') === 1);
+    // The cover's wall changes the rim (S10) and nothing the field (S6) is made of: the job builds another rim.
+    const wall = p.params.cover.wall + 1;
+    p.setParams((params) => (params.cover.wall = wall));
+    await p.idle();
+    expect(logged(p, 'field', 'terminated')).toBe(1);
+    expect(p.status()).toMatchObject({ stale: false, error: null });
+    expect(p.geometryHash().all).toBe(await fresh(p));
+  }, 60_000);
+
   it('a crash is retried once at twice the cell, a crash at that cell gives a clean inline error, and the next change builds again at it', async () => {
     const p = pipeline();
     load(p, 'jersey');

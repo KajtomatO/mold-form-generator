@@ -893,7 +893,11 @@ describe('save and open with the real pipeline on jersey', () => {
     new DataView(big.buffer).setUint32(80, (big.length - 84) / 50, true);
     // Every record a triangle of three distinct corners, so the file is a readable STL.
     for (let t = 0, view = new DataView(big.buffer); t < (big.length - 84) / 50; t++) for (let k = 0; k < 9; k++) view.setFloat32(84 + 50 * t + 12 + 4 * k, k === 0 ? t % 1000 : k === 4 ? 1 : k === 8 ? 1 + (t % 7) : 0, true);
+    // MM2: 671,089 triangles is past the warning point, so the question comes first, and Load anyway reads it as before.
     await store.openFile(new File([big.slice()], 'big.stl'));
+    expect(store.large.value).toMatchObject({ kind: 'stl', name: 'big.stl', triangles: (big.length - 84) / 50, exact: true });
+    expect(p.modelName).toBe('clamped.stl');
+    await store.answerLarge('load');
     expect(p.modelName).toBe('big.stl');
     expect(p.modelSha256).toBe(nodeSha(big));
   }, 120_000);

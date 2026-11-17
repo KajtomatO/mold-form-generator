@@ -25,6 +25,7 @@ import { hashFloats, hashMesh, hashString } from './hash';
 import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
 import { MemoryLedger, type MemorySource, type WorkerMemory } from './memory';
 import type { Project } from './project';
+import { displayProxyMessage, simplifiedMessage, type ModelOrigin } from './simplified';
 import { stageKeys, type StageId, type StageInputs } from './stages';
 import { BUILD } from './buildInfo';
 import { bodiesByPart, type SavedBy } from './version';
@@ -45,6 +46,8 @@ interface Target extends GateTarget {
     importInput: ImportInput;
     parsed: ParsedModel | null;
     oriented: OrientedWire | null;
+    /** MM2: a simplified model's proved error, which widens the margin; 0 for a model as loaded. */
+    modelErrorMm: number;
   };
 }
 
@@ -126,6 +129,11 @@ interface PlaneCheck {
   tried: boolean;
   /** The choice on screen is no longer the file's, so finding the plane is worth a note. */
   moved: boolean;
+  /**
+   * Why the choice may name another face: a project from another version of the app, or MM2's project carried
+   * between a simplified copy and the file it was made from, whose faces are numbered differently.
+   */
+  reason: 'version' | 'simplified';
 }
 
 /** A 3D marker of the Show toggle: a pin at a point, and the line of a cut to it where there is one. */
@@ -162,6 +170,8 @@ export interface PipelineStatus {
 export interface PipelineSnapshot {
   bytes: Uint8Array;
   name: string;
+  /** MM2: what a simplified model was made from, or null. */
+  origin: ModelOrigin | null;
   params: Params;
   plane: PlaneChoice;
   pins: OpeningPin[];
@@ -229,8 +239,12 @@ export class Pipeline {
   readonly log: LogEntry[] = [];
   readonly events: PipelineEvent[] = [];
 
-  /** The loaded STL. `sha256` is its hash once a save, an open or an export has worked it out off main. */
-  private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null } | null = null;
+  /**
+   * The loaded STL. `sha256` is its hash once a save, an open or an export has worked it out off main. For a
+   * simplified model (MM2), `bytes` are the copy's, which the mold is made from, while `name` and `sha256` are
+   * the maker's own file's, which `origin` keeps, unread, for model_oriented.stl and Save project.
+   */
+  private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null; origin: ModelOrigin | null } | null = null;
   private planeCheck: PlaneCheck | null = null;
   /**
    * M11c: the format and app version of the project on screen, until the import has said whether this model
@@ -327,8 +341,9 @@ export class Pipeline {
 
   // ----- what the user does -----
 
-  load(bytes: Uint8Array, name: string): void {
-    this.startFile(bytes, name);
+  /** An STL as it is, or with `origin` the simplified copy of the maker's file (MM2), named after that file. */
+  load(bytes: Uint8Array, name: string, origin: ModelOrigin | null = null): void {
+    this.startFile(bytes, name, origin);
     this.changed();
   }
 
@@ -337,14 +352,14 @@ export class Pipeline {
    * is asked for with the settings the page had before. `stored` is the plane the file was saved on,
    * which the model's first S2 checks the choice against, and `sha256` the hash its STL was checked by.
    */
-  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null, savedBy: SavedBy = CURRENT_FORMAT): void {
-    this.startFile(bytes, name);
-    this.file!.sha256 = sha256;
+  loadProject(bytes: Uint8Array, name: string, project: Project, stored: StoredPlane | null, sha256: string | null, savedBy: SavedBy = CURRENT_FORMAT, origin: ModelOrigin | null = null, reason: PlaneCheck['reason'] = 'version'): void {
+    this.startFile(bytes, name, origin);
+    this.file!.sha256 = origin ? origin.from.sha256 : sha256;
     this.params = project.params;
     this.plane = project.plane;
     this.pins = project.pins;
     this.removed = project.removed;
-    this.planeCheck = stored ? { file: this.file!.id, stored, tried: false, moved: false } : null;
+    this.planeCheck = stored ? { file: this.file!.id, stored, tried: false, moved: false, reason } : null;
     this.numbering = { file: this.file!.id, savedBy };
     this.changed();
   }
@@ -359,7 +374,7 @@ export class Pipeline {
     this.setProject(project);
     if (this.checkNumbering()) this.changed();
     if (!stored || !this.file) return;
-    this.planeCheck = { file: this.file.id, stored, tried: false, moved: false };
+    this.planeCheck = { file: this.file.id, stored, tried: false, moved: false, reason: 'version' };
     // The plane on screen may be the one the file chose already, and then no S2 is on its way to check it.
     if (this.checkPlane()) this.changed();
     else this.collectDiagnostics();
@@ -371,10 +386,11 @@ export class Pipeline {
     this.notes = this.notes.filter((note) => note.code !== 'plane-found' && note.code !== 'plane-mismatch');
   }
 
-  private startFile(bytes: Uint8Array, name: string): void {
+  private startFile(bytes: Uint8Array, name: string, origin: ModelOrigin | null = null): void {
     // An export still waiting for the preview was asked for the model this one replaces, so it stops.
     this.exportWait?.();
-    this.file = { id: `f${++this.loads}`, name, bytes, sha256: null };
+    // A simplified model's hash is its file's, which the job that made the copy worked out.
+    this.file = { id: `f${++this.loads}`, name, bytes, sha256: origin?.from.sha256 ?? null, origin };
     this.planeCheck = null;
     this.numbering = null;
     this.plane = DEFAULT_PLANE;
@@ -496,9 +512,19 @@ export class Pipeline {
     return this.file?.sha256 ?? null;
   }
 
-  /** Keeps a hash worked out off main, if the model it was worked out for is still the one loaded. */
+  /** Keeps a hash worked out off main, if the model it was worked out for is still the one loaded. A copy's is its file's already. */
   noteModelSha256(bytes: Uint8Array, sha256: string): void {
-    if (this.file?.bytes === bytes) this.file.sha256 = sha256;
+    if (this.file?.bytes === bytes && !this.file.origin) this.file.sha256 = sha256;
+  }
+
+  /** MM2: what the model on screen was made from, when it is a simplified copy of the maker's file, or null. */
+  modelOrigin(): ModelOrigin | null {
+    return this.file?.origin ?? null;
+  }
+
+  /** MM2: how far the copy on screen lies from the maker's file, measured, which widens the margin; 0 for a model as loaded. */
+  modelErrorMm(): number {
+    return this.file?.origin?.record.errorMm ?? 0;
   }
 
   /**
@@ -613,6 +639,18 @@ export class Pipeline {
     this.solidGate.recycle();
   }
 
+  /**
+   * MM2: before a simplified copy is made of the model on screen, its preview's solid worker goes if it is heavy,
+   * by the rule used before an export, so its heap never stands beside the prepare job's; it comes back with the
+   * next change.
+   */
+  recycleForPrepare(): void {
+    if ((this.solidHeapBytes ?? 0) > EXPORT_RECYCLE_BYTES || (this.parsed !== null && this.heavyMesh(this.parsed.value.welded))) {
+      this.solidGate.recycle();
+      this.solidHeapBytes = null;
+    }
+  }
+
   solidCached(): Partial<Record<StageId, string>> {
     return this.solidGate.cached;
   }
@@ -656,11 +694,11 @@ export class Pipeline {
   /** What a fresh build needs to reach the same state from nothing. */
   snapshot(): PipelineSnapshot | null {
     if (!this.file) return null;
-    return { bytes: this.file.bytes, name: this.file.name, params: this.params, plane: this.plane, pins: this.pins, removed: this.removed, crashScale: this.crashScale, tuneScale: this.tuneScale };
+    return { bytes: this.file.bytes, name: this.file.name, origin: this.file.origin, params: this.params, plane: this.plane, pins: this.pins, removed: this.removed, crashScale: this.crashScale, tuneScale: this.tuneScale };
   }
 
   restore(snapshot: PipelineSnapshot): void {
-    this.load(snapshot.bytes, snapshot.name);
+    this.load(snapshot.bytes, snapshot.name, snapshot.origin);
     this.params = snapshot.params;
     this.plane = snapshot.plane;
     this.pins = snapshot.pins;
@@ -856,14 +894,17 @@ export class Pipeline {
       ...(this.placement?.value.placement.diagnostics ?? []),
       ...siliconeAdvice(this.params, this.field?.value.rim ?? null),
     ];
+    const origin = this.file!.origin;
     return {
       model: this.file!.name,
       modelSha256: this.file!.sha256,
       basePlane: this.storedPlane(),
-      triangles: { format: parsed.format, inFile: parsed.rawTriangles, kept: parsed.triangles },
+      // MM2: a simplified model's counts are its file's; the copy's are in its record.
+      triangles: origin ? { format: origin.from.format, inFile: origin.from.trianglesInFile, kept: origin.from.triangles } : { format: parsed.format, inFile: parsed.rawTriangles, kept: parsed.triangles },
       project: this.project(),
       plane: { normal: [normal[0], normal[1], normal[2]], offset, area, planeTol: oriented.planeTol },
       notes: notes.map(plain),
+      ...(origin ? { simplified: { from: origin.from, record: origin.record } } : {}),
     };
   }
 
@@ -886,11 +927,18 @@ export class Pipeline {
             stl: request.want === 'zip' && this.file!.sha256 === null ? this.file!.bytes.slice() : null,
             // M11: past G1.8's limit, the preview's import, which checked the whole mesh, so the export need not.
             importReport: this.heavyMesh(parsed!.welded) && this.imported?.key === this.keys().S1 ? this.imported.value : null,
+            // MM2: a simplified model's error, which widens the margin, and its file, which the ZIP's model_oriented.stl
+            // is in glue mode, read by the export's worker itself. A File goes by reference, not by its bytes.
+            ...(origin ? { modelErrorMm: origin.record.errorMm } : {}),
+            // An inside-out separate body the copy's import flipped is flipped in the file by its whole solid,
+            // which is read before the build, as a trim is (MM2's review).
+            ...(origin && request.want === 'zip' && params.base.mode === 'glue' ? { original: { source: origin.original, sha256: origin.from.sha256, facts: origin.from, wholeSolid: this.imported?.value.diagnostics.some((d) => d.code === 'shell-inverted') ?? false } } : {}),
           }
         : null;
     const params = this.params;
     const meta = mold ? this.exportMeta() : null;
     const file = this.file;
+    const origin = file?.origin ?? null;
     const run = (cellScale: number, armed?: Fault): Promise<ExportOutputs> =>
       new Promise((resolve, reject) => {
         const worker = this.options.spawnSolid();
@@ -997,8 +1045,8 @@ export class Pipeline {
     this.startWalls();
   }
 
-  private target<T extends Target>(keys: Record<StageId, string>, extra: Omit<T, keyof Target>, idParts: unknown[]): T {
-    const source = { bytes: this.file?.bytes ?? null, importInput: this.importInput, parsed: this.parsed?.value ?? null, oriented: this.oriented?.value ?? null };
+  private target<T extends Target>(keys: Record<StageId, string>, extra: Omit<T, keyof Target> & Pick<GateTarget, 'builds'>, idParts: unknown[]): T {
+    const source = { bytes: this.file?.bytes ?? null, importInput: this.importInput, parsed: this.parsed?.value ?? null, oriented: this.oriented?.value ?? null, modelErrorMm: this.modelErrorMm() };
     return { id: hashString(JSON.stringify(idParts)), rev: this.rev, modelKey: this.modelKey(), keys, params: this.params, inputs: this.inputs(), source, ...extra } as T;
   }
 
@@ -1012,7 +1060,11 @@ export class Pipeline {
       this.fieldGate.cancelPending();
       return;
     }
-    const target = this.target<FieldTarget>(keys, { want }, ['field', keys.S1, keys.S2, keys.S6, keys.S7, keys.S10, want]);
+    // MM2: what the job builds, each stage under its key, so a job past its budget that is already building
+    // what is asked, as the first field job builds the placement main asks for once its field is in, is not
+    // ended for it. The field is taken only on the rim it was built for, so its entry names that key too.
+    const builds = want.map((stage) => (stage === 'S6' ? `S6:${keys.S6}:${keys.S10}` : `${stage}:${keys[stage]}`));
+    const target = this.target<FieldTarget>(keys, { want, builds }, ['field', keys.S1, keys.S2, keys.S6, keys.S7, keys.S10, want]);
     if (!this.failed.has(target.id)) this.fieldGate.request(target);
   }
 
@@ -1070,7 +1122,9 @@ export class Pipeline {
         drag = { rest: replicateOpenings(others, placement.space), moved: replicateOpenings([{ kind: dragged.kind, x: this.dragState.x, y: this.dragState.y }], placement.space) };
       }
     }
-    const target = this.target<SolidTarget>(keys, { want, drag, copies: ready && placement ? placement.copies : [], field: ready ? field : null }, ['solid', keys, want]);
+    // MM2: as for the field: the import a job is running is not ended for a request that wants it and more.
+    const builds = want.map((stage) => `${stage}:${keys[stage]}`);
+    const target = this.target<SolidTarget>(keys, { want, builds, drag, copies: ready && placement ? placement.copies : [], field: ready ? field : null }, ['solid', keys, want]);
     if (!this.failed.has(target.id)) this.solidGate.request(target);
   }
 
@@ -1157,7 +1211,7 @@ export class Pipeline {
     const { pins, removed, cellScale } = target.inputs;
     const plane = JSON.parse(target.inputs.plane) as PlaneChoice;
     return {
-      message: { t: 'field', id: 0, keys, want: target.want, params: target.params, inputs: { file, import: { ...imported, mesh }, plane, cellScale, pins, removed } },
+      message: { t: 'field', id: 0, keys, want: target.want, params: target.params, inputs: { file, import: { ...imported, mesh }, plane, cellScale, pins, removed, modelErrorMm: target.source.modelErrorMm } },
       transfer,
     };
   }
@@ -1373,10 +1427,11 @@ export class Pipeline {
     const oriented = this.oriented.value;
     const bounds = meshBounds(mesh.positions);
     const gap = planeGap(planeOf(oriented.chosen), check.stored, bounds);
-    const saved = `The base face saved with this project, facing ${formatNormal(check.stored.normal)}${check.stored.upper === false ? '' : `, on its level ${check.stored.upper.toFixed(2)} mm up`},`;
+    const saved = `${check.reason === 'simplified' ? 'The base face you chose' : 'The base face saved with this project'}, facing ${formatNormal(check.stored.normal)}${check.stored.upper === false ? '' : `, on its level ${check.stored.upper.toFixed(2)} mm up`},`;
     if (gap <= PLANE_MATCH_MM) {
       this.planeCheck = null;
-      if (check.moved) this.notes.push({ code: 'plane-found', severity: 'info', message: `${saved} is ${choiceName(this.plane)} in this version of the app, which numbers the faces differently, so the model stands on it as saved.` });
+      const where = check.reason === 'simplified' ? 'on this model, as the simplified copy and the file it was made from number their faces differently' : 'in this version of the app, which numbers the faces differently';
+      if (check.moved) this.notes.push({ code: 'plane-found', severity: 'info', message: `${saved} is ${choiceName(this.plane)} ${where}, so the model stands on it as saved.` });
       return false;
     }
     if (!check.tried) {
@@ -1393,7 +1448,8 @@ export class Pipeline {
     // The best guess stands: the nearest plane found, or the saved choice as this version reads it.
     this.planeCheck = null;
     const off = Number.isFinite(gap) ? `up to ${gap.toFixed(2)} mm off it across the model` : `which faces ${formatNormal(oriented.chosen.normal)}`;
-    this.notes.push({ code: 'plane-mismatch', severity: 'warning', message: `${saved} is not one this version of the app finds, so the model stands on ${choiceName(this.plane)}, ${off}. Check the base face before you export.` });
+    const finds = check.reason === 'simplified' ? 'is not one found on this model' : 'is not one this version of the app finds';
+    this.notes.push({ code: 'plane-mismatch', severity: 'warning', message: `${saved} ${finds}, so the model stands on ${choiceName(this.plane)}, ${off}. Check the base face before you export.` });
     return false;
   }
 
@@ -1425,9 +1481,11 @@ export class Pipeline {
     // A hole's Show marks the middle of its rim; the cavity's warning marks only the holes facing up.
     if (this.imported) all.push(...this.imported.value.diagnostics.map((d) => (d.code === 'missing-surface' ? { ...d, markers: this.holeMarkers(false) } : d)));
     if (this.oriented) all.push(...this.oriented.value.diagnostics.map((d) => (d.code === 'missing-top-surface' ? { ...d, markers: this.holeMarkers(true) } : d)));
+    // MM2: the copy the mold is made from, and what model_oriented.stl is.
+    const origin = this.file?.origin;
+    if (origin) all.push({ code: 'model-simplified', severity: 'info', message: simplifiedMessage(origin, this.params.base.mode === 'merged', this.oriented?.value.oriented.needsTrim ?? false) });
     if (this.displayProxy && this.parsed) {
-      const drawn = (this.displayProxy.indices.length / 3).toLocaleString('en-US'), whole = this.parsed.value.triangles.toLocaleString('en-US');
-      all.push({ code: 'display-proxy', severity: 'info', message: `The view draws this model simplified to ${drawn} of its ${whole} triangles, to keep it quick to turn; the mold is built from the whole mesh.` });
+      all.push({ code: 'display-proxy', severity: 'info', message: displayProxyMessage(this.displayProxy.indices.length / 3, this.parsed.value.triangles, origin !== null && origin !== undefined) });
     }
     if (this.footprint) all.push(...this.footprint.value.diagnostics, ...this.footprint.value.levels.diagnostics);
     all.push(...this.wallDiagnostics());
@@ -1555,7 +1613,7 @@ export class Pipeline {
       this.notify();
     };
     const sent = { positions: mesh.positions.slice(), indices: mesh.indices.slice() };
-    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform } };
+    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform, modelErrorMm: this.modelErrorMm() } };
     worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer]);
   }
 }

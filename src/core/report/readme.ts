@@ -26,8 +26,8 @@ export interface ReadmeInput {
   pitch: [number, number] | null;
   /** The assembled mold: the cover's outside, and from the base's underside to the flat top. */
   box: [number, number, number];
-  /** Null for an open mesh, which has no solid to measure. */
-  clearance: { measured: number; error: number; raisedBy: number } | null;
+  /** Null for an open mesh, which has no solid to measure. `simplify`, MM2: a simplified model's own error, also taken off in glue mode. */
+  clearance: { measured: number; error: number; raisedBy: number; simplify?: number } | null;
   silicone: { ml: number; grams: number };
   /** S9: the demold estimate and the air, or null when the export could not work them out. */
   reports: GeometryReports | null;
@@ -42,6 +42,25 @@ export interface ReadmeInput {
   diagnostics: Diagnostic[];
   /** The file's separate parts, voids aside, and the bodies they make once those that overlap or touch are one. */
   parts: { count: number; bodies: number };
+  /**
+   * MM2: the mold was made from a copy of the model with fewer triangles (R42): the file's count, the copy's, and
+   * how far it lies from the file, measured. Only for a simplified model; `merged` says the base carries the copy.
+   */
+  simplified?: {
+    from: { name: string; triangles: number };
+    record: { triangles: number; target: number; maxErrorMm: number; errorMm: number };
+    merged: boolean;
+    /** Where the base face's plane cuts the model: model_oriented.stl is the file trimmed there, of this many triangles. */
+    trimmedTo?: number;
+  };
+}
+
+const thousands = (n: number): string => n.toLocaleString('en-US');
+
+/** How far a simplified copy lies from the file, as README.txt says it. */
+function within(simplified: NonNullable<ReadmeInput['simplified']>): string {
+  const { errorMm, maxErrorMm } = simplified.record;
+  return `within ${errorMm.toFixed(3)} mm of ${errorMm > maxErrorMm ? 'it, as close as the copy could keep to it' : 'it'}`;
 }
 
 function heading(title: string): string[] {
@@ -99,16 +118,27 @@ export function exportReadme(input: ReadmeInput): string {
   out.push(...wrap(`The cover: a box whose inside follows your model with ${mm(t)} of room for silicone, with the pour and vent openings in its flat top. Print it as it is saved: it is already turned flat top down on the bed. ${overhang}`, '  '));
   out.push('', 'base.stl');
   const holes = bolts ? ` A countersunk hole in each corner takes a bolt from below.` : '';
+  const simplified = input.simplified;
+  // MM2: in merged mode the base carries the copy the mold was made from, not the file.
+  const carried = simplified ? `, a copy of ${simplified.from.name} simplified to ${thousands(simplified.record.triangles)} triangles, ${within(simplified).replace(' of it', ' of your file')}, so the silicone takes that copy's shape,` : ',';
   out.push(...wrap(glue
     ? `The base plate, with a ridge that fits the groove in the cover and a shallow pocket that your model is glued into.${holes} Print it as it is saved, flat underside on the bed.`
-    : `The base plate with your model built onto it, and a ridge that fits the groove in the cover.${holes} Print it as it is saved, flat underside on the bed. The model's own overhangs may need supports in your slicer.`, '  '));
+    : `The base plate with your model built onto it${carried} and a ridge that fits the groove in the cover.${holes} Print it as it is saved, flat underside on the bed. The model's own overhangs may need supports in your slicer.`, '  '));
   if (has('model_oriented.stl')) {
     out.push('', 'model_oriented.stl');
     const quantity = copies === 1 ? '' : ` Print ${copies} copies of it, one for each of the ${copies} pockets in the base.`;
     // The file's parts stay as they are: the mold took them as one, and a slicer does too.
     const { count, bodies } = input.parts;
     const parts = count > bodies ? ` It keeps the ${count} parts your file is made of, ${bodies === 1 ? 'which' : 'some of which'} overlap or touch, as the file has them: slicers print overlapping parts as one.` : '';
-    out.push(...wrap(`Your model, turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base.${quantity}${parts} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
+    // MM2: a simplified model's model_oriented.stl is still the maker's own file, which the clearance is held for.
+    const own = simplified
+      ? simplified.trimmedTo === undefined
+        ? `, ${simplified.from.name} as you opened it, with all its ${thousands(simplified.from.triangles)} triangles,`
+        : `, ${simplified.from.name} as you opened it, trimmed where the base face cuts it, ${thousands(simplified.trimmedTo)} triangles as written,`
+      : ',';
+    // MM2's review: the thickness is not measured on this file but held for it, through the copy, less its error.
+    const madeFrom = simplified ? ` The mold was made from a copy simplified to ${thousands(simplified.record.triangles)} triangles ${within(simplified)}, and the silicone thickness was checked to hold for this file: measured on the copy, less the copy's error.` : '';
+    out.push(...wrap(`Your model${own} turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base.${madeFrom}${quantity}${parts} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
   }
   if (has('funnel.stl')) {
     out.push('', 'funnel.stl');
@@ -125,7 +155,11 @@ export function exportReadme(input: ReadmeInput): string {
     out.push(...wrap('Small test pieces of the joint between base and cover, to find the clearances that suit your printer before you print the real mold. fit_test/README.txt says how to read them.', '  '));
   }
   out.push('', 'report.json and project.json');
-  out.push(...wrap(`Every number of this export, and the settings it was made with. To make the same mold again, open ${input.model} in the app, then open this ZIP or its project.json there: the settings, the base face and the openings come back as they were. project.json records the STL's SHA-256, so the app can tell whether the model is the same.`, '  '));
+  // MM2: the copy is made again the same way from the same file, which the record's SHA-256 checks.
+  const again = simplified
+    ? ` Save project in the app keeps the simplified copy, so the same mold comes back from the .moldproj. To make it again from ${input.model}, open it in this version of the app and simplify it to ${thousands(simplified.record.target)} triangles, which gives the same copy, then open this ZIP or its project.json.`
+    : '';
+  out.push(...wrap(`Every number of this export, and the settings it was made with. To make the same mold again, open ${input.model} in the app, then open this ZIP or its project.json there: the settings, the base face and the openings come back as they were. project.json records the STL's SHA-256, so the app can tell whether the model is the same.${again}`, '  '));
 
   if (bolts) {
     const { layout } = bolts;
@@ -244,8 +278,15 @@ export function exportReadme(input: ReadmeInput): string {
   out.push(...heading('This mold'));
   item(`Silicone thickness asked for: ${mm(t, 2)}.`);
   if (clearance) {
-    const simplified = clearance.error > 0 ? `, measured on a simplified copy of the model with its error of ${clearance.error.toFixed(3)} mm taken off` : '';
-    item(`Measured clearance: ${clearance.measured.toFixed(2)} mm at the thinnest point between the model and the cover${simplified}.`);
+    // MM2: a simplified model's gap gave up the copy's own error too in glue mode, and in merged mode is the copy's.
+    const copyError = clearance.simplify;
+    const decimated = copyError !== undefined
+      ? clearance.error > 0
+        ? `, measured on a lighter copy of the simplified model, less ${(clearance.error + copyError).toFixed(3)} mm for the two copies' errors (${clearance.error.toFixed(3)} mm for the lighter one, ${copyError.toFixed(3)} mm for the simplified one)`
+        : `, measured on the copy the mold was made from, less its error of ${copyError.toFixed(3)} mm`
+      : clearance.error > 0 ? `, measured on a simplified copy of the model with its error of ${clearance.error.toFixed(3)} mm taken off` : '';
+    const between = simplified?.merged ? 'between the simplified model the base carries and the cover' : 'between the model and the cover';
+    item(`Measured clearance: ${clearance.measured.toFixed(2)} mm at the thinnest point ${between}${decimated}.`);
     if (clearance.raisedBy > 0) item(`The first build measured less than ${mm(t, 2)}, so the safety margin was raised by ${clearance.raisedBy.toFixed(2)} mm and the mold was built again. The cavity and the box are a little larger than the preview showed.`);
   } else {
     item(`The clearance could not be measured, as the model's mesh is not closed. The mold is planned to leave at least ${mm(t, 2)}, but that is not verified.`);
@@ -258,6 +299,10 @@ export function exportReadme(input: ReadmeInput): string {
   item(`Mold box: ${input.box.map((v) => v.toFixed(1)).join(' x ')} mm, with a base ${mm(params.base.thickness)} thick.`);
   if (input.tiles > 1 && input.pitch) item(`${params.grid.nx} x ${params.grid.ny} copies of the model, every ${input.pitch[0].toFixed(2)} x ${input.pitch[1].toFixed(2)} mm.`);
   item(glue ? 'Mode A: the model is printed on its own and glued into the base.' : 'Mode B: the model is part of the base.');
+  if (simplified) {
+    const { from, record } = simplified;
+    item(`Simplified: ${from.name} has ${thousands(from.triangles)} triangles, and the mold was made from a copy of ${thousands(record.triangles)} (asked for ${thousands(record.target)}), whose surface lies ${within(simplified).replace(' of it', ` of your file's`)}, proved over all of it; the safety margin was widened by that much.`);
+  }
 
   const problems = input.diagnostics.filter((d) => d.severity !== 'info');
   const notes = input.diagnostics.filter((d) => d.severity === 'info');

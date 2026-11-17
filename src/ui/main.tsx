@@ -1,5 +1,6 @@
 import { render } from 'preact';
 import { saveBytes } from '../app/download';
+import { ModelSimplifier } from '../app/modelSimplifier';
 import { Pipeline, type PipelineOptions } from '../app/pipeline';
 import { ProjectFiles } from '../app/projectFiles';
 import { Store } from '../app/store';
@@ -24,7 +25,9 @@ const options: PipelineOptions = {
 };
 const pipeline = new Pipeline(options);
 const files = new ProjectFiles(() => new Worker(new URL('../workers/project.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike);
-const store = new Store(pipeline, undefined, files);
+// MM2: the simplified copy of a large model, made in a solid worker of its own per job, its memory on the meter.
+const simplifier = new ModelSimplifier(test ? solidWorkers.spawn : spawnSolid, pipeline.memory);
+const store = new Store(pipeline, undefined, files, simplifier);
 document.documentElement.dataset.theme = store.theme.value;
 
 // The view is made before the UI, so it exists for the test hooks. Without WebGL 2 the rest still runs.

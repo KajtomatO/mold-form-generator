@@ -992,6 +992,38 @@ input[type='range']:disabled {
   gap: 6px;
 }
 
+/* MM2: the large-model question, the copy being made, and the copy on screen. */
+.large-prompt p + p {
+  margin-top: 6px;
+}
+
+.large-prompt .large-refused {
+  font-weight: 600;
+}
+
+.large-prompt .num.target {
+  width: 92px;
+  height: 22px;
+  color: var(--ink);
+}
+
+.simplify-row {
+  margin: -4px 0 10px;
+}
+
+.file-busy .btn {
+  margin-left: auto;
+}
+
+.simplified-note {
+  margin-bottom: 10px;
+}
+
+.simplified-note p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .candidates {
   margin: 0 0 10px;
   padding: 0;

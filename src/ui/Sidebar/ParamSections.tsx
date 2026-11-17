@@ -122,7 +122,7 @@ export function GridSection() {
   const bounds = pipeline.oriented?.value.bounds;
   const params = store.project.value.params;
   const grid = params.grid.nx * params.grid.ny > 1;
-  const pitch = bounds && grid ? exportPitch(params, bounds) : null;
+  const pitch = bounds && grid ? exportPitch(params, bounds, store.pipeline.modelErrorMm()) : null;
   const walls = pipeline.wallStatus();
   return (
     <Section id="grid" title="Grid" reset={SECTION_PARAMS.grid}>

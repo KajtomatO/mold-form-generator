@@ -8,6 +8,11 @@ import { OPEN_AGAIN, OPEN_INSTEAD, ProjectError } from './projectFile';
  */
 export const PROJECT_ENTRY = 'project.json';
 export const MODEL_ENTRY = 'model.stl';
+/**
+ * MM2: a simplified model's copy, which the mold was made from, beside model.stl, the maker's file itself. Only
+ * in the .moldproj of a simplified model, so every other one packs the same bytes as before.
+ */
+export const SIMPLIFIED_ENTRY = 'simplified.stl';
 export const PROJECT_EXTENSION = '.moldproj';
 
 /** A project.json is a few kB. Past this it is not one, whatever the ZIP says. */
@@ -31,8 +36,12 @@ const ZIP_TIME = new Date(2026, 0, 1);
  * Packs a project. The STL is deflated at level 1: on Benchy it packs to 41% in 268 ms against 40% in
  * 398 ms at the default 6, and on a 150 MB STL to 21% in 3.0 s against 7.8 s, measured in Node here.
  */
-export function packProject(json: string, stl: Uint8Array): Uint8Array {
-  return zipSync({ [PROJECT_ENTRY]: [new TextEncoder().encode(json), { mtime: ZIP_TIME }], [MODEL_ENTRY]: [stl, { mtime: ZIP_TIME, level: 1 }] });
+export function packProject(json: string, stl: Uint8Array, simplified: Uint8Array | null = null): Uint8Array {
+  return zipSync({
+    [PROJECT_ENTRY]: [new TextEncoder().encode(json), { mtime: ZIP_TIME }],
+    [MODEL_ENTRY]: [stl, { mtime: ZIP_TIME, level: 1 }],
+    ...(simplified ? { [SIMPLIFIED_ENTRY]: [simplified, { mtime: ZIP_TIME, level: 1 }] } : {}),
+  });
 }
 
 /** 'other' is a file that is none of them, which is refused before it can replace the model on screen. */
@@ -61,6 +70,24 @@ export function fileKind(name: string, bytes: Uint8Array): FileKind {
 }
 
 /**
+ * MM2: fileKind from a file's first bytes and its size alone, so main can tell an STL before reading it whole:
+ * the same rules, with the size standing in for the length of bytes it has not read.
+ */
+export function fileKindOfHead(name: string, head: Uint8Array, size: number): FileKind {
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.stl')) return 'stl';
+  if (lower.endsWith(PROJECT_EXTENSION) || lower.endsWith('.zip')) return 'zip';
+  if (lower.endsWith('.json')) return 'json';
+  if (ZIP_MAGIC.every((byte, k) => head[k] === byte)) return 'zip';
+  let k = head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf ? 3 : 0;
+  while (k < head.length && (head[k] === 0x20 || head[k] === 0x0a || head[k] === 0x0d || head[k] === 0x09)) k++;
+  if (head[k] === 0x7b) return 'json';
+  const binary = size >= 84 && head.length >= 84 && size === 84 + 50 * new DataView(head.buffer, head.byteOffset + 80, 4).getUint32(0, true);
+  const ascii = new TextDecoder().decode(head.subarray(k, k + 5)).toLowerCase() === 'solid';
+  return binary || ascii ? 'stl' : 'other';
+}
+
+/**
  * Whether a ZIP holds a model.stl, read from its directory alone, so nothing is inflated. Main asks this
  * before it copies the model on screen into an open job, which only settings without a model need.
  */
@@ -84,6 +111,8 @@ export interface Unpacked {
   json: string;
   /** The STL inside, or null for an export ZIP, which holds only the settings. */
   stl: Uint8Array | null;
+  /** MM2: a simplified model's copy, or null; only unpacked when asked for. */
+  simplified: Uint8Array | null;
 }
 
 /**
@@ -91,7 +120,7 @@ export interface Unpacked {
  * limit before inflating it, as fflate allocates what the directory declares. An entry that inflates
  * to more than it declared is cut at its declared size, so the declared size bounds the memory.
  */
-export function unpackProject(bytes: Uint8Array, name: string): Unpacked {
+export function unpackProject(bytes: Uint8Array, name: string, withSimplified = false): Unpacked {
   if (!ZIP_MAGIC.every((byte, k) => bytes[k] === byte)) throw new ProjectError(`${name} is not a project saved by this app, as it is no ZIP archive. ${OPEN_INSTEAD}`);
   let entries: Record<string, Uint8Array>;
   const names: string[] = [];
@@ -100,9 +129,9 @@ export function unpackProject(bytes: Uint8Array, name: string): Unpacked {
     entries = unzipSync(bytes, {
       filter: (entry) => {
         names.push(entry.name);
-        const wanted = entry.name === PROJECT_ENTRY || entry.name === MODEL_ENTRY;
+        const wanted = entry.name === PROJECT_ENTRY || entry.name === MODEL_ENTRY || (withSimplified && entry.name === SIMPLIFIED_ENTRY);
         if (!wanted) return false;
-        const says = entry.name === PROJECT_ENTRY ? 'the settings inside it say they unpack' : 'the model inside it says it unpacks';
+        const says = entry.name === PROJECT_ENTRY ? 'the settings inside it say they unpack' : entry.name === MODEL_ENTRY ? 'the model inside it says it unpacks' : 'the simplified model inside it says it unpacks';
         const limit = entry.name === PROJECT_ENTRY ? MAX_JSON_BYTES : MAX_STL_BYTES;
         if (entry.originalSize > limit) throw new ProjectError(`${name} is damaged or too large: ${says} to ${megabytes(entry.originalSize)}, past the ${megabytes(limit)} this app takes. ${OPEN_AGAIN}`, `${entry.name} declares ${entry.originalSize} bytes.`);
         if (entry.size > bytes.length || entry.originalSize > bytes.length * MAX_RATIO + 1024) {
@@ -119,7 +148,7 @@ export function unpackProject(bytes: Uint8Array, name: string): Unpacked {
   // fflate cuts an entry at its declared size and leaves a short one in a buffer of that size, so either
   // way an entry of another length than declared is damaged, and none is kept in a larger buffer.
   for (const [entry, size] of declared) {
-    if (entries[entry]?.length !== size) throw new ProjectError(`${name} is damaged: ${entry === PROJECT_ENTRY ? 'the settings inside it are' : 'the model inside it is'} not the size the archive says. ${OPEN_AGAIN}`, `${entry} unpacks to ${entries[entry]?.length ?? 0} bytes, where ${size} are declared.`);
+    if (entries[entry]?.length !== size) throw new ProjectError(`${name} is damaged: ${entry === PROJECT_ENTRY ? 'the settings inside it are' : entry === MODEL_ENTRY ? 'the model inside it is' : 'the simplified model inside it is'} not the size the archive says. ${OPEN_AGAIN}`, `${entry} unpacks to ${entries[entry]?.length ?? 0} bytes, where ${size} are declared.`);
   }
   const json = entries[PROJECT_ENTRY];
   if (!json) throw new ProjectError(notProject(name, names));
@@ -129,7 +158,7 @@ export function unpackProject(bytes: Uint8Array, name: string): Unpacked {
   } catch {
     throw new ProjectError(`${name} is damaged: its settings are not text. ${OPEN_AGAIN}`, 'project.json is not UTF-8.');
   }
-  return { json: text, stl: entries[MODEL_ENTRY] ?? null };
+  return { json: text, stl: entries[MODEL_ENTRY] ?? null, simplified: entries[SIMPLIFIED_ENTRY] ?? null };
 }
 
 /** Why a ZIP with no project.json is no project, by what it holds: a maker's ZIP of STLs, or a slicer's 3MF, says what to do instead. */

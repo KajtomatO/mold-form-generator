@@ -1,4 +1,8 @@
 import { useEffect, useRef } from 'preact/hooks';
+import { largeFigures, memoryQuote, SIMPLIFY_MAX_ERROR_MM, simplifiedName, simplifyQuote, TARGET_RANGE } from '../../app/largeModel';
+import { MAX_ROUNDS } from '../../core/mesh/simplify';
+import { errorText } from '../../app/simplified';
+import type { LargePrompt, Simplifying, Store } from '../../app/store';
 import { useStore } from '../context';
 import { FileButton, OPEN_LABEL, OPEN_TITLE } from '../files';
 import { formatCount, formatNormal, formatNumber, units } from '../format';
@@ -26,6 +30,8 @@ export function ModelSection() {
   const standing = oriented !== undefined && plane.upper !== false && Math.abs(offset - plane.upper) <= oriented.planeTol;
   const error = store.pipeline.status().error;
   const project = store.projectName.value, notice = store.fileNotice.value, busy = store.fileBusy.value, saving = store.saving.value, replacing = store.replacing.value;
+  // MM2: the large-model question, a copy being made, and the copy on screen (R42).
+  const large = store.large.value, simplifying = store.simplifying.value, origin = pipeline.modelOrigin();
   const saveName = store.projectFileName();
   const canSave = store.canSave();
   const unsaved = store.unsaved();
@@ -43,8 +49,8 @@ export function ModelSection() {
   // a warning or a question opens the sidebar, and each scrolls into sight, as nothing else on screen changes.
   const attention = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!busy && !notice && !replacing) return;
-    if (replacing || (notice && notice.severity !== 'info')) store.sidebarCollapsed.value = false;
+    if (!busy && !notice && !replacing && !large && !simplifying) return;
+    if (replacing || large || (notice && notice.severity !== 'info')) store.sidebarCollapsed.value = false;
     const frame = requestAnimationFrame(() => {
       const el = attention.current, box = el?.closest<HTMLElement>('[data-testid="sections"]');
       if (!el || !box || el.offsetHeight === 0) return;
@@ -54,7 +60,7 @@ export function ModelSection() {
       else if (at.bottom > view.bottom) box.scrollTop += at.bottom - view.bottom + 8;
     });
     return () => cancelAnimationFrame(frame);
-  }, [busy, notice, replacing]);
+  }, [busy, notice, replacing, large, simplifying]);
 
   return (
     <Section id="model" title="Model">
@@ -77,9 +83,23 @@ export function ModelSection() {
           </span>
         ) : null}
         <span class="name" data-testid="file-name">
-          {pipeline.modelName ? `${pipeline.modelName}${parsed ? `, ${formatCount(parsed.triangles)} triangles` : ''}` : 'Or drop an STL or a project on the view.'}
+          {pipeline.modelName ? `${pipeline.modelName}${parsed ? `, ${formatCount(parsed.triangles)} triangles${origin ? ' (simplified)' : ''}` : ''}` : 'Or drop an STL or a project on the view.'}
         </span>
       </p>
+      {store.canSimplify() && !large ? (
+        <div class="simplify-row">
+          <button
+            type="button"
+            class="btn small"
+            data-testid="simplify-loaded"
+            title={`Make the mold from a copy of ${pipeline.modelName} with fewer triangles, within ${SIMPLIFY_MAX_ERROR_MM} mm of its shape, which needs much less memory. Your settings, base face, moved openings and removed vents stay; the undo history is cleared. model_oriented.stl stays your own file.`}
+            onClick={() => store.simplifyLoaded()}
+          >
+            Simplify…
+          </button>
+        </div>
+      ) : null}
+      {origin && !simplifying ? <SimplifiedNote store={store} /> : null}
       <div ref={attention}>
         {busy ? (
           <p class="lead file-busy" data-testid="file-busy" role="status">
@@ -87,6 +107,8 @@ export function ModelSection() {
             {busy}
           </p>
         ) : null}
+        {simplifying ? <SimplifyBusy store={store} simplifying={simplifying} /> : null}
+        {large ? <LargeQuestion store={store} prompt={large} /> : null}
         {replacing ? (
           <div class="note warning file-replace" data-testid="replace-prompt" role="alert">
             <p>
@@ -205,5 +227,126 @@ export function ModelSection() {
         </>
       ) : null}
     </Section>
+  );
+}
+
+/** MM2: what a copy being made is doing, as its worker says: each round of the lock loop simplifies, then checks. */
+function stepWords(simplifying: Simplifying): string {
+  const round = `round ${simplifying.round} of at most ${MAX_ROUNDS}`;
+  switch (simplifying.step) {
+    case 'read':
+      return 'reading the file…';
+    case 'parse':
+      return 'reading the model…';
+    case 'simplify':
+      return `${round}, simplifying…`;
+    case 'measure':
+      return `${round}, checking the surface keeps within ${SIMPLIFY_MAX_ERROR_MM} mm…`;
+    case 'check':
+      return 'checking the copy is still a closed solid…';
+    default:
+      return 'writing the copy…';
+  }
+}
+
+/** MM2: the busy line while a copy is made, with Cancel, which leaves the page as it was. */
+function SimplifyBusy({ store, simplifying }: { store: Store; simplifying: Simplifying }) {
+  return (
+    <p class="lead file-busy" data-testid="simplify-busy" role="status">
+      <span class="spinner" aria-hidden="true" />
+      <span>
+        Simplifying {simplifying.name} to {formatCount(simplifying.target)} triangles, which can take a minute or more: {stepWords(simplifying)}
+      </span>
+      <button type="button" class="btn small" data-testid="simplify-cancel" onClick={() => store.cancelSimplify()}>
+        Cancel
+      </button>
+    </p>
+  );
+}
+
+/**
+ * MM2: the question before a large model loads, or for the model on screen (Simplify…): its size, what a model
+ * this large took in our tests, and the copy that keeps its shape within 0.05 mm (R42). Never a dialog.
+ */
+function LargeQuestion({ store, prompt }: { store: Store; prompt: LargePrompt }) {
+  const cell = store.pipeline.params.quality.cellFinal;
+  const top = Math.max(1, Math.min(TARGET_RANGE.max, prompt.triangles - 1));
+  const loaded = prompt.kind === 'loaded';
+  const inProject = prompt.kind === 'moldproj' ? `, the model in ${prompt.name},` : '';
+  const kept = prompt.kind === 'stl' ? '' : ` Your settings, base face, moved openings and removed vents stay${loaded ? '; the undo history is cleared' : ''}.`;
+  return (
+    <div class="note warning file-replace large-prompt" data-testid="large-prompt" role="alert">
+      {prompt.refused ? (
+        <p class="large-refused" data-testid="large-refused">
+          {prompt.refused}
+        </p>
+      ) : null}
+      <p>
+        {prompt.model}
+        {inProject} has {largeFigures(prompt, prompt.size)}. A model this large took {memoryQuote(prompt.triangles)} of memory in the browser in our tests, and can make the computer slow or close the page.
+      </p>
+      {prompt.refused ? null : (
+        <p>
+          Simplified to{' '}
+          <input
+            type="number"
+            class="num target"
+            data-testid="simplify-target"
+            aria-label="Triangles to simplify to"
+            min={top < TARGET_RANGE.min ? 1 : TARGET_RANGE.min}
+            max={top}
+            step={TARGET_RANGE.step}
+            value={prompt.target}
+            onChange={(event) => store.setLargeTarget(Number((event.currentTarget as HTMLInputElement).value))}
+          />{' '}
+          triangles, or more where its shape needs them, its surface stays within {SIMPLIFY_MAX_ERROR_MM} mm of your file's{cell >= 0.1 ? `, finer than the ${cell} mm grid the mold is built on` : ''}. {simplifyQuote()} The mold is then made from the simplified copy; model_oriented.stl, the model you print and glue in, is still your own file.{kept}
+        </p>
+      )}
+      <div class="file-replace-buttons">
+        {prompt.refused ? null : (
+          <button type="button" class="btn small primary" data-testid="large-simplify" onClick={() => void store.answerLarge('simplify')}>
+            Simplify
+          </button>
+        )}
+        {loaded ? null : (
+          <button type="button" class="btn small" data-testid="large-load" onClick={() => void store.answerLarge('load')}>
+            Load anyway
+          </button>
+        )}
+        <button type="button" class="btn small" data-testid="large-cancel" onClick={() => void store.answerLarge('cancel')}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** MM2: the copy on screen: how far from the file, and the way back to the file, or the copy saved as an STL. */
+function SimplifiedNote({ store }: { store: Store }) {
+  const origin = store.pipeline.modelOrigin()!;
+  const { from, record } = origin;
+  const merged = store.project.value.params.base.mode === 'merged';
+  const within = record.errorMm > record.maxErrorMm ? `within ${errorText(record.errorMm)} of ${from.name}, as the copy could not keep to ${record.maxErrorMm} mm everywhere` : `within ${errorText(record.errorMm)} of ${from.name}`;
+  const short = record.stoppedBy === 'error' && record.triangles > record.target ? ` Not ${formatCount(record.target)}: simplifying further would have moved the surface more than ${record.maxErrorMm} mm.` : '';
+  return (
+    <div class="note simplified-note" data-testid="simplified-note">
+      <p>
+        Made from a copy simplified from {formatCount(from.triangles)} to {formatCount(record.triangles)} triangles, {within}.{short} {merged ? 'In merged mode the base carries this copy.' : 'model_oriented.stl is your own file.'}
+      </p>
+      <div class="file-replace-buttons">
+        <button
+          type="button"
+          class="btn small"
+          data-testid="use-original"
+          title={`Open ${from.name} again as it is, with all ${formatCount(from.triangles)} triangles, keeping the settings, base face, moved openings and removed vents; the undo history is cleared.`}
+          onClick={() => void store.useOriginal()}
+        >
+          Use the original
+        </button>
+        <button type="button" class="btn small" data-testid="save-simplified" title={`Save the simplified copy the mold is made from as ${simplifiedName(from.name)}.`} onClick={() => store.saveSimplified()}>
+          Save simplified STL
+        </button>
+      </div>
+    </div>
   );
 }

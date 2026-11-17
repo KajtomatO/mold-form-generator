@@ -1,4 +1,6 @@
+import type { LargeLimits } from './largeModel';
 import type { ProjectFile } from './project';
+import type { OriginalSource } from './simplified';
 import { ProjectError } from './projectFile';
 import type { Opened, ProjectJob, ProjectReply } from '../workers/projectJob';
 import type { WorkerLike } from '../workers/protocol';
@@ -31,10 +33,14 @@ export class ProjectFiles {
     });
   }
 
-  /** The .moldproj's bytes and the STL's hash. The STL is copied into the job, so the pipeline keeps its own. */
-  async pack(file: ProjectFile, stl: Uint8Array): Promise<{ zip: Uint8Array; sha256: string }> {
+  /**
+   * The .moldproj's bytes and the STL's hash. The STL is copied into the job, so the pipeline keeps its own. MM2:
+   * a simplified model's file is read by the worker from `original`, and `stl`, the copy, goes as simplified.stl.
+   */
+  async pack(file: ProjectFile, stl: Uint8Array, original: OriginalSource | null = null): Promise<{ zip: Uint8Array; sha256: string }> {
     const copy = stl.slice().buffer;
-    const reply = await this.run({ t: 'pack', id: ++this.jobs, file, stl: copy }, [copy]);
+    const job = original ? { t: 'pack' as const, id: ++this.jobs, file, stl: null, original, simplified: copy } : { t: 'pack' as const, id: ++this.jobs, file, stl: copy };
+    const reply = await this.run(job, [copy]);
     if (reply.t === 'project-error') throw new ProjectError(reply.message, reply.details);
     if (reply.t !== 'packed') throw new Error(`The project worker answered a save with ${reply.t}.`);
     return { zip: reply.zip, sha256: reply.sha256 };
@@ -52,11 +58,14 @@ export class ProjectFiles {
     return { bytes: new Uint8Array(reply.bytes), sha256: reply.sha256, triangles: reply.triangles, warnings: reply.warnings };
   }
 
-  /** A chosen or dropped project file, which is handed over whole; `loaded` is copied, as the pipeline keeps it. */
-  async open(bytes: Uint8Array, name: string, kind: 'zip' | 'json', loaded: Uint8Array | null): Promise<Opened> {
+  /**
+   * A chosen or dropped project file, which is handed over whole; `loaded` is copied, as the pipeline keeps it.
+   * MM2: with `large`, a model past it is counted, not handed back; with `original`, the file's own model.stl.
+   */
+  async open(bytes: Uint8Array, name: string, kind: 'zip' | 'json', loaded: Uint8Array | null, options: { large?: LargeLimits | null; original?: boolean } = {}): Promise<Opened> {
     const own = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? (bytes.buffer as ArrayBuffer) : bytes.slice().buffer;
     const model = loaded ? loaded.slice().buffer : null;
-    const reply = await this.run({ t: 'open', id: ++this.jobs, bytes: own, name, kind, loaded: model }, model ? [own, model] : [own]);
+    const reply = await this.run({ t: 'open', id: ++this.jobs, bytes: own, name, kind, loaded: model, ...(options.large ? { large: options.large } : {}), ...(options.original ? { original: true } : {}) }, model ? [own, model] : [own]);
     if (reply.t === 'project-error') throw new ProjectError(reply.message, reply.details);
     if (reply.t !== 'opened') throw new Error(`The project worker answered an open with ${reply.t}.`);
     return reply.opened;

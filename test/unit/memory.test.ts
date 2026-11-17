@@ -7,7 +7,13 @@ import { Pipeline } from '../../src/app/pipeline';
 import { stageKeys } from '../../src/app/stages';
 import { MEMORY_THROTTLE_MS, Store, type MeterPage } from '../../src/app/store';
 import { defaultParams } from '../../src/core/params/defaults';
-import { formatMemory, memoryText, memoryTitle, MEMORY_ADVICE, MEMORY_NOT_COUNTED } from '../../src/ui/format';
+import { formatMemory, memoryText, memoryTitle, MEMORY_ADVICE, MEMORY_ADVICE_SIMPLIFY, MEMORY_NOT_COUNTED } from '../../src/ui/format';
+import { ModelSimplifier } from '../../src/app/modelSimplifier';
+import { runPrepareJob } from '../../src/workers/prepareJob';
+import { MeshoptSimplifier } from 'meshoptimizer';
+import { loadManifold } from '../fixtures/loadExamples';
+import { weld } from '../../src/core/mesh/weld';
+import { parseStl } from '../../src/core/stl/parse';
 import { fieldHost } from '../../src/workers/fieldHost';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT } from '../../src/workers/fieldStages';
 import type { FromWorker, ToWorker, WorkerLike } from '../../src/workers/protocol';
@@ -562,5 +568,78 @@ describe('MM1: what the pipeline and its workers say they hold', () => {
     expect(share).toBe([...seen].reduce((sum, buffer) => sum + buffer.byteLength, 0));
     expect(share).toBeGreaterThanOrEqual([...buffers].reduce((sum, buffer) => sum + buffer.byteLength, 0));
     expect(exampleBytes('jersey').byteLength).toBe(p.stlBytes!.byteLength);
+  });
+});
+
+describe('MM2: what simplifying a model holds', () => {
+  it('the prepare worker says what it holds as it says ready and as each step begins, at least the welded file while it simplifies and the lock loop\'s arrays while it measures, and its figure goes with it', { timeout: 120_000 }, async () => {
+    const ledger = new MemoryLedger();
+    const said: { t: string; step?: string; memory?: WorkerMemory }[] = [];
+    const simplifier = new ModelSimplifier(() => {
+      const worker = inProcessSolid();
+      const real = worker.onmessage;
+      void real;
+      return new Proxy(worker, {
+        set(target, key, value) {
+          if (key === 'onmessage' && value) {
+            target.onmessage = (event: { data: FromWorker }) => {
+              said.push({ t: event.data.t, step: 'step' in event.data ? event.data.step : undefined, memory: 'memory' in event.data ? event.data.memory : undefined });
+              value(event);
+            };
+            return true;
+          }
+          return Reflect.set(target, key, value);
+        },
+      });
+    }, ledger);
+    const bytes = exampleBytes('benchy');
+    const welded = weld(parseStl(bytes).positions);
+    const seen: (WorkerMemory | undefined)[] = [];
+    ledger.subscribe((source) => source === 'simplify' && seen.push(ledger.parts().simplify));
+    const prepared = await simplifier.run({ kind: 'stl', blob: new Blob([bytes as BlobPart]) }, EXAMPLE_FILES.benchy, { target: 50_000, maxErrorMm: 0.05 });
+    expect(prepared.record.triangles).toBe(49_998);
+    expect(said.map((m) => m.step ?? m.t)).toEqual(['ready', 'read', 'parse', 'simplify', 'measure', 'check', 'write', 'prepared']);
+    for (const m of said.filter((m) => m.t !== 'prepared')) expect(m.memory?.wasm, m.step ?? m.t).toBeGreaterThan(0);
+    const simplifying = said.find((m) => m.step === 'simplify')!.memory!;
+    expect(simplifying.arrays).toBeGreaterThanOrEqual(welded.positions.byteLength + welded.indices.byteLength);
+    // MM2's review: while the round measures, the lock loop's own arrays too: the locks, the bound's distance at
+    // each vertex of the file, the copy and its buckets, which a figure of the welded file alone would leave out.
+    const vertices = welded.positions.length / 3;
+    const measuring = said.find((m) => m.step === 'measure')!.memory!;
+    expect(measuring.arrays).toBeGreaterThanOrEqual(welded.positions.byteLength + welded.indices.byteLength + vertices * 9 + prepared.stl.byteLength / 50 * 36);
+    // While it parses, the file's bytes, which it lets go of once parsed: the welded file alone is less.
+    expect(said.find((m) => m.step === 'parse')!.memory!.arrays).toBeGreaterThanOrEqual(bytes.byteLength);
+    expect(bytes.byteLength).toBeGreaterThan(welded.positions.byteLength + welded.indices.byteLength);
+    expect(seen.at(-1)).toBeUndefined();
+    expect(ledger.parts().simplify).toBeUndefined();
+  });
+
+  it('an export\'s worker counts the file it reads for model_oriented.stl from that step on, and not before', { timeout: 120_000 }, async () => {
+    const api = await loadManifold();
+    await MeshoptSimplifier.ready;
+    const bytes = exampleBytes('jersey');
+    const prepared = runPrepareJob(api, MeshoptSimplifier, { source: { kind: 'stl', blob: new Blob([bytes as BlobPart]) }, name: EXAMPLE_FILES.jersey, simplify: { target: 900, maxErrorMm: 0.05 } }, () => bytes, () => {}, () => performance.now());
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    p.load(prepared.stl, EXAMPLE_FILES.jersey, { kind: 'simplified', original: { kind: 'stl', blob: new Blob([bytes as BlobPart]) }, from: prepared.from, record: prepared.record });
+    await p.idle();
+    const during: [string, number][] = [];
+    await p.exportParts((progress) => during.push([progress.step, p.memory.parts().export?.arrays ?? 0]));
+    const at = (step: string): number => during.find(([s]) => s === step)![1];
+    // The figure at the file's own step is what came before, and from the files on it holds the file's STL.
+    const stl = 84 + 50 * prepared.from.triangles;
+    expect(at('files') - at('original')).toBeGreaterThanOrEqual(stl);
+    // The file's own bytes, its soup and its welded mesh are let go as each step replaces them: only the STL stays.
+    expect(at('files') - at('original')).toBeLessThan(stl + bytes.byteLength / 2);
+    expect(at('original') - at('clearance')).toBeLessThan(stl);
+  });
+
+  it('past the warning figure the tooltip points at Simplify… only where the Model section offers it', () => {
+    const reading = { total: 1e9, parts: { page: { wasm: 0, arrays: 1e8 }, solid: { wasm: 9e8, arrays: 0 } } };
+    expect(memoryTitle(reading).split('\n')[1]).toBe(MEMORY_ADVICE);
+    expect(memoryTitle(reading, MEMORY_WARN_BYTES, true).split('\n')[1]).toBe(MEMORY_ADVICE_SIMPLIFY);
+    expect(MEMORY_ADVICE_SIMPLIFY).toBe('That is a lot for one web page: close other browser tabs to free memory, or use Simplify… in the Model section to make the model lighter.');
+    // Under it there is no advice at all, Simplify… or not.
+    expect(memoryTitle({ ...reading, total: 1e8 }, MEMORY_WARN_BYTES, true)).not.toContain('Simplify');
   });
 });

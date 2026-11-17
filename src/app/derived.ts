@@ -50,8 +50,8 @@ export function previewSilicone(pipeline: Pipeline): { ml: number; grams: number
 }
 
 /** G6: the pitch shown is always the export plan's, as the parts are placed on it. */
-export function exportPitch(params: Params, bounds: Bounds): [number, number] {
-  const plan = exportPlan(bounds, fieldSettings(params, bounds));
+export function exportPitch(params: Params, bounds: Bounds, modelErrorMm = 0): [number, number] {
+  const plan = exportPlan(bounds, fieldSettings(params, bounds, undefined, modelErrorMm));
   return [plan.pitchXmm, plan.pitchYmm];
 }
 
@@ -71,7 +71,7 @@ export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
     case 'base.planeTol':
       return oriented ? oriented.planeTol : null;
     case 'grid.spacing':
-      return oriented ? exportPlan(oriented.bounds, fieldSettings(params, oriented.bounds)).autoSpacing : null;
+      return oriented ? exportPlan(oriented.bounds, fieldSettings(params, oriented.bounds, undefined, pipeline.modelErrorMm())).autoSpacing : null;
     case 'grid.edge':
       return pipeline.field?.value.rim.edge.minimum ?? null;
     case 'quality.cellPreview':

@@ -2,11 +2,12 @@ import type { Manifold } from 'manifold-3d';
 import type { MeshoptSimplifier } from 'meshoptimizer/simplifier';
 import type { Diagnostic } from '../report/diagnostics';
 import type { Arena } from '../solid/arena';
+import { BOUND_SLACK_MM, DEVIATION_CELL_MM, SurfaceIndex, type DeviationBound } from './deviation';
 import { reversed, type ImportedSolid, type SolidReport } from './shells';
 import type { WeldedMesh } from './weld';
 
 /** meshoptimizer is WASM that needs an async start, so it is passed in, like Manifold. */
-export type MeshSimplifier = Pick<typeof MeshoptSimplifier, 'simplify' | 'simplifySloppy' | 'getScale'>;
+export type MeshSimplifier = Pick<typeof MeshoptSimplifier, 'simplify' | 'simplifySloppy' | 'getScale' | 'simplifyWithAttributes'>;
 
 /** Above this the Manifold path uses a simplified copy, and the base warns with the error. */
 export const MANIFOLD_TRIANGLE_LIMIT = 2_000_000;
@@ -41,7 +42,7 @@ export interface SimplifiedMesh {
   diagnostics: Diagnostic[];
 }
 
-function compacted(positions: Float32Array, indices: Uint32Array): WeldedMesh {
+export function compacted(positions: Float32Array, indices: Uint32Array): WeldedMesh {
   const remap = new Int32Array(positions.length / 3).fill(-1);
   const out = new Float32Array(positions.length);
   const outIndices = new Uint32Array(indices.length);
@@ -137,4 +138,95 @@ export function importFromCopy(arena: Arena, welded: WeldedMesh, known: SolidRep
   }
   if (!(solid.volume() > 0)) return null;
   return { solid, mesh, openLoops: [], report: known, joined: null, simplified: copy.diagnostics, errorMm: copy.errorMm };
+}
+
+/**
+ * MM2: at most this many rounds of the lock loop. The 3 million triangle test block, whose ripple cannot keep to
+ * 0.05 mm under about three quarters of a million triangles, needs 10 at 300,000.
+ */
+export const MAX_ROUNDS = 12;
+
+/** MM2: a model's simplified copy, and how far its surface lies from the model's, proved. */
+export interface ModelSimplified {
+  /** Compacted, its vertices a subset of the model's, unmoved. */
+  mesh: WeldedMesh;
+  /**
+   * How far the model's surface lies from the copy's at most, in mm: a bound over every point of it, proved
+   * (SurfaceIndex.bound), within BOUND_SLACK_MM of the largest distance found. At most the bound asked for, unless
+   * the loop could not reach it, and then the figure proved.
+   */
+  errorMm: number;
+  /** 'error' when the copy kept more triangles than asked for, to keep within the bound. */
+  stoppedBy: 'target' | 'error';
+  rounds: number;
+  /** meshoptimizer's own error figure for the last round, in mm, which is not a bound (for the record and tests). */
+  reportedMm: number;
+}
+
+/**
+ * MM2: the copy of a large model the mold is made from (R42, D24), held to `maxErrorMm` by proof, as
+ * meshoptimizer's figure is not a bound: on the examples the surface moved 3 to 9 times what it reported. Each
+ * round simplifies the model from scratch towards the count, with meshoptimizer's own limit at the bound, then
+ * proves of each of the model's triangles that it lies within the bound of the copy everywhere
+ * (SurfaceIndex.bound); the corners of every triangle it cannot are locked, which the next round keeps. The next
+ * round's count is raised by a few triangles for each vertex newly locked, about what keeping it costs, so the
+ * round need not take as much off elsewhere: two each, doubled after any round that did not halve the triangles
+ * past the bound, as on the 3 million triangle test block the rounds then go on breaking it elsewhere. It ends when
+ * every triangle is proved within the bound, or a round locks nothing new, or after MAX_ROUNDS; where the bound is
+ * not kept, the figure proved, with a reach that grows until it holds. LockBorder keeps an open mesh's holes where
+ * they are; Prune is not used, as it can delete a small body, which is a pour of its own. The same mesh, target
+ * and bound give the same copy every time. `hold` is given the arrays each round holds, for the memory meter.
+ */
+export function simplifyModel(mesh: WeldedMesh, simplifier: MeshSimplifier, target: number, maxErrorMm: number, onRound: (round: number, step: 'simplify' | 'check') => void = () => {}, hold: (arrays: unknown[]) => void = () => {}): ModelSimplified {
+  const P = mesh.positions, I = mesh.indices, V = P.length / 3, T = I.length / 3;
+  const asked = Math.max(1, Math.min(target, T));
+  let wanted = asked;
+  const lock = new Uint8Array(V);
+  // The bound's scratch, one distance per vertex of the model, made once.
+  const at = new Float64Array(V);
+  let result: WeldedMesh = mesh, reportedMm = 0, rounds = 0, perLock = 2, lastPast = Infinity;
+  let proved: DeviationBound | null = null;
+  while (rounds < MAX_ROUNDS) {
+    rounds++;
+    hold([lock, at, result]);
+    onRound(rounds, 'simplify');
+    const [indices, error] = simplifier.simplifyWithAttributes(I, P, 3, new Float32Array(0), 0, [], lock, wanted * 3, maxErrorMm, ['ErrorAbsolute', 'LockBorder']);
+    reportedMm = error;
+    result = compacted(P, indices);
+    const index = new SurfaceIndex(result, maxErrorMm);
+    hold([lock, at, result, index.held()]);
+    onRound(rounds, 'check');
+    proved = index.bound(mesh, maxErrorMm, BOUND_SLACK_MM, at);
+    hold([lock, at, result, index.held(), proved.past]);
+    const past = proved.past.length;
+    if (past === 0) break;
+    let locked = 0;
+    for (const t of proved.past) {
+      for (let c = 0; c < 3; c++) {
+        const v = I[t * 3 + c];
+        if (lock[v]) continue;
+        lock[v] = 1;
+        locked++;
+      }
+    }
+    if (locked === 0) break;
+    if (past > lastPast / 2) perLock *= 2;
+    lastPast = past;
+    wanted = Math.min(T, Math.max(wanted, result.indices.length / 3 + perLock * locked));
+  }
+  let errorMm = proved!.bound;
+  if (proved!.past.length > 0) {
+    // The bound is not kept: the figure proved, with a reach that grows until no point is beyond it.
+    for (let reach = 2 * maxErrorMm; ; reach *= 2) {
+      const index = new SurfaceIndex(result, reach, Math.max(DEVIATION_CELL_MM, reach));
+      hold([lock, at, result, index.held()]);
+      const measured = index.bound(mesh, null, BOUND_SLACK_MM, at);
+      if (!measured.beyond) {
+        errorMm = measured.bound;
+        break;
+      }
+    }
+  }
+  const triangles = result.indices.length / 3;
+  return { mesh: result, errorMm, stoppedBy: triangles > asked ? 'error' : 'target', rounds, reportedMm };
 }

@@ -1,7 +1,10 @@
 import { sha256 } from '../app/hash';
 import { projectJson, type ProjectFile } from '../app/project';
+import { isLarge, type LargeLimits } from '../app/largeModel';
 import { MAX_JSON_BYTES, PROJECT_EXTENSION, packProject, unpackProject } from '../app/projectArchive';
-import { MIGRATIONS, OPEN_AGAIN, OPEN_INSTEAD, ProjectError, readProjectJson, type ProjectNote } from '../app/projectFile';
+import { MIGRATIONS, OPEN_AGAIN, OPEN_INSTEAD, ProjectError, readProjectJson, simplifiedDropped, type ProjectNote } from '../app/projectFile';
+import type { OriginalSource, SimplifiedEntry } from '../app/simplified';
+import { estimateTriangles } from '../core/stl/estimate';
 import { parseStl, StlError } from '../core/stl/parse';
 
 /**
@@ -10,12 +13,18 @@ import { parseStl, StlError } from '../core/stl/parse';
  * the plan's 3 million triangles are 150 MB, which SHA-256 alone takes 1.1 s for on this server.
  */
 
-/** Save: project.json with the STL's hash, which is worked out here when main does not know it yet. */
+/**
+ * Save: project.json with the STL's hash, which is worked out here when main does not know it yet. MM2: for a
+ * simplified model, `stl` is null: the worker reads the maker's file from `original` itself, checks it against
+ * project.json's hash and packs it as model.stl, with the copy main holds as simplified.stl.
+ */
 export interface PackJob {
   t: 'pack';
   id: number;
   file: ProjectFile;
-  stl: ArrayBuffer;
+  stl: ArrayBuffer | null;
+  original?: OriginalSource;
+  simplified?: ArrayBuffer;
 }
 
 /**
@@ -29,6 +38,13 @@ export interface OpenJob {
   name: string;
   kind: 'zip' | 'json';
   loaded: ArrayBuffer | null;
+  /**
+   * MM2: past these limits a .moldproj's model is not handed over but counted, so main can ask first (R42). Null
+   * opens it whatever its size. A simplified project's copy is opened without asking.
+   */
+  large?: LargeLimits | null;
+  /** MM2: the maker's file itself, model.stl, whatever copy the project holds: Use the original. */
+  original?: boolean;
 }
 
 /**
@@ -57,6 +73,13 @@ export interface Opened {
   stlSha256: string | null;
   /** SHA-256 of the loaded model, when it was sent. */
   loadedSha256: string | null;
+  /**
+   * MM2: `stl` is the project's simplified copy, checked against its record, which the mold is made from; the
+   * file itself, model.stl, was checked by its hash, and is `bytes` long. `stlSha256` is still model.stl's.
+   */
+  simplified?: { entry: SimplifiedEntry; bytes: number } | null;
+  /** MM2: model.stl is past the limits asked about, so `stl` is null and main asks first: its figures. */
+  large?: { triangles: number; exact: boolean; format: 'binary' | 'ascii'; bytes: number } | null;
 }
 
 export type ProjectReply =
@@ -83,9 +106,9 @@ export const MODEL_STAYS = 'The model on screen stays as it was.';
 
 function openFile(job: OpenJob): Opened {
   const bytes = new Uint8Array(job.bytes);
-  let json: string, stl: Uint8Array | null = null;
+  let json: string, stl: Uint8Array | null = null, copy: Uint8Array | null = null;
   if (job.kind === 'zip') {
-    ({ json, stl } = unpackProject(bytes, job.name));
+    ({ json, stl, simplified: copy } = unpackProject(bytes, job.name, !job.original));
     // An export ZIP holds settings alone; a .moldproj must hold its model too.
     if (!stl && job.name.toLowerCase().endsWith(PROJECT_EXTENSION)) throw new ProjectError(`${job.name} is damaged: the model saved inside it is missing. ${OPEN_AGAIN}`, 'It has no model.stl.');
     // A short view would hand over, and keep, the whole buffer it is in.
@@ -101,19 +124,44 @@ function openFile(job: OpenJob): Opened {
   const read = readProjectJson(json, MIGRATIONS, job.name);
   const notes = [...read.notes];
   let stlSha256: string | null = null;
+  let simplified: Opened['simplified'] = null;
+  let large: Opened['large'] = null;
+  const loadedSha256 = job.loaded ? sha256(new Uint8Array(job.loaded)) : null;
   if (stl) {
     stlSha256 = sha256(stl);
     if (read.file.modelSha256 === null) notes.push({ severity: 'info', message: `${job.name} does not record its model's contents, so it could not be checked that the model inside is the one its settings were made for.` });
     else if (read.file.modelSha256 !== stlSha256) throw new ProjectError(`${job.name} is damaged or was changed: the model inside it is not the one its settings were saved for. ${OPEN_AGAIN}`, `The SHA-256 of model.stl is ${stlSha256}, where project.json records ${read.file.modelSha256}.`);
+    // MM2: a simplified project opens its copy, checked by its own hash; the file's hash proves it is the one that
+    // was simplified, so it is not read further. A copy that cannot be used opens the file itself, with a warning.
+    const entry = read.file.simplified;
+    if (entry && !job.original) {
+      if (copy && read.file.modelSha256 !== null && sha256(copy) === entry.sha256) {
+        simplified = { entry, bytes: stl.length };
+        stl = copy;
+      } else {
+        notes.push({ severity: 'warning', message: simplifiedDropped(read.file.model) });
+        delete read.file.simplified;
+      }
+    } else if (entry) {
+      delete read.file.simplified;
+    }
+    // MM2: a model past the limits is counted, not handed over, so main asks before anything holds it.
+    if (!simplified && job.large) {
+      const estimate = estimateTriangles(stl, stl.length);
+      if (isLarge(estimate.triangles, stl.length, job.large)) {
+        large = { triangles: estimate.triangles, exact: estimate.exact, format: estimate.format, bytes: stl.length };
+        return { file: read.file, from: read.from, notes, stl: null, stlSha256, loadedSha256, simplified: null, large };
+      }
+    }
     // Read here first, so an STL that cannot be read never replaces the model on screen.
     try {
       parseStl(stl);
     } catch (error) {
-      if (error instanceof StlError) throw new ProjectError(`${job.name} is damaged: the model inside it cannot be read. ${OPEN_AGAIN}`, `model.stl: ${error.message}`);
+      if (error instanceof StlError) throw new ProjectError(`${job.name} is damaged: the ${simplified ? 'simplified model' : 'model'} inside it cannot be read. ${OPEN_AGAIN}`, `${simplified ? 'simplified.stl' : 'model.stl'}: ${error.message}`);
       throw error;
     }
   }
-  return { file: read.file, from: read.from, notes, stl, stlSha256, loadedSha256: job.loaded ? sha256(new Uint8Array(job.loaded)) : null };
+  return { file: read.file, from: read.from, notes, stl, stlSha256, loadedSha256, ...(simplified ? { simplified } : {}) };
 }
 
 /** Below this an STL is read on main, which takes a few ms where a worker of its own would take tens. */
@@ -133,13 +181,38 @@ export function readStl(bytes: Uint8Array, name: string, loaded: boolean): { tri
   }
 }
 
+const noReader = (): Uint8Array => {
+  throw new Error('This worker cannot read files.');
+};
+
+/**
+ * MM2: the maker's own file for a simplified model's .moldproj, read from where it was opened and checked against
+ * the hash project.json records: a file changed since stops the save with the reason.
+ */
+function originalFor(job: PackJob, readBlob: (blob: Blob) => Uint8Array): Uint8Array {
+  const { original, file } = job;
+  let bytes: Uint8Array;
+  try {
+    bytes = readBlob(original!.blob);
+    if (original!.kind === 'moldproj') bytes = unpackProject(bytes, file.model).stl ?? new Uint8Array();
+  } catch (error) {
+    throw new ProjectError(`${file.model} could not be read again for the project, so nothing was saved: it may have been moved, renamed or changed since you opened it. Open it again, then save.`, error instanceof Error ? error.message : String(error));
+  }
+  const hash = sha256(bytes);
+  if (hash !== file.modelSha256) throw new ProjectError(`${file.model} has changed since you opened it, so the project was not saved: it would hold another model than the one the mold was made from. Open it again, then save.`, `The SHA-256 of ${file.model} is ${hash}, where the model on screen was made from ${file.modelSha256}.`);
+  return bytes;
+}
+
+/** A save that failed for no reason of the maker's, which main words itself. */
+export const PACK_FAILED = 'The project could not be saved.';
+
 /** One job to its reply, with what the reply can hand over without a copy. A failure is always a reply, never a throw. */
-export function runProjectJob(job: ProjectJob): { reply: ProjectReply; transfer: ArrayBuffer[] } {
+export function runProjectJob(job: ProjectJob, readBlob: (blob: Blob) => Uint8Array = noReader): { reply: ProjectReply; transfer: ArrayBuffer[] } {
   try {
     if (job.t === 'pack') {
-      const stl = new Uint8Array(job.stl);
+      const stl = job.original ? originalFor(job, readBlob) : new Uint8Array(job.stl!);
       const hash = job.file.modelSha256 ?? sha256(stl);
-      const zip = packProject(projectJson({ ...job.file, modelSha256: hash }), stl);
+      const zip = packProject(projectJson({ ...job.file, modelSha256: hash }), stl, job.simplified ? new Uint8Array(job.simplified) : null);
       return { reply: { t: 'packed', id: job.id, zip, sha256: hash }, transfer: [zip.buffer as ArrayBuffer] };
     }
     if (job.t === 'check') {
@@ -150,7 +223,7 @@ export function runProjectJob(job: ProjectJob): { reply: ProjectReply; transfer:
     return { reply: { t: 'opened', id: job.id, opened }, transfer: opened.stl ? [opened.stl.buffer as ArrayBuffer] : [] };
   } catch (error) {
     if (error instanceof ProjectError) return { reply: { t: 'project-error', id: job.id, message: error.message, details: error.details }, transfer: [] };
-    const message = job.t === 'pack' ? 'The project could not be saved.' : `${job.name} could not be opened. Try again.`;
+    const message = job.t === 'pack' ? PACK_FAILED : `${job.name} could not be opened. Try again.`;
     return { reply: { t: 'project-error', id: job.id, message, details: error instanceof Error ? error.message : String(error) }, transfer: [] };
   }
 }

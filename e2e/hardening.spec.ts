@@ -209,6 +209,15 @@ test.describe('hardening on index.html', () => {
 
 /** The plan's 3 GB, as 3e9 bytes, in the MiB /proc's figures are summed in: 2,861 MiB. 3 GiB would be 3,072. */
 const PLAN_LIMIT_MIB = 3e9 / 2 ** 20;
+/**
+ * MM2's review: bars for the 3 million triangle block simplified on opening, from the runs of docs/PLAN.md, Measured
+ * at MM2, with room for the browsers' own variation: the copy step (1,467 MiB in Firefox, 1,546 in Chromium), the
+ * flow after it (2,504 and 2,410, in the export), and the least the meter's Simplify part must read through the
+ * rounds (115 MiB in both), which the welded file alone (about 68 with the heap) does not reach.
+ */
+const COPY_STEP_LIMIT_MIB = 1_900;
+const SIMPLIFIED_FLOW_LIMIT_MIB = 2_800;
+const SIMPLIFY_PART_MIN_MIB = 95;
 
 /** The memory meter's reading at each change, by the page's clock, which is the system's (MM1): its total and the export's share. */
 type MeterLog = [number, number, number][];
@@ -277,6 +286,9 @@ test.describe('3 million triangles', () => {
       memory.phase('load');
       t0 = Date.now();
       await choose(page, path);
+      // MM2: past the warning point the app asks first, from the file's first bytes; Load anyway reads it as before.
+      await expect(page.getByTestId('large-prompt')).toContainText('has 3,011,040 triangles (150.6 MB). A model this large took about 2.9 GB of memory in the browser in our tests');
+      await page.getByTestId('large-load').click();
       await expect(page.getByTestId('file-name')).toHaveText(`cfg-heavy-${info.project.name}-${process.pid}.stl, 3,011,040 triangles`, { timeout: 600_000 });
       lap('read');
       memory.phase('preview');
@@ -365,6 +377,9 @@ test.describe('3 million triangles', () => {
       console.log(`MM1 meter in ${info.project.name}: empty app PSS ${empty.pssMb.toFixed(0)} MiB (${JSON.stringify(empty.each)}); preview ${(preview.reading.total / 1e9).toFixed(2)} GB, ${preview.tickMs.toFixed(2)} ms a reading; meter peak ${(meterPeak.meter / 1e9).toFixed(2)} GB in ${meterPeak.phase} against PSS ${meterPeak.pssMb.toFixed(0)} MiB; at the export's own PSS peak ${exportPeak.pssMb.toFixed(0)} MiB, ${((exportPeak.at - from) / 1000).toFixed(1)} s after its worker's first figure, the meter read ${(exportPeak.meter / 1e9).toFixed(2)} GB, ${(share * 100).toFixed(0)}% of PSS less the empty app${parentPss(empty) > 0 ? ` and ${(shareOutside * 100).toFixed(0)}% of that less the growth of Firefox's main process (${(parentAtPeak / 2 ** 20).toFixed(0)} MiB there); Firefox's main process grew by ${parentGrowth} MiB PSS at most` : ''}; the widest gap ${((widest.pss - widest.meter) / 1e9).toFixed(2)} GB in ${widest.phase}, the narrowest ${(Math.min(...paired.map((sample) => sample.pss - sample.meter)) / 2 ** 20).toFixed(0)} MiB; ${log.length} readings, ${paired.length} samples, written to ${info.outputPath('memory-samples.json')}`);
       expect(log.length).toBeGreaterThan(10);
       expect(paired.filter((sample) => sample.meter > sample.pss).map(({ at, phase, meter, pssMb }) => ({ at, phase, meter, pssMb })), 'samples where the meter read more than PSS').toEqual([]);
+      // MM2: no job is ended for a request it is already building, as the first field job's placement once its field
+      // is in, or the first import for the parts after it (docs/PLAN.md, MM2); nothing newer comes while one runs here.
+      expect(await hooks(page, (h) => h.jobLog().filter((e) => e.event === 'terminated').map((e) => `${e.gate} job ${e.job} ${e.detail}`)), 'jobs ended at their budget').toEqual([]);
       expect(peak.swapGrowthMb, 'swap grew past what the server can spare').toBeLessThan(500);
       // The browser's tree was found and read whole, or the sums below would pass on nothing.
       expect(peak.fewestProcesses).toBeGreaterThanOrEqual(3);
@@ -380,6 +395,96 @@ test.describe('3 million triangles', () => {
         info.annotations.push({ type: 'deviation', description: deviation });
         console.warn(`DEVIATION from docs/PLAN.md M11: ${deviation}`);
       }
+      expect(watch.errors).toEqual([]);
+    } finally {
+      memory.stop();
+      await rm(path, { force: true });
+    }
+  });
+
+  test('@soak MM2: the 150 MB STL simplified on opening: the copy\'s time, rounds and memory, then preview, merged and export with model_oriented.stl the file itself, and the memory meter at or under the browser at every sample', async ({ page }, info) => {
+    test.setTimeout(1_800_000);
+    const path = join(tmpdir(), `cfg-heavy-${info.project.name}-${process.pid}.stl`);
+    const name = `cfg-heavy-${info.project.name}-${process.pid}.stl`;
+    const times: Record<string, number> = {};
+    let t0 = Date.now();
+    const lap = (step: string): void => {
+      times[step] = Date.now() - t0;
+      t0 = Date.now();
+    };
+    await writeFile(path, heightBlockStl());
+    await app(page, (a) => {
+      // MM2's review: the simplifier's part as well, which must follow the lock loop while the copy is made.
+      const log: [number, number, number, number][] = [];
+      (window as unknown as { __meter: [number, number, number, number][] }).__meter = log;
+      const part = (reading: typeof a.store.memory.value, source: 'export' | 'simplify'): number => (reading.parts[source] ? reading.parts[source].wasm + reading.parts[source].arrays : 0);
+      a.store.memory.subscribe((reading) => log.push([Date.now(), reading.total, part(reading, 'export'), part(reading, 'simplify')]));
+    });
+    await expect.poll(() => app(page, (a) => Object.keys(a.store.memory.value.parts).sort().join()), { timeout: 60_000 }).toBe('field,page,reports,solid');
+    await page.waitForTimeout(1_000);
+    const empty = treeMemory();
+    const memory = sampleMemory(200, { mb: 500, then: () => void page.context().close() });
+    try {
+      memory.phase('question');
+      await choose(page, path);
+      await expect(page.getByTestId('large-prompt')).toContainText(`${name} has 3,011,040 triangles (150.6 MB).`);
+      lap('question');
+      memory.phase('prepare');
+      await page.getByTestId('large-simplify').click();
+      await expect(page.getByTestId('simplified-note')).toBeVisible({ timeout: 900_000 });
+      lap('prepare');
+      // The test block's ripple, 2 mm high every 2 mm, cannot keep to 0.05 mm at 300,000 triangles: the copy keeps more,
+      // and says how far it lies from the file, which the margin adds (docs/PLAN.md, Measured at MM2).
+      const origin = await app(page, (a) => a.store.pipeline.modelOrigin()!.record);
+      expect(origin).toMatchObject({ target: 300_000, maxErrorMm: 0.05, stoppedBy: 'error' });
+      expect(origin.triangles).toBeGreaterThan(300_000);
+      await expect(page.getByTestId('simplified-note')).toContainText(`to ${formatCount(origin.triangles)} triangles`);
+      memory.phase('preview');
+      await hooks(page, (h) => h.idle());
+      lap('preview');
+      expect(await app(page, (a) => a.store.pipeline.status().error)).toBeNull();
+      memory.phase('merged');
+      await hooks(page, (h) => h.setParam('base.mode', 'merged'));
+      await hooks(page, (h) => h.idle());
+      lap('merged');
+      await hooks(page, (h) => h.setParam('base.mode', 'glue'));
+      await hooks(page, (h) => h.idle());
+      lap('glue again');
+      memory.phase('export');
+      const saved = await saveFrom(page, 'export-zip', 1_200_000);
+      lap('export');
+      memory.phase('after');
+      const files = unzipSync(saved.bytes);
+      const report = JSON.parse(text(files['report.json'])) as ExportReport;
+      // The mold from the copy, model_oriented.stl the maker's own file, its clearance against that file.
+      expect(report.model).toMatchObject({ triangles: 3_011_040, simplified: origin });
+      expect(files['model_oriented.stl'].length).toBe(84 + 50 * 3_011_040);
+      expect(report.clearance.measured!).toBeGreaterThanOrEqual(report.params.silicone.t);
+      expect(report.clearance.simplifyErrorMm).toBe(origin.errorMm);
+      const peak = memory.stop();
+      const log = await page.evaluate(() => (window as unknown as { __meter: [number, number, number, number][] }).__meter);
+      const samples = memory.samples();
+      const paired = samples.map((sample: MemorySample) => ({ ...sample, meter: meterAt(log.map(([when, total, exported]) => [when, total, exported]), sample.at), pss: sample.pssMb * 2 ** 20 }));
+      await writeFile(info.outputPath('memory-samples.json'), JSON.stringify({ empty, times, origin, log, samples: paired.map(({ each, ...rest }) => ({ ...rest, parent: parentPss({ each }) })) }));
+      const after = paired.filter((sample) => sample.phase !== 'question' && sample.phase !== 'prepare');
+      const flowPeak = after.reduce((a, b) => (b.pss > a.pss ? b : a));
+      const copyPeak = paired.filter((sample) => sample.phase === 'prepare').reduce((a, b) => (b.pss > a.pss ? b : a));
+      // What the meter's Simplify part read while the copy was made: the lock loop's arrays, round after round.
+      const simplifyReads = log.filter(([, , , simplify]) => simplify > 0).map(([, , , simplify]) => simplify);
+      // The rounds' readings, without the reading and parsing before them and Manifold's check and the write after.
+      const inRounds = simplifyReads.slice(2, -2).sort((a, b) => a - b);
+      const simplifyMb = { max: Math.max(...simplifyReads) / 2 ** 20, readings: simplifyReads.length, median: (inRounds[Math.floor(inRounds.length / 2)] ?? 0) / 2 ** 20 };
+      console.log(`MM2 simplify on opening in ${info.project.name}: ms ${JSON.stringify(times)}; copy ${origin.triangles} triangles, ${origin.errorMm.toFixed(4)} mm, stopped by ${origin.stoppedBy}; PSS by phase ${JSON.stringify(peak.phases)} MiB; empty ${empty.pssMb.toFixed(0)} MiB; after the copy the peak is ${flowPeak.pssMb.toFixed(0)} MiB in ${flowPeak.phase}; the meter's Simplify part ${simplifyMb.readings} readings, up to ${simplifyMb.max.toFixed(0)} MiB, ${simplifyMb.median.toFixed(0)} in the rounds' median; export total ${Math.round(report.timings.total)} ms; ${paired.length} samples, written to ${info.outputPath('memory-samples.json')}`);
+      // MM2's review: bars from the measured runs (docs/PLAN.md, Measured at MM2), well under the model loaded anyway.
+      expect(copyPeak.pssMb, 'PSS while the copy is made, in MiB').toBeLessThan(COPY_STEP_LIMIT_MIB);
+      expect(flowPeak.pssMb, 'PSS from the copy loaded to the export, in MiB').toBeLessThan(SIMPLIFIED_FLOW_LIMIT_MIB);
+      expect(simplifyMb.readings, 'readings of the Simplify part, as the job goes').toBeGreaterThanOrEqual(8);
+      expect(simplifyMb.median, 'the Simplify part through the rounds: the welded file, the locks, the bound\'s scratch, the copy and its index').toBeGreaterThan(SIMPLIFY_PART_MIN_MIB);
+      expect(paired.filter((sample) => sample.meter > sample.pss).map(({ at, phase, meter, pssMb }) => ({ at, phase, meter, pssMb })), 'samples where the meter read more than PSS').toEqual([]);
+      expect(peak.swapGrowthMb, 'swap grew past what the server can spare').toBeLessThan(500);
+      expect(peak.fewestProcesses).toBeGreaterThanOrEqual(3);
+      expect(peak.failedReads).toBe(0);
+      expect(peak.pssMb, 'PSS summed over the browser, in MiB, against 3 GB').toBeLessThan(PLAN_LIMIT_MIB);
       expect(watch.errors).toEqual([]);
     } finally {
       memory.stop();
