@@ -35,11 +35,12 @@ export class ProjectFiles {
 
   /**
    * The .moldproj's bytes and the STL's hash. The STL is copied into the job, so the pipeline keeps its own. MM2:
-   * a simplified model's file is read by the worker from `original`, and `stl`, the copy, goes as simplified.stl.
+   * a simplified model's file is read by the worker from `original`, and `stl`, the copy, goes as simplified.stl;
+   * RM: a repaired model's copy, which project.json's `repaired` names, as repaired.stl.
    */
   async pack(file: ProjectFile, stl: Uint8Array, original: OriginalSource | null = null): Promise<{ zip: Uint8Array; sha256: string }> {
     const copy = stl.slice().buffer;
-    const job = original ? { t: 'pack' as const, id: ++this.jobs, file, stl: null, original, simplified: copy } : { t: 'pack' as const, id: ++this.jobs, file, stl: copy };
+    const job = original ? { t: 'pack' as const, id: ++this.jobs, file, stl: null, original, ...(file.repaired ? { repaired: copy } : { simplified: copy }) } : { t: 'pack' as const, id: ++this.jobs, file, stl: copy };
     const reply = await this.run(job, [copy]);
     if (reply.t === 'project-error') throw new ProjectError(reply.message, reply.details);
     if (reply.t !== 'packed') throw new Error(`The project worker answered a save with ${reply.t}.`);

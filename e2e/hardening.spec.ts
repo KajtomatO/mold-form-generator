@@ -9,7 +9,7 @@ import { withArena } from '../src/core/solid/arena';
 import { MEMORY_WARN_BYTES } from '../src/app/memory';
 import { formatCount } from '../src/ui/format';
 import type { ExportReport } from '../src/workers/exportJob';
-import { heightBlockSoup, heightBlockStl, heightBlockTriangles, HEAVY_BLOCK } from '../test/fixtures/heavy';
+import { heightBlockHoleFinStl, heightBlockSoup, heightBlockStl, heightBlockTriangles, HEAVY_BLOCK } from '../test/fixtures/heavy';
 import { EXAMPLE_FILES, loadManifold } from '../test/fixtures/loadExamples';
 import { readPart } from '../test/fixtures/solidChecks';
 import { asciiStl, box, L_POCKET, patchedL, spikedBlock, toSoup, withoutTriangles } from '../test/fixtures/synthetic';
@@ -164,7 +164,7 @@ test.describe('hardening on index.html', () => {
     expect(await app(page, (a) => a.store.pipeline.modelClosed())).toBe(false);
     const mode = page.locator('[data-param="base.mode"]');
     await expect(mode.locator('[data-code="soup-mode"]')).toContainText('merged mode cannot be used with it');
-    await expect(mode.locator('[data-code="soup-mode"]')).toContainText('the silicone thickness cannot be measured: it stays as planned, and no export can check it. To use merged mode and a measured thickness, repair the mesh');
+    await expect(mode.locator('[data-code="soup-mode"]')).toContainText('the silicone thickness cannot be measured: it stays as planned, and no export can check it. To use merged mode and a measured thickness, use Repair mesh in the Model section');
     await expect(mode.getByRole('button', { name: 'Merged (B)' })).toBeDisabled();
     await expect(mode.getByRole('button', { name: 'Merged (B)' })).toHaveAttribute('title', 'Merged mode needs a closed solid, and this mesh has holes.');
     await expect(page.getByTestId('status-clearance')).toContainText('unverified');
@@ -435,7 +435,7 @@ test.describe('3 million triangles', () => {
       lap('prepare');
       // The test block's ripple, 2 mm high every 2 mm, cannot keep to 0.05 mm at 300,000 triangles: the copy keeps more,
       // and says how far it lies from the file, which the margin adds (docs/PLAN.md, Measured at MM2).
-      const origin = await app(page, (a) => a.store.pipeline.modelOrigin()!.record);
+      const origin = await app(page, (a) => a.store.pipeline.modelOrigin()!.record!);
       expect(origin).toMatchObject({ target: 300_000, maxErrorMm: 0.05, stoppedBy: 'error' });
       expect(origin.triangles).toBeGreaterThan(300_000);
       await expect(page.getByTestId('simplified-note')).toContainText(`to ${formatCount(origin.triangles)} triangles`);
@@ -480,6 +480,87 @@ test.describe('3 million triangles', () => {
       expect(flowPeak.pssMb, 'PSS from the copy loaded to the export, in MiB').toBeLessThan(SIMPLIFIED_FLOW_LIMIT_MIB);
       expect(simplifyMb.readings, 'readings of the Simplify part, as the job goes').toBeGreaterThanOrEqual(8);
       expect(simplifyMb.median, 'the Simplify part through the rounds: the welded file, the locks, the bound\'s scratch, the copy and its index').toBeGreaterThan(SIMPLIFY_PART_MIN_MIB);
+      expect(paired.filter((sample) => sample.meter > sample.pss).map(({ at, phase, meter, pssMb }) => ({ at, phase, meter, pssMb })), 'samples where the meter read more than PSS').toEqual([]);
+      expect(peak.swapGrowthMb, 'swap grew past what the server can spare').toBeLessThan(500);
+      expect(peak.fewestProcesses).toBeGreaterThanOrEqual(3);
+      expect(peak.failedReads).toBe(0);
+      expect(peak.pssMb, 'PSS summed over the browser, in MiB, against 3 GB').toBeLessThan(PLAN_LIMIT_MIB);
+      expect(watch.errors).toEqual([]);
+    } finally {
+      memory.stop();
+      await rm(path, { force: true });
+    }
+  });
+
+  test('@soak RM: the 150 MB STL with a hole and a fin, loaded anyway and repaired on the auto grid: the repair\'s time and memory, then preview, merged and export, with the browser under 3 GB', async ({ page }, info) => {
+    test.setTimeout(1_800_000);
+    const path = join(tmpdir(), `cfg-broken-${info.project.name}-${process.pid}.stl`);
+    const name = `cfg-broken-${info.project.name}-${process.pid}.stl`;
+    const times: Record<string, number> = {};
+    let t0 = Date.now();
+    const lap = (step: string): void => {
+      times[step] = Date.now() - t0;
+      t0 = Date.now();
+    };
+    await writeFile(path, heightBlockHoleFinStl());
+    await app(page, (a) => {
+      // The meter's total and its Repair part, at each reading.
+      const log: [number, number, number, number][] = [];
+      (window as unknown as { __meter: [number, number, number, number][] }).__meter = log;
+      const part = (reading: typeof a.store.memory.value, source: 'export' | 'repair'): number => (reading.parts[source] ? reading.parts[source].wasm + reading.parts[source].arrays : 0);
+      a.store.memory.subscribe((reading) => log.push([Date.now(), reading.total, part(reading, 'export'), part(reading, 'repair')]));
+    });
+    await expect.poll(() => app(page, (a) => Object.keys(a.store.memory.value.parts).sort().join()), { timeout: 60_000 }).toBe('field,page,reports,solid');
+    await page.waitForTimeout(1_000);
+    const empty = treeMemory();
+    const memory = sampleMemory(200, { mb: 500, then: () => void page.context().close() });
+    try {
+      memory.phase('open');
+      await choose(page, path);
+      await expect(page.getByTestId('large-prompt')).toContainText(`${name} has 3,010,488 triangles (150.5 MB).`);
+      await page.getByTestId('large-load').click();
+      await expect(page.getByTestId('repair-offer')).toBeVisible({ timeout: 600_000 });
+      await hooks(page, (h) => h.idle());
+      lap('open');
+      await expect(page.getByTestId('repair-offer')).toContainText('edges shared by more than two faces');
+      memory.phase('repair');
+      await page.getByTestId('repair-mesh').click();
+      await expect(page.getByTestId('repaired-note')).toBeVisible({ timeout: 900_000 });
+      lap('repair');
+      const record = await app(page, (a) => a.store.pipeline.modelOrigin()!.repair!.record);
+      expect(record).toMatchObject({ method: 'rebuilt', cellAsked: null });
+      expect(record.outside!.triangles).toBeGreaterThan(0);
+      memory.phase('preview');
+      await hooks(page, (h) => h.idle());
+      lap('preview');
+      expect(await app(page, (a) => a.store.pipeline.status().error)).toBeNull();
+      memory.phase('merged');
+      await hooks(page, (h) => h.setParam('base.mode', 'merged'));
+      await hooks(page, (h) => h.idle());
+      lap('merged');
+      await hooks(page, (h) => h.setParam('base.mode', 'glue'));
+      await hooks(page, (h) => h.idle());
+      lap('glue again');
+      memory.phase('export');
+      const saved = await saveFrom(page, 'export-zip', 1_200_000);
+      lap('export');
+      memory.phase('after');
+      const files = unzipSync(saved.bytes);
+      const report = JSON.parse(text(files['report.json'])) as ExportReport;
+      // The mold from the repaired copy, model_oriented.stl the maker's own file, the guarantee for it.
+      expect(report.model).toMatchObject({ triangles: 3_010_488, repaired: { method: 'rebuilt', sha256: record.sha256 } });
+      expect(files['model_oriented.stl'].length).toBe(84 + 50 * 3_010_488);
+      expect(report.clearance.measured!).toBeGreaterThanOrEqual(report.params.silicone.t);
+      expect(report.clearance.repairNearMm).toBe(record.nearMm);
+      expect(report.clearance.outsideGap!).toBeGreaterThanOrEqual(report.clearance.measured!);
+      const peak = memory.stop();
+      const log = await page.evaluate(() => (window as unknown as { __meter: [number, number, number, number][] }).__meter);
+      const samples = memory.samples();
+      const paired = samples.map((sample: MemorySample) => ({ ...sample, meter: meterAt(log.map(([when, total, exported]) => [when, total, exported]), sample.at), pss: sample.pssMb * 2 ** 20 }));
+      await writeFile(info.outputPath('memory-samples.json'), JSON.stringify({ empty, times, record: { ...record, outside: { ...record.outside, runs: record.outside!.runs.length } }, log, samples: paired.map(({ each, ...rest }) => ({ ...rest, parent: parentPss({ each }) })) }));
+      const repairReads = log.filter(([, , , repair]) => repair > 0).map(([, , , repair]) => repair);
+      console.log(`RM repair of the broken 3 million triangle block in ${info.project.name}: ms ${JSON.stringify(times)}; grid ${record.cell} mm, ${record.triangles} triangles, e_near ${record.nearMm.toFixed(3)} mm, ${record.outside!.triangles} triangles left out up to ${record.outside!.farthestMm.toFixed(2)} mm; PSS by phase ${JSON.stringify(peak.phases)} MiB; empty ${empty.pssMb.toFixed(0)} MiB; peak ${peak.pssMb.toFixed(0)} MiB in ${peak.phase}; the meter's Repair part ${repairReads.length} readings, up to ${(Math.max(0, ...repairReads) / 2 ** 20).toFixed(0)} MiB; export total ${Math.round(report.timings.total)} ms; ${paired.length} samples, written to ${info.outputPath('memory-samples.json')}`);
+      expect(repairReads.length, 'readings of the Repair part, as the job goes').toBeGreaterThanOrEqual(8);
       expect(paired.filter((sample) => sample.meter > sample.pss).map(({ at, phase, meter, pssMb }) => ({ at, phase, meter, pssMb })), 'samples where the meter read more than PSS').toEqual([]);
       expect(peak.swapGrowthMb, 'swap grew past what the server can spare').toBeLessThan(500);
       expect(peak.fewestProcesses).toBeGreaterThanOrEqual(3);

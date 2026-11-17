@@ -1,7 +1,7 @@
-import { modelSize, moldBox, previewSilicone } from '../app/derived';
+import { modelSize, moldBox, previewSilicone, unmeasuredParts } from '../app/derived';
 import { MEMORY_WARN_BYTES } from '../app/memory';
 import { useStore } from './context';
-import { formatCount, formatSize, memoryText, memoryTitle } from './format';
+import { formatCount, formatSize, memoryText, memoryTitle, originLabel } from './format';
 
 /**
  * MM1: the memory the app holds, read off the store's own signal alone, so a new reading draws this item
@@ -36,7 +36,9 @@ export function StatusStrip() {
   // The last export's measurement, for as long as the geometry it was measured on is what shows. An
   // open mesh has no solid to measure, so after its export the clearance is unverified, not planned.
   const exported = pipeline.currentExport();
-  const measured = exported?.clearance ?? null;
+  // RM: a rebuilt model whose left-out parts were too many to measure has no measured clearance for the whole file.
+  const unmeasured = unmeasuredParts(exported?.clearance ?? null);
+  const measured = unmeasured === null ? (exported?.clearance ?? null) : null;
   // Nor can any export measure it on an open mesh, so it reads unverified from the start.
   const open = pipeline.modelClosed() === false;
   return (
@@ -47,17 +49,26 @@ export function StatusStrip() {
             <b>{pipeline.modelName}</b>
           </span>
           {parsed ? (
-            // MM2: a simplified copy says so, as its count is not the file's.
-            <span class="item" data-testid="status-triangles" title={pipeline.modelOrigin() ? `The copy the mold is made from; ${pipeline.modelName} has ${formatCount(pipeline.modelOrigin()!.from.triangles)}.` : undefined}>
-              {formatCount(parsed.triangles)} triangles{pipeline.modelOrigin() ? ' (simplified)' : ''}
+            // MM2: a simplified copy says so, as its count is not the file's; RM: so does a repaired one.
+            <span class="item" data-testid="status-triangles" title={pipeline.modelOrigin() ? `The ${pipeline.modelOrigin()!.repair ? 'repaired' : 'simplified'} copy the mold is made from; ${pipeline.modelName} has ${formatCount(pipeline.modelOrigin()!.from.triangles)}.` : undefined}>
+              {formatCount(parsed.triangles)} triangles{originLabel(pipeline.modelOrigin())}
             </span>
           ) : null}
-          {oriented ? <span class="item" data-testid="status-size">{formatSize(modelSize(oriented.bounds))}</span> : null}
+          {oriented ? (
+            // RM: a repaired model's size is the copy's, with the parts of the file it left out where glue mode holds them.
+            <span class="item" data-testid="status-size" title={pipeline.modelOrigin()?.repair ? (pipeline.outsideTier() === 'glue' && pipeline.modelOrigin()!.repair!.outside ? 'The repaired copy with the parts of your file it left out, as the mold holds them.' : 'The repaired copy the mold is made from.') : undefined}>
+              {formatSize(modelSize(pipeline.planBounds() ?? oriented.bounds))}
+            </span>
+          ) : null}
           {rim ? <span class="item" data-testid="status-box">box {formatSize(moldBox(rim))}</span> : null}
           {silicone ? <span class="item" data-testid="status-silicone">{silicone.ml.toFixed(1)} ml silicone</span> : null}
           {measured ? (
             <span class="item" data-testid="status-clearance" title="The thinnest silicone between the model and the cover, measured on the parts the last export saved. It holds until a change to the mold.">
               clearance measured {measured.measured.toFixed(2)} mm
+            </span>
+          ) : unmeasured !== null ? (
+            <span class="item warn" data-testid="status-clearance" title={`The repair left out ${formatCount(unmeasured)} triangles of your file, too many to measure the silicone round them: it is planned to be at least this there, and measured everywhere else.`}>
+              clearance ≥ {t.toFixed(2)} mm, unverified
             </span>
           ) : exported || open ? (
             <span class="item warn" data-testid="status-clearance" title="The model's mesh has holes, so no export can measure the silicone between the model and the cover: it is planned to be at least this.">

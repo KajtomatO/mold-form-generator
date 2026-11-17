@@ -157,7 +157,7 @@ function pureProblems(params: Params, id: ExampleId): string[] {
   problems.push(...nonFinitePaths(placementSettings(params, bounds), 'placement'), ...nonFinitePaths(openingSizes(params), 'sizes'));
   problems.push(...nonFinitePaths(exportPitch(params, bounds), 'pitch'));
   // The stage keys: a key per stage, the same from the same values, and from the values a project file gives back.
-  const inputs: StageInputs = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null };
+  const inputs: StageInputs = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' };
   const keys = stageKeys(params, inputs);
   if (Object.values(keys).some((k) => typeof k !== 'string' || k.length === 0)) problems.push('a stage without a key');
   const project = { params, plane: DEFAULT_PLANE, pins: [], removed: [] };

@@ -131,6 +131,9 @@ describe('MM1: the memory ledger and its text', () => {
     const empty = { total: 17e6, parts: { page: { wasm: 0, arrays: 0.4e6 }, field: { wasm: 0, arrays: 0 }, solid: { wasm: 16.8e6, arrays: 0 }, reports: { wasm: 0, arrays: 0 } } };
     expect(memoryTitle(empty).split('\n')).toEqual(['Memory this app holds: 17 MB', '  Geometry engine: 17 MB', '  Export: not running', MEMORY_NOT_COUNTED]);
     expect(memoryText(empty)).toBe('App memory 20 MB');
+    // MM2 and RM: a copy being made, or a repair, has a line of its own while its worker lives.
+    expect(memoryTitle({ total: 1e9, parts: { ...parts, simplify: { wasm: 50e6, arrays: 100e6 }, repair: { wasm: 60e6, arrays: 480e6 } } }, 1.5e9).split('\n').slice(-3, -1)).toEqual(['  Simplify: 150 MB', '  Repair: 540 MB']);
+    expect(MEMORY_NOT_COUNTED).toContain("the simplifier's own working memory. While a mesh is repaired, the Repair part counts that working memory too, as an estimate.");
     // Until a worker has said what it holds, main's share alone would read low: an ellipsis, not 0 MB.
     const early = { total: 42e3, parts: { page: { wasm: 0, arrays: 42e3 } } };
     expect(memoryText(early)).toBe('App memory …');
@@ -448,7 +451,7 @@ describe('MM1: what the pipeline and its workers say they hold', () => {
     const replies: FromWorker[] = [];
     const handle = fieldHost((message) => replies.push(message), () => 0);
     const params = defaultParams();
-    const keysOf = (file: string) => stageKeys(params, { file, import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+    const keysOf = (file: string) => stageKeys(params, { file, import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
     const inputs = (file: ArrayBuffer | null) => ({ file, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] });
     handle({ t: 'field', id: 1, keys: keysOf('f'), want: ['S6', 'S7'], params, inputs: inputs(exampleBytes('jersey').slice().buffer) });
     const held = (replies.find((m) => m.t === 'result') as Extract<FromWorker, { t: 'result' }>).memory!;
@@ -492,7 +495,7 @@ describe('MM1: what the pipeline and its workers say they hold', () => {
       const replies: FromWorker[] = [];
       const handle = fieldHost((message) => replies.push(message), () => 0);
       const params = defaultParams();
-      const keys = stageKeys(params, { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+      const keys = stageKeys(params, { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
       const inputs = (file: ArrayBuffer | null) => ({ file, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] });
       handle({ t: 'field', id: 1, keys, want: ['S6', 'S7'], params, inputs: inputs(exampleBytes('jersey').slice().buffer) });
       handle({ t: 'field', id: 2, keys, want: ['S6'], params, inputs: inputs(null), fault: { kind: 'oob' } });
@@ -597,7 +600,7 @@ describe('MM2: what simplifying a model holds', () => {
     const seen: (WorkerMemory | undefined)[] = [];
     ledger.subscribe((source) => source === 'simplify' && seen.push(ledger.parts().simplify));
     const prepared = await simplifier.run({ kind: 'stl', blob: new Blob([bytes as BlobPart]) }, EXAMPLE_FILES.benchy, { target: 50_000, maxErrorMm: 0.05 });
-    expect(prepared.record.triangles).toBe(49_998);
+    expect(prepared.record!.triangles).toBe(49_998);
     expect(said.map((m) => m.step ?? m.t)).toEqual(['ready', 'read', 'parse', 'simplify', 'measure', 'check', 'write', 'prepared']);
     for (const m of said.filter((m) => m.t !== 'prepared')) expect(m.memory?.wasm, m.step ?? m.t).toBeGreaterThan(0);
     const simplifying = said.find((m) => m.step === 'simplify')!.memory!;
@@ -621,7 +624,7 @@ describe('MM2: what simplifying a model holds', () => {
     const prepared = runPrepareJob(api, MeshoptSimplifier, { source: { kind: 'stl', blob: new Blob([bytes as BlobPart]) }, name: EXAMPLE_FILES.jersey, simplify: { target: 900, maxErrorMm: 0.05 } }, () => bytes, () => {}, () => performance.now());
     const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
     pipelines.push(p);
-    p.load(prepared.stl, EXAMPLE_FILES.jersey, { kind: 'simplified', original: { kind: 'stl', blob: new Blob([bytes as BlobPart]) }, from: prepared.from, record: prepared.record });
+    p.load(prepared.stl, EXAMPLE_FILES.jersey, { original: { kind: 'stl', blob: new Blob([bytes as BlobPart]) }, from: prepared.from, record: prepared.record, repair: null });
     await p.idle();
     const during: [string, number][] = [];
     await p.exportParts((progress) => during.push([progress.step, p.memory.parts().export?.arrays ?? 0]));

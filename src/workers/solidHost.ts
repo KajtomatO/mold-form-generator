@@ -63,14 +63,24 @@ export function solidHost(api: ManifoldToplevel, simplifier: MeshSimplifier, hea
       injectedCrash(message.fault);
       applyDelay(message.fault, now);
       if (message.t === 'prepare') {
-        // MM2: what it holds as each step begins, for the memory meter's 'simplify', as an export's does.
+        // MM2: what it holds as each step begins, for the memory meter's 'simplify', as an export's does. RM: a
+        // repair's arrays grow inside its steps, so it asks for a reading each time they do, under the same step,
+        // with meshoptimizer's own heap, which no array shows, as estimated.
         const holding: unknown[] = [];
+        let last = { step: 'read', done: 0, total: 1 };
+        let extra = 0;
+        const figure = (): WorkerMemory | undefined => {
+          const held = memory([holding]);
+          return held ? { wasm: held.wasm, arrays: held.arrays + extra } : held;
+        };
         const progress = (step: string, done: number, total: number): void => {
-          post({ t: 'progress', id, step, done, total, memory: memory([holding]) });
+          last = { step, done, total };
+          post({ t: 'progress', id, step, done, total, memory: figure() });
           applyDelay(message.fault, now, step);
         };
-        const prepared = runPrepareJob(api, simplifier, message, readBlob, progress, now, holding);
-        post({ t: 'prepared', id, ...prepared }, buffersOf(prepared.stl));
+        const meter = { held: () => post({ t: 'progress', id, ...last, memory: figure() }), extra: (bytes: number) => void (extra = bytes) };
+        const prepared = runPrepareJob(api, simplifier, message, readBlob, progress, now, holding, meter);
+        post({ t: 'prepared', id, ...prepared }, buffersOf(prepared.stl, prepared.outside?.positions, prepared.outside?.indices));
         return;
       }
       if (message.t === 'export') {

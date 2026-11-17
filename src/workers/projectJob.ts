@@ -2,8 +2,10 @@ import { sha256 } from '../app/hash';
 import { projectJson, type ProjectFile } from '../app/project';
 import { isLarge, type LargeLimits } from '../app/largeModel';
 import { MAX_JSON_BYTES, PROJECT_EXTENSION, packProject, unpackProject } from '../app/projectArchive';
-import { MIGRATIONS, OPEN_AGAIN, OPEN_INSTEAD, ProjectError, readProjectJson, simplifiedDropped, type ProjectNote } from '../app/projectFile';
-import type { OriginalSource, SimplifiedEntry } from '../app/simplified';
+import { MIGRATIONS, OPEN_AGAIN, OPEN_INSTEAD, ProjectError, readProjectJson, repairedDropped, simplifiedDropped, type ProjectNote } from '../app/projectFile';
+import type { OriginalSource, RepairedEntry, SimplifiedEntry } from '../app/simplified';
+import { fromRuns, subMesh } from '../core/mesh/outside';
+import { weld, type WeldedMesh } from '../core/mesh/weld';
 import { estimateTriangles } from '../core/stl/estimate';
 import { parseStl, StlError } from '../core/stl/parse';
 
@@ -25,6 +27,8 @@ export interface PackJob {
   stl: ArrayBuffer | null;
   original?: OriginalSource;
   simplified?: ArrayBuffer;
+  /** RM: a repaired model's copy, packed as repaired.stl beside the maker's file, which `original` gives. */
+  repaired?: ArrayBuffer;
 }
 
 /**
@@ -78,6 +82,12 @@ export interface Opened {
    * file itself, model.stl, was checked by its hash, and is `bytes` long. `stlSha256` is still model.stl's.
    */
   simplified?: { entry: SimplifiedEntry; bytes: number } | null;
+  /**
+   * RM: `stl` is the project's repaired copy, checked against its record, which the mold is made from; model.stl was
+   * checked by its hash, and is `bytes` long. `outside` is the file's parts the copy left out, cut from model.stl by
+   * the record's runs, in the file's coordinates, or null. `stlSha256` is still model.stl's.
+   */
+  repaired?: { entry: RepairedEntry; bytes: number; outside: WeldedMesh | null } | null;
   /** MM2: model.stl is past the limits asked about, so `stl` is null and main asks first: its figures. */
   large?: { triangles: number; exact: boolean; format: 'binary' | 'ascii'; bytes: number } | null;
 }
@@ -108,7 +118,9 @@ function openFile(job: OpenJob): Opened {
   const bytes = new Uint8Array(job.bytes);
   let json: string, stl: Uint8Array | null = null, copy: Uint8Array | null = null;
   if (job.kind === 'zip') {
-    ({ json, stl, simplified: copy } = unpackProject(bytes, job.name, !job.original));
+    let repairedCopy: Uint8Array | null;
+    ({ json, stl, simplified: copy, repaired: repairedCopy } = unpackProject(bytes, job.name, !job.original));
+    copy ??= repairedCopy;
     // An export ZIP holds settings alone; a .moldproj must hold its model too.
     if (!stl && job.name.toLowerCase().endsWith(PROJECT_EXTENSION)) throw new ProjectError(`${job.name} is damaged: the model saved inside it is missing. ${OPEN_AGAIN}`, 'It has no model.stl.');
     // A short view would hand over, and keep, the whole buffer it is in.
@@ -125,6 +137,7 @@ function openFile(job: OpenJob): Opened {
   const notes = [...read.notes];
   let stlSha256: string | null = null;
   let simplified: Opened['simplified'] = null;
+  let repaired: Opened['repaired'] = null;
   let large: Opened['large'] = null;
   const loadedSha256 = job.loaded ? sha256(new Uint8Array(job.loaded)) : null;
   if (stl) {
@@ -134,10 +147,25 @@ function openFile(job: OpenJob): Opened {
     // MM2: a simplified project opens its copy, checked by its own hash; the file's hash proves it is the one that
     // was simplified, so it is not read further. A copy that cannot be used opens the file itself, with a warning.
     const entry = read.file.simplified;
+    // RM: a repaired one the same, its left-out parts cut from the file by the record's runs (parsed and welded as a
+    // load does: about 1.4 s for 3 million triangles, which only a project with such parts pays).
+    const fixed = read.file.repaired;
+    if (fixed && !job.original) {
+      const outside = copy && read.file.modelSha256 !== null && sha256(copy) === fixed.sha256 ? outsideOf(stl, fixed) : undefined;
+      if (outside !== undefined) {
+        repaired = { entry: fixed, bytes: stl.length, outside };
+        stl = copy!;
+      } else {
+        notes.push({ severity: 'warning', message: repairedDropped(read.file.model) });
+        delete read.file.repaired;
+      }
+    } else if (fixed) {
+      delete read.file.repaired;
+    }
     if (entry && !job.original) {
       if (copy && read.file.modelSha256 !== null && sha256(copy) === entry.sha256) {
         simplified = { entry, bytes: stl.length };
-        stl = copy;
+        stl = copy!;
       } else {
         notes.push({ severity: 'warning', message: simplifiedDropped(read.file.model) });
         delete read.file.simplified;
@@ -146,22 +174,39 @@ function openFile(job: OpenJob): Opened {
       delete read.file.simplified;
     }
     // MM2: a model past the limits is counted, not handed over, so main asks before anything holds it.
-    if (!simplified && job.large) {
+    if (!simplified && !repaired && job.large) {
       const estimate = estimateTriangles(stl, stl.length);
       if (isLarge(estimate.triangles, stl.length, job.large)) {
         large = { triangles: estimate.triangles, exact: estimate.exact, format: estimate.format, bytes: stl.length };
-        return { file: read.file, from: read.from, notes, stl: null, stlSha256, loadedSha256, simplified: null, large };
+        return { file: read.file, from: read.from, notes, stl: null, stlSha256, loadedSha256, simplified: null, repaired: null, large };
       }
     }
     // Read here first, so an STL that cannot be read never replaces the model on screen.
     try {
       parseStl(stl);
     } catch (error) {
-      if (error instanceof StlError) throw new ProjectError(`${job.name} is damaged: the ${simplified ? 'simplified model' : 'model'} inside it cannot be read. ${OPEN_AGAIN}`, `${simplified ? 'simplified.stl' : 'model.stl'}: ${error.message}`);
+      if (error instanceof StlError) throw new ProjectError(`${job.name} is damaged: the ${simplified ? 'simplified model' : repaired ? 'repaired model' : 'model'} inside it cannot be read. ${OPEN_AGAIN}`, `${simplified ? 'simplified.stl' : repaired ? 'repaired.stl' : 'model.stl'}: ${error.message}`);
       throw error;
     }
   }
-  return { file: read.file, from: read.from, notes, stl, stlSha256, loadedSha256, ...(simplified ? { simplified } : {}) };
+  return { file: read.file, from: read.from, notes, stl, stlSha256, loadedSha256, ...(simplified ? { simplified } : {}), ...(repaired ? { repaired } : {}) };
+}
+
+/**
+ * RM: a repaired project's left-out parts, cut from model.stl by its record's runs: null where it has none, and
+ * undefined where the file cannot give them, as one whose runs reach past its triangles, so the copy is not used.
+ */
+function outsideOf(stl: Uint8Array, entry: RepairedEntry): WeldedMesh | null | undefined {
+  if (!entry.outside) return null;
+  let welded: WeldedMesh;
+  try {
+    welded = weld(parseStl(stl).positions);
+  } catch {
+    return undefined;
+  }
+  const triangles = fromRuns(entry.outside.runs);
+  if (triangles.length !== entry.outside.triangles || triangles.some((t) => t >= welded.indices.length / 3)) return undefined;
+  return subMesh(welded, triangles);
 }
 
 /** Below this an STL is read on main, which takes a few ms where a worker of its own would take tens. */
@@ -212,7 +257,7 @@ export function runProjectJob(job: ProjectJob, readBlob: (blob: Blob) => Uint8Ar
     if (job.t === 'pack') {
       const stl = job.original ? originalFor(job, readBlob) : new Uint8Array(job.stl!);
       const hash = job.file.modelSha256 ?? sha256(stl);
-      const zip = packProject(projectJson({ ...job.file, modelSha256: hash }), stl, job.simplified ? new Uint8Array(job.simplified) : null);
+      const zip = packProject(projectJson({ ...job.file, modelSha256: hash }), stl, job.simplified ? new Uint8Array(job.simplified) : null, job.repaired ? new Uint8Array(job.repaired) : null);
       return { reply: { t: 'packed', id: job.id, zip, sha256: hash }, transfer: [zip.buffer as ArrayBuffer] };
     }
     if (job.t === 'check') {
@@ -220,7 +265,8 @@ export function runProjectJob(job: ProjectJob, readBlob: (blob: Blob) => Uint8Ar
       return { reply: { t: 'checked', id: job.id, bytes: job.bytes, ...read }, transfer: [job.bytes] };
     }
     const opened = openFile(job);
-    return { reply: { t: 'opened', id: job.id, opened }, transfer: opened.stl ? [opened.stl.buffer as ArrayBuffer] : [] };
+    const far = opened.repaired?.outside;
+    return { reply: { t: 'opened', id: job.id, opened }, transfer: [...(opened.stl ? [opened.stl.buffer as ArrayBuffer] : []), ...(far ? [far.positions.buffer as ArrayBuffer, far.indices.buffer as ArrayBuffer] : [])] };
   } catch (error) {
     if (error instanceof ProjectError) return { reply: { t: 'project-error', id: job.id, message: error.message, details: error.details }, transfer: [] };
     const message = job.t === 'pack' ? PACK_FAILED : `${job.name} could not be opened. Try again.`;

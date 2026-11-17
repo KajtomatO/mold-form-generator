@@ -9,7 +9,7 @@ import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, previewCell } from '../../src
 import { orientedExample } from '../fixtures/fieldRuns';
 import { exampleBytes, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 
-const INPUTS = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview' as const, cellScale: 1, pins: [], removed: [], drag: null };
+const INPUTS = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview' as const, cellScale: 1, pins: [], removed: [], drag: null, outside: '' as const };
 
 /** S6 as field.worker builds it, one stage at a time. `ran` gets an entry for each stage that ran. */
 function staged(id: ExampleId, params: Params, stages = new FieldStages(), ran: Record<string, number> = {}) {

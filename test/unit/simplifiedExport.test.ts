@@ -5,7 +5,7 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { moldBox } from '../../src/app/derived';
 import { Pipeline } from '../../src/app/pipeline';
-import { displayProxyMessage, simplifiedEntry, type ModelOrigin } from '../../src/app/simplified';
+import { displayProxyMessage, simplifiedEntry, type ModelOrigin, type SimplifiedRecord } from '../../src/app/simplified';
 import { orientSolid, transformPositions, trimToBase } from '../../src/core/base/orient';
 import { auditEdges } from '../../src/core/mesh/audit';
 import { maxDeviation, SurfaceIndex } from '../../src/core/mesh/deviation';
@@ -40,9 +40,9 @@ const flat = (bytes: Uint8Array): string => text(bytes).replace(/\r\n\s*/g, ' ')
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
 /** The copy of `bytes` the prepare job makes, as the store loads it: the copy's STL, named after the file, with its origin. */
-function simplified(bytes: Uint8Array, name: string, target: number, maxErrorMm = 0.05, original: Uint8Array = bytes): { stl: Uint8Array; origin: ModelOrigin } {
+function simplified(bytes: Uint8Array, name: string, target: number, maxErrorMm = 0.05, original: Uint8Array = bytes): { stl: Uint8Array; origin: ModelOrigin & { record: SimplifiedRecord } } {
   const prepared = runPrepareJob(api, MeshoptSimplifier, { source: { kind: 'stl', blob: new Blob([bytes as BlobPart]) }, name, simplify: { target, maxErrorMm } }, () => bytes, () => {}, () => performance.now());
-  return { stl: prepared.stl, origin: { kind: 'simplified', original: { kind: 'stl', blob: new Blob([original as BlobPart]) }, from: prepared.from, record: prepared.record } };
+  return { stl: prepared.stl, origin: { original: { kind: 'stl', blob: new Blob([original as BlobPart]) }, from: prepared.from, record: prepared.record!, repair: null } };
 }
 
 /** A pipeline whose solid workers' messages are kept, so a test can see what an export was sent. */
@@ -192,10 +192,10 @@ describe('MM2: a simplified model\'s export', () => {
     // The file's corners lie 0.2 x sqrt(3) mm off the copy's, its faces 0.2.
     expect(errorMm).toBeCloseTo(0.2 * Math.sqrt(3), 3);
     const origin: ModelOrigin = {
-      kind: 'simplified',
       original: { kind: 'stl', blob: new Blob([bytes as BlobPart]) },
       from: { name: 'block.stl', bytes: bytes.length, sha256: sha(bytes), format: 'binary', trianglesInFile: welded.indices.length / 3, triangles: welded.indices.length / 3 },
       record: { triangles: 12, target: 12, maxErrorMm: 0.5, errorMm, stoppedBy: 'target', sha256: sha(stl) },
+      repair: null,
     };
     const p = await loaded(stl, 'block.stl', origin);
     const outputs = await p.exportParts();

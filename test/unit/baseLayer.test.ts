@@ -14,7 +14,7 @@ import { coneAt, fieldOf } from '../fixtures/fieldShapes';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { exampleBytes } from '../fixtures/loadExamples';
 
-const INPUTS = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview' as const, cellScale: 1, pins: [], removed: [], drag: null };
+const INPUTS = { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview' as const, cellScale: 1, pins: [], removed: [], drag: null, outside: '' as const };
 const staged = (params: Params, stages: FieldStages, ran: Record<string, number> = {}) =>
   stages.run(stageKeys(params, INPUTS), ['S6'], params, { file: exampleBytes('benchy').slice().buffer, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] }, ran).S6!.field;
 const total = (values: Float32Array) => values.reduce((a, b) => a + b, 0);

@@ -29,6 +29,12 @@ export interface StageInputs {
   removed: string[];
   /** The opening being dragged and where it is now, or null between drags. */
   drag: { id: string; x: number; y: number } | null;
+  /**
+   * RM: 'glue' for a rebuilt model in glue mode, whose field and box hold the parts of the maker's file the repair
+   * left out and whose margin is wider by how far the file lies outside the copy (D26); '' for every other model,
+   * a repaired one in merged mode included, where the base carries the copy alone.
+   */
+  outside: '' | 'glue';
 }
 
 export type InputName = keyof StageInputs;
@@ -67,7 +73,8 @@ export const STAGES: readonly StageDef[] = [
   { id: 'S1', label: 'parsed, audited, imported', runs: 'both', deps: [], params: [], inputs: ['file'] },
   { id: 'S2', label: 'oriented, footprint', runs: 'both', deps: ['S1'], params: ['base.planeTol', 'base.minIsland'], inputs: ['import', 'plane'] },
   // The preview cell's rule reads the size of the whole grid, so the grid's counts are here too.
-  { id: 'S3', label: 'raster', runs: 'field', deps: ['S2'], params: ['quality.cellPreview', 'quality.cellFinal', 'grid.nx', 'grid.ny'], inputs: ['tier', 'cellScale'] },
+  // RM: a rebuilt model's raster holds the file's left-out parts in glue mode, and its margin is wider there.
+  { id: 'S3', label: 'raster', runs: 'field', deps: ['S2'], params: ['quality.cellPreview', 'quality.cellFinal', 'grid.nx', 'grid.ny'], inputs: ['tier', 'cellScale', 'outside'] },
   { id: 'S4', label: 'envelope', runs: 'field', deps: ['S3'], params: RADIUS, inputs: [] },
   { id: 'S5', label: 'composite', runs: 'field', deps: ['S4'], params: ['grid.nx', 'grid.ny', 'grid.spacing', ...DOMAIN], inputs: [] },
   // The base layer fills D, which follows from S5's own inputs, so S6 needs no S10.
@@ -116,7 +123,8 @@ export const STAGES: readonly StageDef[] = [
       ...RADIUS, ...DOMAIN, 'grid.nx', 'grid.ny', 'grid.spacing', 'grid.edge',
       'base.thickness', 'base.cornerRadius', 'base.bedReliefHeight', 'base.bedReliefRun', 'cover.wall', 'cover.topCap', 'cover.topChamfer', ...JOINT, ...BOLTS,
     ],
-    inputs: [],
+    // RM: the box of a rebuilt model in glue mode holds the file's left-out parts too, as S3's raster does.
+    inputs: ['outside'],
   },
   { id: 'S11', label: 'tool', runs: 'solid', deps: ['S6', 'S10'], params: ['quality.tinTolPreview', 'quality.tinTolFinal'], inputs: ['tier'] },
   { id: 'S12', label: 'cover body', runs: 'solid', deps: ['S11', 'S10'], params: [], inputs: [] },

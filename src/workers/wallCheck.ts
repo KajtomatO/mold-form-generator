@@ -1,6 +1,7 @@
 import { transformPositions, type RigidTransform } from '../core/base/orient';
 import { buildField } from '../core/field/build';
 import { fieldSettings, planField } from '../core/field/grid';
+import { orientedOutside, withOutside } from '../core/field/outsidePart';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import type { Params } from '../core/params/schema';
 import type { Diagnostic } from '../core/report/diagnostics';
@@ -24,12 +25,15 @@ export interface WallInputs {
   transform: RigidTransform;
   /** MM2: a simplified model's proved error, which widens the margin as the export's does. */
   modelErrorMm?: number;
+  /** RM: a rebuilt model's left-out parts, in the file's coordinates, which a glue-mode export's field holds too. */
+  outside?: WeldedMesh | null;
 }
 
 /** The export's own field, built as T3 builds it before any raise of the margin, with its wall check. */
 export function checkWalls(params: Params, inputs: WallInputs, now: () => number): WallCheck {
   const t0 = now();
-  const mesh: WeldedMesh = { positions: transformPositions(inputs.mesh.positions, inputs.transform), indices: inputs.mesh.indices };
+  const model: WeldedMesh = { positions: transformPositions(inputs.mesh.positions, inputs.transform), indices: inputs.mesh.indices };
+  const mesh = inputs.outside ? withOutside(model, orientedOutside(inputs.outside, inputs.transform)) : model;
   const bounds = meshBounds(mesh.positions);
   const settings = fieldSettings(params, bounds, undefined, inputs.modelErrorMm ?? 0);
   const plan = planField(bounds, settings);

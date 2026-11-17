@@ -16,13 +16,13 @@ export interface WorkerMemory {
 
 /**
  * Where a figure comes from: main's own arrays ('page'), the preview's field.worker, its solid.worker, the
- * reports' field.worker, an export's worker while it runs, and the one that simplifies a model on opening
- * (MM2), each while it lives.
+ * reports' field.worker, an export's worker while it runs, the one that simplifies a model on opening (MM2), and
+ * the one that repairs a mesh (RM), each while it lives.
  */
-export type MemorySource = 'page' | 'field' | 'solid' | 'reports' | 'export' | 'simplify';
+export type MemorySource = 'page' | 'field' | 'solid' | 'reports' | 'export' | 'simplify' | 'repair';
 
 /** In the order the meter's tooltip lists them. */
-export const MEMORY_SOURCES: readonly MemorySource[] = ['page', 'field', 'solid', 'reports', 'export', 'simplify'];
+export const MEMORY_SOURCES: readonly MemorySource[] = ['page', 'field', 'solid', 'reports', 'export', 'simplify', 'repair'];
 
 /**
  * From this many bytes the meter turns amber and its tooltip says what to do. Set at MM1 from the meter's

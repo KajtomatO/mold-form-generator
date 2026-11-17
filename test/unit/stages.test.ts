@@ -14,7 +14,7 @@ import { exampleBytes, loadManifold, type ExampleId } from '../fixtures/loadExam
 
 const PATHS = Object.entries(PARAM_SCHEMA).flatMap(([group, defs]) => Object.entries(defs as Record<string, ParamDef>).map(([key, def]) => ({ path: `${group}.${key}` as ParamPath, def })));
 
-const INPUTS: StageInputs = { file: 'f1', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null };
+const INPUTS: StageInputs = { file: 'f1', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' };
 
 /** Values that the auto rules would not give, so each change is a real one. */
 const AUTO_VALUES: Partial<Record<ParamPath, number>> = {
@@ -90,11 +90,16 @@ describe('the stage table', () => {
     ['pins', { pins: [{ id: 'b0:pour:0', kind: 'pour', x: 1, y: 2 }] }],
     ['removed', { removed: ['b0:vent:0'] }],
     ['drag', { drag: { id: 'b0:pour:0', x: 1, y: 2 } }],
+    ['outside', { outside: 'glue' }],
   ];
   it.each(INPUT_CHANGES)('input %s invalidates exactly the stages the table names', (name, change) => {
     const before = stageKeys(defaultParams(), INPUTS);
     const after = stageKeys(defaultParams(), { ...INPUTS, ...change });
     expect(sorted(changedKeys(before, after))).toEqual(sorted(invalidatedByInput(name)));
+  });
+
+  it('RM: a rebuilt model\'s left-out parts in glue mode change its raster and box and what is built on them, never the import, the plane or the intervals', () => {
+    expect(sorted(invalidatedByInput('outside'))).toEqual(['S3', 'S4', 'S5', 'S6', 'S7', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15']);
   });
 
   it('a drag changes only the cut, and a pin also the placement before it', () => {

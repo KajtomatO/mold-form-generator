@@ -30,7 +30,7 @@ export interface ReadmeInput {
    * Null for an open mesh, which has no solid to measure. `simplify`, MM2: a simplified model's own error, also taken
    * off in glue mode. `copy`, GC: past G1.8's limit in merged mode, the gap is the copy's the base carries.
    */
-  clearance: { measured: number; error: number; raisedBy: number; simplify?: number; copy?: true } | null;
+  clearance: { measured: number; error: number; raisedBy: number; simplify?: number; copy?: true; near?: number; gap?: number; outside?: { gap: number | null; triangles: number } } | null;
   silicone: { ml: number; grams: number };
   /** S9: the demold estimate and the air, or null when the export could not work them out. */
   reports: GeometryReports | null;
@@ -56,7 +56,42 @@ export interface ReadmeInput {
     /** Where the base face's plane cuts the model: model_oriented.stl is the file trimmed there, of this many triangles. */
     trimmedTo?: number;
   };
+  /**
+   * RM: the mold was made from a repaired copy of the model (R43): what the file was, what the repair did, and how far
+   * the file lies from the copy. Only for a repaired model; `merged` says the base carries the copy, `trimmedTo`
+   * that model_oriented.stl, the file itself, was cut at the base face, to this many triangles.
+   */
+  repaired?: {
+    from: { name: string; triangles: number };
+    record: RepairedText;
+    merged: boolean;
+    trimmedTo?: number;
+  };
 }
+
+/** RM: what README.txt says of a repaired copy, as its record has it. */
+export interface RepairedText {
+  method: 'filled' | 'rebuilt';
+  cell: number | null;
+  cellAsked: number | null;
+  holes: number;
+  holeArea: number;
+  turned: number;
+  triangles: number;
+  nearMm: number;
+  outside: { triangles: number; farthestMm: number } | null;
+  original: { route: 'manifold' | 'merged' | 'soup' };
+  simplified: { triangles: number; target: number; errorMm: number } | null;
+}
+
+/** RM: what a fill did, as README.txt says it: "its hole of 3.1 mm2 closed", or its faces turned. */
+function filled(record: RepairedText): string {
+  const closed = record.holes > 0 ? `${record.holes === 1 ? `its hole of ${record.holeArea.toFixed(1)} mm2` : `its ${thousands(record.holes)} holes, ${record.holeArea.toFixed(1)} mm2 in all,`} closed` : '';
+  const turned = record.turned > 0 ? `${thousands(record.turned)} ${record.turned === 1 ? 'face' : 'faces'} turned the right way` : '';
+  return [closed, turned].filter(Boolean).join(' and ');
+}
+
+const grid = (record: RepairedText): string => `${(record.cell ?? 0).toFixed(2)} mm`;
 
 const thousands = (n: number): string => n.toLocaleString('en-US');
 
@@ -122,8 +157,13 @@ export function exportReadme(input: ReadmeInput): string {
   out.push('', 'base.stl');
   const holes = bolts ? ` A countersunk hole in each corner takes a bolt from below.` : '';
   const simplified = input.simplified;
-  // MM2: in merged mode the base carries the copy the mold was made from, not the file.
-  const carried = simplified ? `, a copy of ${simplified.from.name} simplified to ${thousands(simplified.record.triangles)} triangles, ${within(simplified).replace(' of it', ' of your file')}, so the silicone takes that copy's shape,` : ',';
+  // MM2: in merged mode the base carries the copy the mold was made from, not the file. RM: so too a repaired copy.
+  const repaired = input.repaired;
+  const carried = simplified
+    ? `, a copy of ${simplified.from.name} simplified to ${thousands(simplified.record.triangles)} triangles, ${within(simplified).replace(' of it', ' of your file')}, so the silicone takes that copy's shape,`
+    : repaired
+      ? `, a repaired copy of ${repaired.from.name}, ${repaired.record.method === 'filled' ? `${filled(repaired.record)}${repaired.record.simplified ? `, then simplified to ${thousands(repaired.record.simplified.triangles)} triangles` : ''}` : `rebuilt as one closed solid on a ${grid(repaired.record)} grid`}, so the silicone takes that copy's shape,`
+      : ',';
   out.push(...wrap(glue
     ? `The base plate, with a ridge that fits the groove in the cover and a shallow pocket that your model is glued into.${holes} Print it as it is saved, flat underside on the bed.`
     : `The base plate with your model built onto it${carried} and a ridge that fits the groove in the cover.${holes} Print it as it is saved, flat underside on the bed. The model's own overhangs may need supports in your slicer.`, '  '));
@@ -141,7 +181,25 @@ export function exportReadme(input: ReadmeInput): string {
       : ',';
     // MM2's review: the thickness is not measured on this file but held for it, through the copy, less its error.
     const madeFrom = simplified ? ` The mold was made from a copy simplified to ${thousands(simplified.record.triangles)} triangles ${within(simplified)}, and the silicone thickness was checked to hold for this file: measured on the copy, less the copy's error.` : '';
-    out.push(...wrap(`Your model${own} turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base.${madeFrom}${quantity}${parts} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
+    if (repaired) {
+      // RM, decision C: the maker's own file, which a slicer may find broken, and the closed copy beside it.
+      const { record } = repaired;
+      const open = record.original.route === 'soup';
+      const as = repaired.trimmedTo === undefined
+        ? `, ${repaired.from.name} as you opened it, with all its ${thousands(repaired.from.triangles)} triangles,`
+        : `, ${repaired.from.name} as you opened it, trimmed where the base face cuts it, ${thousands(repaired.trimmedTo)} triangles as written${open ? ', its cut left open as the rest of your file is' : ''},`;
+      const broken = open ? 'a mesh that is not a closed solid may slice badly' : 'a mesh that folds through itself may slice badly';
+      const held = record.method === 'filled'
+        ? record.simplified
+          ? ' Every triangle of it is in the repaired copy, which was then simplified, so the silicone thickness was checked to hold for it: measured on the copy, less the copy\'s error.'
+          : ' Every triangle of it is in the repaired copy, so the silicone thickness measured on the copy holds for it.'
+        : record.outside && input.clearance?.outside?.gap === null
+          ? ' The silicone thickness was checked to hold for it where it lies near the repaired copy, measured on the copy less how far your file lies outside it; the parts of your file the repair left out are held by the mold, but their silicone thickness is not checked (see Warnings).'
+          : ` The silicone thickness was checked to hold for it: measured on the repaired copy less how far your file lies outside it${record.outside ? ', and on the parts of your file the repair left out on their own' : ''}.`;
+      out.push(...wrap(`Your model${as} turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base. This is your original file, not the repaired copy the mold was made from: ${broken}, so check it in your slicer, or print the closed copy instead, which Save repaired STL in the app saves${record.outside ? ', though it lacks the parts the repair left out' : ''}.${held}${quantity}${parts} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
+    } else {
+      out.push(...wrap(`Your model${own} turned so that its base face lies flat at the bottom, ready to glue into ${copies === 1 ? 'the pocket' : 'a pocket'} of the base.${madeFrom}${quantity}${parts} Print it however suits it best, for example on a resin printer, and glue its flat face into the pocket.`, '  '));
+    }
   }
   if (has('funnel.stl')) {
     out.push('', 'funnel.stl');
@@ -161,7 +219,9 @@ export function exportReadme(input: ReadmeInput): string {
   // MM2: the copy is made again the same way from the same file, which the record's SHA-256 checks.
   const again = simplified
     ? ` Save project in the app keeps the simplified copy, so the same mold comes back from the .moldproj. To make it again from ${input.model}, open it in this version of the app and simplify it to ${thousands(simplified.record.target)} triangles, which gives the same copy, then open this ZIP or its project.json.`
-    : '';
+    : repaired
+      ? ` Save project in the app keeps the repaired copy, so the same mold comes back from the .moldproj. To make it again from ${input.model}, open it in this version of the app${repaired.record.simplified ? `, simplify it to ${thousands(repaired.record.simplified.target)} triangles` : ''} and use Repair mesh${repaired.record.method === 'rebuilt' ? ` with a ${grid(repaired.record)} grid` : ''}, which gives the same copy, then open this ZIP or its project.json.`
+      : '';
   out.push(...wrap(`Every number of this export, and the settings it was made with. To make the same mold again, open ${input.model} in the app, then open this ZIP or its project.json there: the settings, the base face and the openings come back as they were. project.json records the STL's SHA-256, so the app can tell whether the model is the same.${again}`, '  '));
 
   if (bolts) {
@@ -293,7 +353,8 @@ export function exportReadme(input: ReadmeInput): string {
           : `, measured on a simplified copy of the model with its error of ${clearance.error.toFixed(3)} mm taken off`
         : '';
     const between = simplified?.merged ? 'between the simplified model the base carries and the cover' : clearance.copy ? 'between the simplified copy the base carries and the cover' : 'between the model and the cover';
-    item(`Measured clearance: ${clearance.measured.toFixed(2)} mm at the thinnest point ${between}${decimated}.`);
+    if (repaired) item(repairedClearance(repaired, clearance, t));
+    else item(`Measured clearance: ${clearance.measured.toFixed(2)} mm at the thinnest point ${between}${decimated}.`);
     if (clearance.raisedBy > 0) item(`The first build measured less than ${mm(t, 2)}, so the safety margin was raised by ${clearance.raisedBy.toFixed(2)} mm and the mold was built again. The cavity and the box are a little larger than the preview showed.`);
   } else {
     item(`The clearance could not be measured, as the model's mesh is not closed. The mold is planned to leave at least ${mm(t, 2)}, but that is not verified.`);
@@ -306,6 +367,7 @@ export function exportReadme(input: ReadmeInput): string {
   item(`Mold box: ${input.box.map((v) => v.toFixed(1)).join(' x ')} mm, with a base ${mm(params.base.thickness)} thick.`);
   if (input.tiles > 1 && input.pitch) item(`${params.grid.nx} x ${params.grid.ny} copies of the model, every ${input.pitch[0].toFixed(2)} x ${input.pitch[1].toFixed(2)} mm.`);
   item(glue ? 'Mode A: the model is printed on its own and glued into the base.' : 'Mode B: the model is part of the base.');
+  if (repaired) item(repairedLine(repaired));
   if (simplified) {
     const { from, record } = simplified;
     item(`Simplified: ${from.name} has ${thousands(from.triangles)} triangles, and the mold was made from a copy of ${thousands(record.triangles)} (asked for ${thousands(record.target)}), whose surface lies ${within(simplified).replace(' of it', ` of your file's`)}, proved over all of it; the safety margin was widened by that much.`);
@@ -339,6 +401,52 @@ export function exportReadme(input: ReadmeInput): string {
 }
 
 const figure = (value: number): string => String(Number(value.toFixed(4)));
+
+/** "1 triangle" or "2,261 triangles". */
+const trianglesText = (n: number): string => `${thousands(n)} ${n === 1 ? 'triangle' : 'triangles'}`;
+
+/**
+ * RM: how far a rebuilt copy's file lies from it, in one sentence: inside it or within e_near of it, proved, but for
+ * the parts the repair left out. With e_near 0 there is no distance to give, and the margin is not widened.
+ */
+function nearSentence(record: RepairedText, merged: boolean): string {
+  const near = record.nearMm > 0 ? `inside the copy or within ${record.nearMm.toFixed(3)} mm of it` : 'inside the copy';
+  const far = record.outside ? ` but ${trianglesText(record.outside.triangles)} up to ${record.outside.farthestMm.toFixed(2)} mm away that the repair left out${merged ? ', which the cast will not have' : ''}` : '';
+  const widened = merged || record.nearMm === 0 ? '' : `; the safety margin was widened by ${record.nearMm.toFixed(3)} mm`;
+  return `Your file lies ${near}, proved over all of it${far}${widened}.`;
+}
+
+/** RM: This mold's line on a repaired copy: what the file was, what the repair made of it, and how far it lies. */
+function repairedLine(repaired: NonNullable<ReadmeInput['repaired']>): string {
+  const { from, record, merged } = repaired;
+  const what = record.original.route === 'soup' ? 'is not a closed solid' : 'folds through itself';
+  if (record.method === 'filled') {
+    const then = record.simplified ? `, then simplified to ${thousands(record.simplified.triangles)} triangles within ${record.simplified.errorMm.toFixed(3)} mm of it${merged ? '' : `; the safety margin was widened by ${record.nearMm.toFixed(3)} mm`}` : '';
+    return `Repaired: ${from.name} ${what}, so the mold was made from a repaired copy: ${filled(record)}, every triangle of your file kept${then}.`;
+  }
+  return `Repaired: ${from.name} ${what}, so the mold was made from a repaired copy, rebuilt as one closed solid on a ${grid(record)} grid (${record.cellAsked === null ? 'auto' : 'as set'}), ${thousands(record.triangles)} triangles. ${nearSentence(record, merged)}`;
+}
+
+/**
+ * RM: the measured clearance of a repaired model, which in glue mode holds for the maker's file (D26). Where the
+ * parts the repair left out are too many to measure, the figure holds for the rest of the file only, and the
+ * clearance round them is planned, not verified, as an open mesh's is.
+ */
+function repairedClearance(repaired: NonNullable<ReadmeInput['repaired']>, clearance: NonNullable<ReadmeInput['clearance']>, t: number): string {
+  const measured = `Measured clearance: ${clearance.measured.toFixed(2)} mm`;
+  const lighter = clearance.error > 0 ? `, measured on a lighter copy of it less ${clearance.error.toFixed(3)} mm for that copy's error` : '';
+  if (repaired.merged) return `${measured} at the thinnest point between the repaired copy the base carries and the cover${lighter}.`;
+  const near = clearance.near ?? 0;
+  if (repaired.record.method === 'filled' && near === 0) return `${measured} at the thinnest point between the model and the cover, measured on the repaired copy${lighter}, which holds every triangle of your file.`;
+  const copyGap = (clearance.gap ?? clearance.measured + clearance.error + near) - clearance.error;
+  const less = near > 0 ? `, less ${near.toFixed(3)} mm for how far your file lies outside it` : '';
+  const far = clearance.outside;
+  if (far && far.gap === null) {
+    return `The clearance could not be measured for all of your file. Where it lies near the repaired copy or inside it, it is ${clearance.measured.toFixed(2)} mm at the thinnest point: on the copy${lighter}, ${copyGap.toFixed(2)} mm${less}. The ${trianglesText(far.triangles)} of your file the repair left out are too many to measure: the mold is planned to leave at least ${mm(t, 2)} round them, but that is not verified.`;
+  }
+  const left = far ? `; on the ${trianglesText(far.triangles)} of your file the repair left out, measured on ${far.triangles === 1 ? 'its' : 'their'} own, ${far.gap!.toFixed(2)} mm` : '';
+  return `${measured} at the thinnest point between your file and the cover. On the repaired copy${lighter}, it is ${copyGap.toFixed(2)} mm${less}${left}.`;
+}
 
 /** One setting as README.txt lists it: its value and unit, or what an auto setting came to. */
 function settingText(path: string, def: ParamDef, value: unknown, resolved: number | undefined): string {

@@ -4,7 +4,8 @@ import { PARAM_SCHEMA, SCHEMA_VERSION, type ParamDef, type Params } from '../cor
 import { DEFAULT_PLANE, type PlaneChoice } from '../workers/fieldStages';
 import { entryDef } from '../ui/layout';
 import type { ProjectFile, StoredPlane } from './project';
-import type { SimplifiedEntry } from './simplified';
+import type { RepairedEntry, SimplifiedEntry } from './simplified';
+import { REPAIR_CELL_MAX, REPAIR_CELL_MIN } from '../core/mesh/repair';
 import { TARGET_RANGE } from './largeModel';
 import type { ParamPath } from './stages';
 
@@ -280,11 +281,16 @@ function readPins(raw: unknown): OpeningPin[] {
   });
 }
 
-const KNOWN = new Set(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'simplified', 'params', 'plane', 'pins', 'removed']);
+const KNOWN = new Set(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'simplified', 'repaired', 'params', 'plane', 'pins', 'removed']);
 
 /** Said when a project's record of its simplified copy cannot be used: the file then opens as it is. */
 export function simplifiedDropped(model: string): string {
   return `The simplified copy saved with this project could not be used, so ${model} opened as it is. Use Simplify… in the Model section to simplify it again.`;
+}
+
+/** RM: said when a project's record of its repaired copy cannot be used: the file then opens as it is. */
+export function repairedDropped(model: string): string {
+  return `The repaired copy saved with this project could not be used, so ${model} opened as it is. Use Repair mesh in the Model section to repair it again.`;
 }
 
 /** The original's count a record's target must be under. */
@@ -321,6 +327,72 @@ function readSimplified(raw: unknown, model: string, notes: ProjectNote[]): Simp
 }
 
 /**
+ * RM: the record of a repaired copy (R43), checked: a method of the two, a grid from 0.1 to 2 mm or none, whole
+ * counts, finite figures of 0 or more, the left-out parts' runs sorted, apart and within the file's triangles, the
+ * file's own import, at most 20 marks, and a SHA-256. One that fails is left out with a warning, as the file itself
+ * still makes a mold. Built field by field in the order the app writes it, so a project saved again keeps its bytes.
+ */
+function readRepaired(raw: unknown, model: string, notes: ProjectNote[]): RepairedEntry | undefined {
+  if (raw === undefined) return undefined;
+  const whole = (value: unknown): value is number => finite(value) && Number.isInteger(value) && value >= 0;
+  const size = (value: unknown): value is number => finite(value) && value >= 0;
+  const point = (value: unknown): value is [number, number, number] => Array.isArray(value) && value.length === 3 && value.every(finite);
+  const cell = (value: unknown): boolean => value === null || (finite(value) && value >= REPAIR_CELL_MIN && value <= REPAIR_CELL_MAX);
+  const from = isObject(raw) ? raw.from : null;
+  const original = isObject(raw) ? raw.original : null;
+  const far = isObject(raw) ? raw.outside : null;
+  const simplified = isObject(raw) ? raw.simplified : null;
+  const fileTriangles = isObject(from) && whole(from.triangles) ? from.triangles : 0;
+  const runsValid = (runs: unknown): boolean => {
+    if (!Array.isArray(runs) || runs.length === 0) return false;
+    let end = 0;
+    for (const run of runs) {
+      if (!Array.isArray(run) || run.length !== 2 || !whole(run[0]) || !whole(run[1]) || run[1] < 1 || run[0] < end) return false;
+      end = run[0] + run[1];
+    }
+    return end <= fileTriangles;
+  };
+  const valid =
+    isObject(raw) && isObject(from) &&
+    (from.format === 'binary' || from.format === 'ascii') && whole(from.trianglesInFile) && whole(from.triangles) && from.triangles > 0 &&
+    (raw.method === 'filled' || raw.method === 'rebuilt') && cell(raw.cell) && cell(raw.cellAsked) && (raw.method === 'rebuilt') === (raw.cell !== null) &&
+    whole(raw.holes) && size(raw.holeArea) && whole(raw.turned) && whole(raw.triangles) && raw.triangles > 0 && size(raw.nearMm) &&
+    (far === null || (isObject(far) && runsValid(far.runs) && whole(far.triangles) && far.triangles > 0 && size(far.area) && size(far.farthestMm) && point(far.at))) &&
+    (raw.addedMm === null || size(raw.addedMm)) && (raw.addedAt === null || point(raw.addedAt)) && finite(raw.volume) && raw.volume > 0 &&
+    isObject(original) && (original.route === 'manifold' || original.route === 'merged' || original.route === 'soup') && typeof original.flipped === 'boolean' && typeof original.inverted === 'boolean' &&
+    (simplified === null || (isObject(simplified) && whole(simplified.triangles) && whole(simplified.target) && size(simplified.maxErrorMm) && size(simplified.errorMm) && (simplified.stoppedBy === 'target' || simplified.stoppedBy === 'error'))) &&
+    Array.isArray(raw.marks) && raw.marks.length <= 20 && raw.marks.every(point) &&
+    typeof raw.sha256 === 'string' && /^[0-9a-f]{64}$/.test(raw.sha256);
+  if (!valid) {
+    notes.push({ severity: 'warning', message: repairedDropped(model) });
+    return undefined;
+  }
+  const r = raw as Json & { from: Json; original: Json };
+  const xyz = (value: unknown): [number, number, number] => [...(value as number[])] as [number, number, number];
+  const o = far as (Json & { runs: [number, number][] }) | null;
+  const s = simplified as Json | null;
+  return {
+    from: { format: r.from.format as 'binary' | 'ascii', trianglesInFile: r.from.trianglesInFile as number, triangles: r.from.triangles as number },
+    method: r.method as 'filled' | 'rebuilt',
+    cell: r.cell as number | null,
+    cellAsked: r.cellAsked as number | null,
+    holes: r.holes as number,
+    holeArea: r.holeArea as number,
+    turned: r.turned as number,
+    triangles: r.triangles as number,
+    nearMm: r.nearMm as number,
+    outside: o ? { runs: o.runs.map(([a, b]) => [a, b] as [number, number]), triangles: o.triangles as number, area: o.area as number, farthestMm: o.farthestMm as number, at: xyz(o.at) } : null,
+    addedMm: r.addedMm as number | null,
+    addedAt: r.addedAt === null ? null : xyz(r.addedAt),
+    volume: r.volume as number,
+    original: { route: r.original.route as 'manifold' | 'merged' | 'soup', flipped: r.original.flipped as boolean, inverted: r.original.inverted as boolean },
+    simplified: s ? { triangles: s.triangles as number, target: s.target as number, maxErrorMm: s.maxErrorMm as number, errorMm: s.errorMm as number, stoppedBy: s.stoppedBy as 'target' | 'error' } : null,
+    marks: (r.marks as unknown[]).map(xyz),
+    sha256: r.sha256 as string,
+  };
+}
+
+/**
  * A migrated project.json checked field by field: the project, or a ProjectError naming `name` with the
  * first reason it cannot be used. The model and the settings must be there; any other field the file
  * lacks takes its default, or is unknown, with a note.
@@ -351,6 +423,10 @@ function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
   const extra = Object.keys(file).filter((key) => !KNOWN.has(key));
   if (extra.length > 0) notes.push({ severity: 'warning', message: `Fields this version does not know, left out: ${extra.join(', ')}.` });
   const simplified = readSimplified(file.simplified, file.model, notes);
+  // RM: a model is a simplified copy or a repaired one, never both: with both, the repaired record is left out.
+  let repaired: RepairedEntry | undefined;
+  if (!simplified) repaired = readRepaired(file.repaired, file.model, notes);
+  else if (file.repaired !== undefined) notes.push({ severity: 'warning', message: repairedDropped(file.model) });
   return {
     schemaVersion: SCHEMA_VERSION,
     appVersion,
@@ -358,6 +434,7 @@ function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
     modelSha256: sha,
     basePlane: readBasePlane(file.basePlane ?? null),
     ...(simplified ? { simplified } : {}),
+    ...(repaired ? { repaired } : {}),
     params: readParams(file.params, notes),
     plane: missing('plane') ? DEFAULT_PLANE : readPlane(file.plane),
     pins: readPins(file.pins ?? []),

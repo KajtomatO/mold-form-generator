@@ -206,6 +206,15 @@ function neighboursOf(mesh: WeldedMesh): Int32Array {
   return across;
 }
 
+/**
+ * A surface SurfaceIndex.bound measures: a WeldedMesh, or (RM) one whose positions are float64, as pieces cut from a
+ * mesh's triangles keep their cut points exactly where they lie.
+ */
+export interface SurfaceMesh {
+  positions: Float32Array | Float64Array;
+  indices: Uint32Array;
+}
+
 /** What SurfaceIndex.bound proved of one surface against the index's mesh. */
 export interface DeviationBound {
   /** At least the distance from every point of the surface to the mesh, in mm: proved, not sampled. */
@@ -258,9 +267,12 @@ export class SurfaceIndex {
    * budget suffices, and is a bound wherever it does not. `limit` (at most the reach) marks the triangles not
    * proved within it as `past`; null measures only, and then a point with nothing within the reach leaves
    * `beyond` set, and the caller asks again with a larger reach. `at`, if given, is the vertices' scratch, one
-   * float64 per vertex of `surface`, so a caller can count it.
+   * float64 per vertex of `surface`, so a caller can count it. `isolate` (RM, with a limit) keeps a point found past
+   * the limit from raising the goal of the rest: its triangle is past, and the figure is then the bound over the
+   * triangles not past alone, at the cost of one pass, where by default the goal rises to the limit with it. MM2's
+   * and GC's calls leave it off, so their copies and figures do not change.
    */
-  bound(surface: WeldedMesh, limit: number | null, slack = BOUND_SLACK_MM, at = new Float64Array(surface.positions.length / 3), budget = PIECE_BUDGET): DeviationBound {
+  bound(surface: SurfaceMesh, limit: number | null, slack = BOUND_SLACK_MM, at = new Float64Array(surface.positions.length / 3), budget = PIECE_BUDGET, isolate = false): DeviationBound {
     if (limit !== null && limit > this.reach) throw new Error(`A limit of ${limit} mm needs a reach of at least as much, not ${this.reach} mm.`);
     const Q = this.mesh.positions, J = this.mesh.indices, cell = this.cell;
     const { starts, list, mask } = this.buckets;
@@ -298,7 +310,7 @@ export class SurfaceIndex {
     for (let v = 0; v < V; v++) {
       const d = nearest(P[v * 3], P[v * 3 + 1], P[v * 3 + 2], Math.min(found2, limit2));
       at[v] = d;
-      measured(d);
+      if (!(isolate && d > limit2)) measured(d);
     }
     /** The most squared distance from a piece's `n` corners to triangle `t`, ending once past `stop2`. */
     const corners = (poly: number[], n: number, t: number, stop2: number): number => {
@@ -371,7 +383,7 @@ export class SurfaceIndex {
       const dc = nearestOrProof(poly, n, cx, cy, cz, tried);
       if (dc < 0) return;
       const near = hit;
-      measured(dc);
+      if (!(isolate && dc > limit2)) measured(dc);
       if (dc > limit2) {
         failed = true;
         return;

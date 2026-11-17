@@ -12,6 +12,7 @@ import type { Diagnostic } from '../core/report/diagnostics';
 import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
 import type { Marker, Pipeline, ShownDiagnostic } from './pipeline';
 import { paramValue, type ParamPath } from './stages';
+import type { Clearance } from '../workers/exportJob';
 
 /** Values the sidebar and status strip show, read off what the pipeline has on screen. Pure: no DOM. */
 
@@ -23,6 +24,15 @@ export function moldBox(rim: Rim): [number, number, number] {
 /** The same box as corners in mold coordinates: the cover's outline, from the base's underside up to Zt. */
 export function moldExtent(rim: Rim): { min: [number, number, number]; max: [number, number, number] } {
   return { min: [rim.O.x0, rim.O.y0, -rim.Tb], max: [rim.O.x1, rim.O.y1, rim.Zt] };
+}
+
+/**
+ * RM: how many triangles of the file a rebuilt model's last export left out and could not measure the silicone round
+ * (past OUTSIDE_MEASURE_LIMIT), or null where it measured the whole model: then the status strip says unverified,
+ * as report.json's null does, and not the figure, which holds for the rest of the file only (RM's review).
+ */
+export function unmeasuredParts(clearance: Pick<Clearance, 'outside'> | null): number | null {
+  return clearance?.outside && clearance.outside.gap === null ? clearance.outside.triangles : null;
 }
 
 export function modelSize(bounds: Bounds): [number, number, number] {
@@ -71,7 +81,8 @@ export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
     case 'base.planeTol':
       return oriented ? oriented.planeTol : null;
     case 'grid.spacing':
-      return oriented ? exportPlan(oriented.bounds, fieldSettings(params, oriented.bounds, undefined, pipeline.modelErrorMm())).autoSpacing : null;
+      // RM: the plan's box, which a rebuilt model's left-out parts widen in glue mode.
+      return oriented ? exportPlan(pipeline.planBounds()!, fieldSettings(params, pipeline.planBounds()!, undefined, pipeline.modelErrorMm())).autoSpacing : null;
     case 'grid.edge':
       return pipeline.field?.value.rim.edge.minimum ?? null;
     case 'quality.cellPreview':
@@ -175,7 +186,7 @@ const RANK = { error: 0, warning: 1, info: 2 } as const;
 export function printabilityOnScreen(pipeline: Pipeline): Diagnostic[] {
   const field = pipeline.field?.value, oriented = pipeline.oriented?.value;
   if (!field || !oriented) return [];
-  return printabilityDiagnostics(pipeline.params, field.rim, { offsets: field.mold.offsets, modelTop: oriented.bounds.max[2] });
+  return printabilityDiagnostics(pipeline.params, field.rim, { offsets: field.mold.offsets, modelTop: (pipeline.planBounds() ?? oriented.bounds).max[2] });
 }
 
 /**

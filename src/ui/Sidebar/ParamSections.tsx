@@ -119,7 +119,8 @@ export function CoverSection() {
 export function GridSection() {
   const store = useStore();
   const { pipeline } = store;
-  const bounds = pipeline.oriented?.value.bounds;
+  // RM: the plan's box, which a rebuilt model's left-out parts widen in glue mode.
+  const bounds = pipeline.planBounds();
   const params = store.project.value.params;
   const grid = params.grid.nx * params.grid.ny > 1;
   const pitch = bounds && grid ? exportPitch(params, bounds, store.pipeline.modelErrorMm()) : null;

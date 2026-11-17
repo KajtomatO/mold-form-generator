@@ -64,6 +64,11 @@ export function simplifiedName(name: string): string {
   return `${name.replace(/\.stl$/i, '')}-simplified.stl`;
 }
 
+/** RM: what Save repaired STL names the repaired copy. */
+export function repairedName(name: string): string {
+  return `${name.replace(/\.stl$/i, '')}-repaired.stl`;
+}
+
 /**
  * The whole browser's highest memory in Firefox at MM2, in GB, as the prompt quotes it: each entry the highest
  * peak measured at or below its count (memory is not monotone in triangles, so a smaller model can take more),

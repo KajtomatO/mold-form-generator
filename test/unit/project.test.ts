@@ -1247,3 +1247,71 @@ describe('save and open with the real pipeline on jersey', () => {
     expect(saves).toHaveLength(1);
   });
 });
+
+describe('RM: the record of a repaired copy in project.json', () => {
+  const sha = 'a'.repeat(64);
+  const entry = {
+    from: { format: 'binary', trianglesInFile: 14, triangles: 14 },
+    method: 'rebuilt',
+    cell: 0.5,
+    cellAsked: 0.5,
+    holes: 1,
+    holeArea: 0,
+    turned: 0,
+    triangles: 70,
+    nearMm: 0.44,
+    outside: { runs: [[12, 2]], triangles: 2, area: 25, farthestMm: 5, at: [0, 0, 17] },
+    addedMm: 0.4,
+    addedAt: [1, 2, 3],
+    volume: 7188.9,
+    original: { route: 'soup', flipped: false, inverted: false },
+    simplified: null,
+    marks: [[0, 0, 17]],
+    sha256: sha,
+  };
+  const read = (repaired: unknown): { file: ProjectFile; notes: string[] } => {
+    const file = { ...projectFile({ params: defaultParams(), plane: DEFAULT_PLANE, pins: [], removed: [] }, 'finned.stl', { modelSha256: 'b'.repeat(64), basePlane: null }), repaired };
+    const { file: out, notes } = readProjectJson(JSON.stringify(file));
+    return { file: out, notes: notes.map((n) => n.message) };
+  };
+  const dropped = 'The repaired copy saved with this project could not be used, so finned.stl opened as it is. Use Repair mesh in the Model section to repair it again.';
+
+  it('keeps a valid record field for field, in the order the app writes it, so a project saved again keeps its bytes', () => {
+    const { file, notes } = read(entry);
+    expect(notes).toEqual([]);
+    expect(file.repaired).toEqual(entry);
+    expect(JSON.stringify(file.repaired)).toBe(JSON.stringify(entry));
+    expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'repaired', 'params', 'plane', 'pins', 'removed']);
+    // A fill: no grid, nothing left out.
+    expect(read({ ...entry, method: 'filled', cell: null, cellAsked: null, outside: null, nearMm: 0 }).notes).toEqual([]);
+  });
+
+  it.each([
+    ['a method it does not know', { method: 'melted' }],
+    ['a grid past 2 mm', { cell: 2.5 }],
+    ['a grid under 0.1 mm', { cellAsked: 0.05 }],
+    ['a rebuild with no grid', { cell: null }],
+    ['a count that is not whole', { holes: 1.5 }],
+    ['a negative figure', { nearMm: -0.1 }],
+    ['no volume', { volume: 0 }],
+    ['runs out of order', { outside: { ...entry.outside, runs: [[12, 2], [3, 1]] } }],
+    ['runs past the file', { outside: { ...entry.outside, runs: [[13, 2]] } }],
+    ['an empty run', { outside: { ...entry.outside, runs: [[12, 0]] } }],
+    ['a route it does not know', { original: { route: 'cloud', flipped: false, inverted: false } }],
+    ['more than 20 marks', { marks: Array.from({ length: 21 }, () => [0, 0, 0]) }],
+    ['a hash that is not one', { sha256: 'xyz' }],
+    ['no record of the file', { from: undefined }],
+  ])('leaves out a record with %s, with the warning, and opens the file as it is', (_, change) => {
+    const { file, notes } = read({ ...entry, ...change });
+    expect(file.repaired).toBeUndefined();
+    expect(notes).toEqual([dropped]);
+  });
+
+  it('leaves out a repaired record beside a simplified one, as a model is one copy or the other', () => {
+    const file = { ...projectFile({ params: defaultParams(), plane: DEFAULT_PLANE, pins: [], removed: [] }, 'finned.stl', { modelSha256: 'b'.repeat(64), basePlane: null }), simplified: { from: { format: 'binary', trianglesInFile: 14, triangles: 14 }, triangles: 10, target: 10, maxErrorMm: 0.05, errorMm: 0.01, stoppedBy: 'target', sha256: sha }, repaired: entry };
+    const { file: out, notes } = readProjectJson(JSON.stringify(file));
+    expect(out.simplified).toBeTruthy();
+    expect(out.repaired).toBeUndefined();
+    expect(notes.map((n) => n.message)).toEqual([dropped]);
+  });
+});

@@ -46,7 +46,7 @@ Mode, under Base, chooses how the model and the base come together: Glue in (A) 
 
 Use Mode A for a model that stands on several footprints, such as the wolf on its feet. Silicone flows between the feet and holds the model in a loop there, and the Demold report marks those places to cut. In Mode A the base is a separate piece: the glue joint is only as large as the footprints, so you can lever the base off and free the model from the silicone on its own. In Mode B the plate is part of the model, so it stays on the model and is in the way while you cut between the feet. Mode A also lets the model print in a pose that needs no supports under its body.
 
-Merged mode is off for a mesh with holes (an open mesh), and the reason shows under Mode.
+Merged mode is off for a mesh with holes (an open mesh), and the reason shows under Mode. Repair mesh, under the file row in the Model section, makes a closed copy of such a mesh, and the mold is made from it, so merged mode works with it. In Mode A, `model_oriented.stl` is still your own file, not the repaired copy: if your slicer shows it broken, print the repaired copy instead, which Save repaired STL saves; it may lack a fin or a wall thinner than the repair's grid, which README.txt says when it does.
 
 ### A model of several parts
 

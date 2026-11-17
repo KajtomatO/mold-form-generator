@@ -2,6 +2,7 @@ import type { ErrorStatus, Manifold, Mesh } from 'manifold-3d';
 import type { Diagnostic } from '../report/diagnostics';
 import type { Arena } from '../solid/arena';
 import { MISSING_SURFACE_MM2, type MeshAudit, type OpenLoop } from './audit';
+import { windingFolds } from './folds';
 import { touchingGroups } from './touching';
 import { meshBounds, type WeldedMesh } from './weld';
 
@@ -50,6 +51,13 @@ export interface SolidReport {
   modeBAvailable: boolean;
   /** Soup mode has no solid for minGap to measure, so its cavity clearance stays nominal. */
   clearanceVerified: boolean;
+  /**
+   * RM: the places where a closed mesh folds through itself (windingFolds on the imported mesh), which the repair is
+   * offered for; 0 in soup mode, where an open surface's winding says nothing.
+   */
+  folds: number;
+  /** A point in each such place, at most FOLD_MARKS, in the mesh's own coordinates, for Show. */
+  foldAt: [number, number, number][];
   diagnostics: Diagnostic[];
 }
 
@@ -217,7 +225,7 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
       code: 'soup-mode',
       severity: 'warning',
       // Said whatever the mode is set to, as one set before this model, or by a project file, stays set.
-      message: `The mesh is not a closed solid (${defects}), so merged mode cannot be used with it, and the cover and the glue-mode base are built from its surface as it is. Without a closed model the silicone thickness cannot be measured: it stays as planned, and no export can check it. To use merged mode and a measured thickness, repair the mesh, for example with your slicer's repair, and open it again.`,
+      message: `The mesh is not a closed solid (${defects}), so merged mode cannot be used with it, and the cover and the glue-mode base are built from its surface as it is. Without a closed model the silicone thickness cannot be measured: it stays as planned, and no export can check it. To use merged mode and a measured thickness, use Repair mesh in the Model section to make a closed copy of it.`,
     },
   ];
   if (audit.openArea >= MISSING_SURFACE_MM2) {
@@ -259,6 +267,8 @@ function soupResult(welded: WeldedMesh, audit: MeshAudit, failure: ErrorStatus |
       overlapVolume: 0,
       modeBAvailable: false,
       clearanceVerified: false,
+      folds: 0,
+      foldAt: [],
       diagnostics,
     },
   };
@@ -405,11 +415,21 @@ export function importSolid(arena: Arena, welded: WeldedMesh, audit: MeshAudit):
     }
   }
 
+  // RM: Manifold takes a mesh that folds through itself, so its volume and a merged base can be wrong without a word.
+  const folds = windingFolds(result);
+  if (folds.places > 0) {
+    diagnostics.push({
+      code: 'mesh-folds',
+      severity: 'warning',
+      message: `The mesh folds through itself in ${folds.places} place${folds.places === 1 ? '' : 's'}, where its surface turns inside out, so its volume and a merged base may be wrong. Use Repair mesh in the Model section to rebuild it as one closed solid.`,
+    });
+  }
+
   return {
     solid,
     mesh: result,
     openLoops: [],
-    report: { route, failure, flipped, shells, bodies, solidVolume, voidVolume, overlapVolume, modeBAvailable: true, clearanceVerified: true, diagnostics },
+    report: { route, failure, flipped, shells, bodies, solidVolume, voidVolume, overlapVolume, modeBAvailable: true, clearanceVerified: true, folds: folds.places, foldAt: folds.at, diagnostics },
     joined,
   };
 }

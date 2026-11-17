@@ -9,7 +9,7 @@ import { downloadName, saveBytes } from './download';
 import { History, sameProject } from './history';
 import { realTimers, type Timers } from './jobGate';
 import { arrayBytes, type MemorySource, type WorkerMemory } from './memory';
-import type { Pipeline, Project } from './pipeline';
+import type { Pipeline, Project, RepairOffer } from './pipeline';
 import { projectFile, type ProjectFile, type StoredPlane } from './project';
 import { fileKind, fileKindOfHead, holdsModel, PROJECT_EXTENSION } from './projectArchive';
 import { OPEN_INSTEAD, ProjectError, type ProjectNote } from './projectFile';
@@ -18,9 +18,10 @@ import { changedPaths, PARAM_PATHS, paramDef, setParamValue, type ParamPath } fr
 import { PACK_FAILED, READ_IN_WORKER_BYTES, readStl, type Opened } from '../workers/projectJob';
 import type { PrepareStep } from '../workers/prepareJob';
 import { estimateTriangles } from '../core/stl/estimate';
-import { clampTarget, defaultTarget, HEAD_BYTES, isLarge, LARGE_MODEL, minBytesToLook, SIMPLIFY_MAX_ERROR_MM, simplifiedName, type LargeLimits } from './largeModel';
+import { clampTarget, defaultTarget, HEAD_BYTES, isLarge, LARGE_MODEL, minBytesToLook, repairedName, SIMPLIFY_MAX_ERROR_MM, simplifiedName, type LargeLimits } from './largeModel';
 import type { ModelSimplifier } from './modelSimplifier';
-import { simplifiedEntry, type ModelOrigin, type OriginalSource } from './simplified';
+import { repairedEntry, simplifiedEntry, type ModelOrigin, type OriginalImport, type OriginalSource } from './simplified';
+import { autoRepairCell, cellFacts, repairCellLimit, repairCellProblem, type CellFacts } from '../core/mesh/repair';
 import { SCHEMA_VERSION } from '../core/params/schema';
 import { BUILD } from './buildInfo';
 import type { SavedBy } from './version';
@@ -202,6 +203,19 @@ export interface Simplifying {
   round: number;
 }
 
+/** RM: a repair being made: of which file, on what grid (null for auto), and how far it is. */
+export interface Repairing {
+  name: string;
+  /** The grid asked for, or null for auto; `auto` is what auto comes to for this file. */
+  cell: number | null;
+  auto: number | null;
+  step: PrepareStep;
+  round: number;
+  /** A rebuild's z-slabs: `done` of `total`. */
+  done: number;
+  total: number;
+}
+
 /** A project carried onto another model of the same object: the copy, or the file again (MM2). */
 interface Carried {
   project: Project;
@@ -296,6 +310,12 @@ export class Store {
   private largeWaiting: LargeWaiting | null = null;
   /** MM2: a simplified copy being made, which the Model section says with a Cancel button. */
   readonly simplifying = signal<Simplifying | null>(null);
+  /** RM: a repair being made, which the Model section says with a Cancel button (R43). */
+  readonly repairing = signal<Repairing | null>(null);
+  /** RM: the grid the maker typed for a rebuild, in mm, or null for auto. A new model clears it. */
+  readonly repairCell = signal<number | null>(null);
+  /** RM: the facts the auto grid follows, for the model on screen, worked out once a model. */
+  private cellFor: { bytes: Uint8Array; facts: CellFacts } | null = null;
   /** MM2: the warning point, which the test hooks lower so a small model reaches it. */
   largeLimits: LargeLimits = LARGE_MODEL;
   /**
@@ -439,6 +459,10 @@ export class Store {
     this.dropLarge();
     this.simplifier?.cancel();
     this.simplifying.value = null;
+    this.repairing.value = null;
+    this.repairCell.value = null;
+    // The grid's facts were the last model's, and kept its STL alive outside the meter (RM's review).
+    this.cellFor = null;
     this.source = null;
     this.fileSteps = Infinity;
     this.projectName.value = null;
@@ -465,10 +489,11 @@ export class Store {
    */
   async openFile(file: File): Promise<void> {
     const ticket = ++this.opens;
-    // A newer file supersedes one still waiting for an answer, and a copy being made of another.
+    // A newer file supersedes one still waiting for an answer, and a copy being made of another, or a repair.
     this.dropReplacing();
     this.dropLarge();
     this.cancelSimplify();
+    this.cancelRepair();
     // MM2: a file that could pass the warning point is counted from its first bytes before it is read whole (R42).
     if (file.size >= minBytesToLook(this.largeLimits)) {
       const head = new Uint8Array(await file.slice(0, HEAD_BYTES).arrayBuffer());
@@ -520,6 +545,7 @@ export class Store {
     if (answer === 'cancel' || (answer === 'load' && prompt.kind === 'loaded')) return;
     const ticket = ++this.opens;
     if (answer === 'simplify') {
+      this.cancelRepair();
       await this.simplifyFrom(prompt, waiting, clampTarget(target ?? prompt.target, prompt.triangles), ticket);
       return;
     }
@@ -566,9 +592,9 @@ export class Store {
       // The project as it stands now the copy is made: the page stays editable while it is made, and an edit made
       // meanwhile is the maker's (MM2's review).
       const carried = prompt.kind === 'loaded' ? this.carried() : waiting.opened ? carriedFrom(waiting.opened) : null;
-      const origin: ModelOrigin = { kind: 'simplified', original: waiting.source, from: prepared.from, record: prepared.record };
+      const origin: ModelOrigin = { original: waiting.source, from: prepared.from, record: prepared.record, repair: null };
       const projectName = prompt.kind === 'moldproj' ? prompt.name : prompt.kind === 'loaded' ? this.projectName.value : null;
-      const run = (): void => this.loadSimplified(prepared.stl, origin, carried, projectName, prompt.kind === 'loaded');
+      const run = (): void => this.loadPrepared(prepared.stl, origin, carried, projectName, prompt.kind === 'loaded', 'simplified');
       if (prompt.kind === 'loaded') run();
       else this.replaceOrAsk(prompt.model, run, prepared.stl);
     } catch (error) {
@@ -591,12 +617,12 @@ export class Store {
   /**
    * MM2: the copy loads as a model of its own, named after the file, with the project carried where there is one.
    * Simplify… (`again`) keeps what counts as saved, as the project is the one on screen; a file opened afresh has
-   * nothing to lose yet.
+   * nothing to lose yet. RM: a repaired copy loads the same way, its plane found again as the repaired one's.
    */
-  private loadSimplified(stl: Uint8Array, origin: ModelOrigin, carried: Carried | null, projectName: string | null, again: boolean): void {
+  private loadPrepared(stl: Uint8Array, origin: ModelOrigin, carried: Carried | null, projectName: string | null, again: boolean, reason: 'simplified' | 'repaired'): void {
     const keepSaved = this.saved;
     this.beforeLoad();
-    if (carried) this.pipeline.loadProject(stl, origin.from.name, carried.project, carried.stored, origin.from.sha256, carried.savedBy, origin, 'simplified');
+    if (carried) this.pipeline.loadProject(stl, origin.from.name, carried.project, carried.stored, origin.from.sha256, carried.savedBy, origin, reason);
     else this.pipeline.load(stl, origin.from.name, origin);
     this.source = origin.original;
     this.saved = again ? keepSaved : this.pipeline.project();
@@ -618,8 +644,106 @@ export class Store {
   /** MM2: whether Simplify… is offered: a model past the warning point that is no copy already. */
   canSimplify(): boolean {
     const parsed = this.pipeline.parsed?.value;
-    if (!this.simplifier || !parsed || !this.pipeline.modelParsed() || this.pipeline.modelOrigin() || this.simplifying.value || this.large.value) return false;
+    if (!this.simplifier || !parsed || !this.pipeline.modelParsed() || this.pipeline.modelOrigin() || this.simplifying.value || this.repairing.value || this.large.value) return false;
     return isLarge(parsed.triangles, this.pipeline.fileBytes, this.largeLimits);
+  }
+
+  /**
+   * RM: why the Model section offers Repair mesh for the model on screen, or null where it does not (decision B): a
+   * preparer to run it, the import in for this file and finding a soup or folds, and no copy, repair or question on
+   * its way.
+   */
+  repairOffer(): RepairOffer | null {
+    // RM's review: a file being read, a file held back or a project being saved goes first, as a repair would drop it.
+    if (!this.simplifier || this.simplifying.value || this.repairing.value || this.large.value || this.fileBusy.value !== null || this.replacing.value || this.saving.value) return null;
+    return this.pipeline.repairOffer();
+  }
+
+  /** RM: what the automatic grid comes to for the model on screen, and the facts it follows, worked out once a model. */
+  repairCellFacts(): { auto: number; facts: CellFacts } | null {
+    const parsed = this.pipeline.parsed?.value, bytes = this.pipeline.stlBytes;
+    if (!parsed || !bytes) return null;
+    if (this.cellFor?.bytes !== bytes) this.cellFor = { bytes, facts: cellFacts(parsed.welded) };
+    return { auto: autoRepairCell(this.cellFor.facts), facts: this.cellFor.facts };
+  }
+
+  /**
+   * RM: why the grid typed cannot be used on this model, or null when it can; with the box empty, why no grid suits
+   * a model to be rebuilt, as its automatic one is checked too (RM's review). A fill takes no grid.
+   */
+  repairCellProblem(): string | null {
+    const cell = this.repairCell.value, known = this.repairCellFacts();
+    if (!known) return null;
+    if (cell !== null) return repairCellProblem(known.facts, cell);
+    const limit = this.pipeline.repairOffer()?.fill === false ? repairCellLimit(known.facts, known.auto) : null;
+    return limit ? `This model cannot be rebuilt on any grid this app takes: the coarsest that suits it, ${known.auto.toFixed(2)} mm, ${limit}.` : null;
+  }
+
+  /** RM: the grid box: a number, or null (empty) for auto. */
+  setRepairCell(cell: number | null): void {
+    this.repairCell.value = cell === null || !Number.isFinite(cell) ? null : cell;
+  }
+
+  /**
+   * RM: Repair mesh (R43): repairs the maker's file in a fresh solid.worker and loads the closed copy as the model,
+   * with the project on screen carried, its plane found again, and the undo history cleared, as Simplify… does. The
+   * file is read again from where it was opened, never a simplified copy, so nothing is repaired from a copy; where a
+   * simplified copy was on screen, the repaired one keeps to its count (decision F). Cancel, a newer file, Use the
+   * original and Simplify… end it and leave the page as it was. A repair the file cannot be given says why under the
+   * file row, and the offer stays.
+   */
+  async repairMesh(): Promise<void> {
+    const offer = this.repairOffer(), preparer = this.simplifier, imported = this.pipeline.imported?.value, bytes = this.pipeline.stlBytes, name = this.pipeline.modelName;
+    if (!offer || !preparer || !imported || !bytes || name === null || this.repairCellProblem()) return;
+    const ticket = ++this.opens;
+    const origin = this.pipeline.modelOrigin();
+    const cell = this.repairCell.value;
+    this.fileNotice.value = null;
+    this.repairing.value = { name, cell, auto: offer.fill ? null : (this.repairCellFacts()?.auto ?? null), step: 'read', round: 0, done: 0, total: 1 };
+    // A heavy preview's solid worker goes first, so its heap never stands beside the job's (MM2's rule).
+    this.pipeline.recycleForPrepare();
+    // The maker's own file, as it was opened: a simplified copy's is its original.
+    const source = origin?.original ?? this.source ?? { kind: 'stl' as const, blob: new Blob([bytes as Uint8Array<ArrayBuffer>]) };
+    // How the file imports as it is, which model_oriented.stl follows: a simplified copy's import stands for its file's, as MM2's export takes it.
+    const facts: OriginalImport = { route: imported.route, flipped: imported.flipped, inverted: imported.diagnostics.some((d) => d.code === 'shell-inverted') };
+    const simplify = origin?.record ? { target: origin.record.target, maxErrorMm: origin.record.maxErrorMm } : null;
+    try {
+      const prepared = await preparer.prepare(source, origin?.from.name ?? name, { simplify, repair: { cell, facts } }, (progress) => {
+        const now = this.repairing.value;
+        if (ticket !== this.opens || !now) return;
+        if (now.step !== progress.step || now.round !== progress.round || now.done !== progress.done || now.total !== progress.total) this.repairing.value = { ...now, ...progress };
+      });
+      if (ticket !== this.opens || !prepared.repair) return;
+      this.repairing.value = null;
+      // The project as it stands now the copy is made: the page stays editable while it is made (MM2's review).
+      const carried = this.carried();
+      const repaired: ModelOrigin = { original: source, from: prepared.from, record: null, repair: { record: prepared.repair, outside: prepared.outside } };
+      this.loadPrepared(prepared.stl, repaired, carried, this.projectName.value, true, 'repaired');
+    } catch (error) {
+      if (ticket !== this.opens) return;
+      this.repairing.value = null;
+      const e = error instanceof Error ? error : new Error(String(error));
+      if (e.name === 'Cancelled') return;
+      // The job's own reason is a maker's sentence; anything else is the engine's, kept for Details.
+      const inline = e.name === 'InlineError' || e.name === 'StlError';
+      this.fileNotice.value = inline
+        ? { severity: 'warning', message: e.message, notes: [] }
+        : { severity: 'error', message: `${name} could not be repaired, as the geometry engine failed. The model on screen stays as it was.`, notes: [], details: e.message };
+    }
+  }
+
+  /** RM: ends the repair being made, leaving the page as it was. */
+  cancelRepair(): void {
+    if (!this.repairing.value) return;
+    this.repairing.value = null;
+    this.simplifier?.cancel();
+  }
+
+  /** RM: Save repaired STL: the repaired copy the mold is made from, as <name>-repaired.stl. */
+  saveRepaired(): void {
+    const origin = this.pipeline.modelOrigin(), bytes = this.pipeline.stlBytes;
+    if (!origin?.repair || !bytes) return;
+    saveBytes(repairedName(origin.from.name), bytes, 'application/octet-stream');
   }
 
   /** MM2: Simplify… in the Model section: the question in its form for the model on screen. */
@@ -632,12 +756,14 @@ export class Store {
 
   /**
    * MM2: Use the original: the maker's file again, as it is, with the project on screen carried, and no question,
-   * however large it is. The undo history is cleared, as for any other model.
+   * however large it is. The undo history is cleared, as for any other model. RM: from a repaired copy too, after
+   * which the file is the soup or the folded mesh it was, so Repair mesh is offered again.
    */
   async useOriginal(): Promise<void> {
     const origin = this.pipeline.modelOrigin();
     if (!origin || !this.files) return;
     const ticket = ++this.opens;
+    this.cancelRepair();
     const name = origin.from.name, projectName = this.projectName.value;
     this.fileNotice.value = null;
     this.fileBusy.value = `Reading ${name}…`;
@@ -658,7 +784,7 @@ export class Store {
       // The project as it stands once the file is read, with any edit made meanwhile (MM2's review).
       const carried = this.carried(), keepSaved = this.saved;
       this.beforeLoad();
-      this.pipeline.loadProject(bytes, name, carried.project, carried.stored, sha, carried.savedBy, null, 'simplified');
+      this.pipeline.loadProject(bytes, name, carried.project, carried.stored, sha, carried.savedBy, null, origin.repair ? 'repaired' : 'simplified');
       this.source = origin.original;
       this.saved = keepSaved;
       this.fileSteps = this.history.nextSeq;
@@ -797,14 +923,18 @@ export class Store {
     const { file } = opened;
     this.beforeLoad();
     const entry = opened.simplified?.entry;
+    // RM: a repaired project's copy, with the file's left-out parts cut from model.stl, loads with no job at all.
+    const fixed = opened.repaired;
     const origin: ModelOrigin | null = entry && opened.stlSha256
       ? {
-          kind: 'simplified',
           original: source,
           from: { name: file.model, bytes: opened.simplified!.bytes, sha256: opened.stlSha256, ...entry.from },
           record: { triangles: entry.triangles, target: entry.target, maxErrorMm: entry.maxErrorMm, errorMm: entry.errorMm, stoppedBy: entry.stoppedBy, sha256: entry.sha256 },
+          repair: null,
         }
-      : null;
+      : fixed && opened.stlSha256
+        ? (({ from, ...record }) => ({ original: source, from: { name: file.model, bytes: fixed.bytes, sha256: opened.stlSha256!, ...from }, record: null, repair: { record, outside: fixed.outside } }))(fixed.entry)
+        : null;
     this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion }, origin);
     this.source = source;
     this.saved = this.pipeline.project();
@@ -846,11 +976,14 @@ export class Store {
     // The file opens again to this project, so leaving now loses nothing.
     this.saved = this.pipeline.project();
     // MM2: the hash is the file's, whether a copy or the file itself is on screen, so the settings may have been
-    // made on the other one, whose faces and bodies are numbered differently: nothing is simplified for it.
-    const onScreen = this.pipeline.modelOrigin()?.record ?? null;
-    if ((file.simplified?.sha256 ?? null) !== (onScreen?.sha256 ?? null)) {
-      const made = file.simplified ? `a copy of ${file.model} simplified to ${file.simplified.triangles.toLocaleString('en-US')} triangles` : `${file.model} as it is`;
-      const shown = onScreen ? `a copy of it simplified to ${onScreen.triangles.toLocaleString('en-US')} triangles` : `${file.model} as it is`;
+    // made on the other one, whose faces and bodies are numbered differently: nothing is simplified for it. RM: or
+    // repaired for it.
+    const onScreen = this.pipeline.modelOrigin();
+    const madeOn = file.simplified?.sha256 ?? file.repaired?.sha256 ?? null;
+    const shownOn = onScreen?.record?.sha256 ?? onScreen?.repair?.record.sha256 ?? null;
+    if (madeOn !== shownOn) {
+      const made = file.simplified ? `a copy of ${file.model} simplified to ${file.simplified.triangles.toLocaleString('en-US')} triangles` : file.repaired ? `a repaired copy of ${file.model}` : `${file.model} as it is`;
+      const shown = onScreen?.record ? `a copy of it simplified to ${onScreen.record.triangles.toLocaleString('en-US')} triangles` : onScreen?.repair ? 'a repaired copy of it' : `${file.model} as it is`;
       notes.push({ severity: 'info', message: `These settings were made on ${made}; the model on screen is ${shown}, so check the base face and the openings before you export.` });
     }
     if (file.modelSha256 === null) notes.push({ severity: 'info', message: `${name} does not record its model's contents, so it was matched to ${current} by the file name alone.` });
@@ -878,7 +1011,13 @@ export class Store {
       const project = this.pipeline.project();
       // MM2: a copy's project keeps the maker's file as model.stl, which the worker reads, and the copy beside it.
       const origin = this.pipeline.modelOrigin();
-      const file = projectFile(project, model, { modelSha256: this.pipeline.modelSha256, basePlane: this.pipeline.storedPlane(), ...(origin ? { simplified: simplifiedEntry(origin) } : {}) });
+      const file = projectFile(project, model, {
+        modelSha256: this.pipeline.modelSha256,
+        basePlane: this.pipeline.storedPlane(),
+        ...(origin?.record ? { simplified: simplifiedEntry({ from: origin.from, record: origin.record }) } : {}),
+        // RM: a repaired copy's project keeps the maker's file as model.stl and the copy beside it as repaired.stl.
+        ...(origin?.repair ? { repaired: repairedEntry(origin.from, origin.repair.record) } : {}),
+      });
       const { zip, sha256 } = await this.files.pack(file, bytes, origin?.original ?? null);
       // A type of its own, so no browser renames the file after the ZIP inside.
       saveBytes(name, zip, 'application/octet-stream');

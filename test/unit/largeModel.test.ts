@@ -187,8 +187,8 @@ describe('MM2: the question before a large model loads', () => {
     const origin = p.modelOrigin()!;
     expect(origin.from).toEqual({ name: JERSEY, bytes: jersey.length, sha256: sha(jersey), format: 'binary', trianglesInFile: 1340, triangles: 1340 });
     expect(origin.record).toMatchObject({ target: 900, maxErrorMm: 0.05, sha256: sha(p.stlBytes!) });
-    expect(origin.record.triangles).toBe(p.parsed!.value.triangles);
-    expect(origin.record.errorMm).toBeLessThanOrEqual(0.05);
+    expect(origin.record!.triangles).toBe(p.parsed!.value.triangles);
+    expect(origin.record!.errorMm).toBeLessThanOrEqual(0.05);
     expect(origin.original.blob).toBe(file);
     expect(p.modelName).toBe(JERSEY);
     expect(p.modelSha256).toBe(sha(jersey));
@@ -263,7 +263,7 @@ describe('MM2: the question before a large model loads', () => {
     store.setLargeTarget(900);
     await store.answerLarge('simplify');
     await p.idle();
-    expect(p.modelOrigin()!.record.target).toBe(900);
+    expect(p.modelOrigin()!.record!.target).toBe(900);
     expect(p.params.silicone.t).toBe(3.5);
     expect(store.history.depth).toEqual({ undo: 0, redo: 0 });
     // A copy is no model to simplify again.
@@ -400,7 +400,7 @@ describe('MM2 review: what the copy carries, and what ends it', () => {
     const changed = jersey.slice();
     changed[84 + 12 + 1] ^= 1;
     const prepared = runPrepareJob(api, MeshoptSimplifier, { source: { kind: 'stl', blob: new Blob([jersey as BlobPart]) }, name: JERSEY, simplify: { target: 900, maxErrorMm: 0.05 } }, () => jersey, () => {}, () => performance.now());
-    p.load(prepared.stl, JERSEY, { kind: 'simplified', original: { kind: 'stl', blob: new Blob([changed as BlobPart]) }, from: prepared.from, record: prepared.record });
+    p.load(prepared.stl, JERSEY, { original: { kind: 'stl', blob: new Blob([changed as BlobPart]) }, from: prepared.from, record: prepared.record, repair: null });
     await p.idle();
     await store.saveProject();
     expect(saves).toEqual([]);
@@ -448,12 +448,12 @@ describe('MM2: the .moldproj of a simplified model', () => {
     const inside = unzipSync(zip);
     expect(Object.keys(inside)).toEqual([PROJECT_ENTRY, MODEL_ENTRY, SIMPLIFIED_ENTRY]);
     expect(sha(inside[MODEL_ENTRY])).toBe(sha(jersey));
-    expect(sha(inside[SIMPLIFIED_ENTRY])).toBe(origin.record.sha256);
+    expect(sha(inside[SIMPLIFIED_ENTRY])).toBe(origin.record!.sha256);
     const json = JSON.parse(text(inside[PROJECT_ENTRY])) as ProjectFile;
     expect(json.schemaVersion).toBe(SCHEMA_VERSION);
     expect(SCHEMA_VERSION).toBe(6);
     expect(json.modelSha256).toBe(sha(jersey));
-    expect(json.simplified).toEqual(simplifiedEntry(origin));
+    expect(json.simplified).toEqual(simplifiedEntry({ from: origin.from, record: origin.record! }));
 
     // Another page, with the warning point lowered still: the copy loads, and nothing asks.
     const second = setup();
@@ -479,7 +479,7 @@ describe('MM2: the .moldproj of a simplified model', () => {
     await store.answerLarge('simplify', 900);
     await p.idle();
     const origin = p.modelOrigin()!;
-    const json = projectJson({ ...(JSON.parse(projectJson({ schemaVersion: 6, appVersion: 'x', model: JERSEY, modelSha256: sha(jersey), basePlane: null, simplified: simplifiedEntry(origin), ...p.project() })) as ProjectFile) });
+    const json = projectJson({ ...(JSON.parse(projectJson({ schemaVersion: 6, appVersion: 'x', model: JERSEY, modelSha256: sha(jersey), basePlane: null, simplified: simplifiedEntry({ from: origin.from, record: origin.record! }), ...p.project() })) as ProjectFile) });
     const bad = p.stlBytes!.slice();
     bad[100] ^= 1;
     const zip = packProject(json, jersey, bad);
@@ -535,6 +535,6 @@ describe('MM2: the .moldproj of a simplified model', () => {
     second.store.load(jersey, JERSEY);
     await second.p.idle();
     await second.store.openFile(new File([out['project.json'] as BlobPart], 'project.json'));
-    expect(second.store.fileNotice.value!.notes).toContainEqual({ severity: 'info', message: `These settings were made on a copy of ${JERSEY} simplified to ${p.modelOrigin()!.record.triangles.toLocaleString('en-US')} triangles; the model on screen is ${JERSEY} as it is, so check the base face and the openings before you export.` });
+    expect(second.store.fileNotice.value!.notes).toContainEqual({ severity: 'info', message: `These settings were made on a copy of ${JERSEY} simplified to ${p.modelOrigin()!.record!.triangles.toLocaleString('en-US')} triangles; the model on screen is ${JERSEY} as it is, so check the base face and the openings before you export.` });
   });
 });

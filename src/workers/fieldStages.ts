@@ -8,6 +8,7 @@ import { conditionField } from '../core/field/build';
 import { compositeTiles } from '../core/field/composite';
 import { dilate } from '../core/field/dilate';
 import { emptyField, fieldSettings, planField, type Field, type FieldPlan, type FieldSettings, type Grid } from '../core/field/grid';
+import { orientedOutside, outsideBounds, unionBounds, withOutside } from '../core/field/outsidePart';
 import { NO_SOURCE, rasterize } from '../core/field/raster';
 import { exteriorMesh, plateSealedAir } from '../core/field/sealed';
 import { volumeAbovePlane } from '../core/field/silicone';
@@ -72,9 +73,17 @@ export interface FieldInputs {
   removed: string[];
   /**
    * MM2: how far a simplified model's copy lies from the maker's file, measured, which widens G4's margin; 0 for
-   * a model loaded as it is. The file's own, so every key from S1 down already tells it apart.
+   * a model loaded as it is. The file's own, so every key from S1 down already tells it apart. RM: for a rebuilt
+   * model in glue mode, also how far the file lies outside the copy (e_near), which `outsideTier` tells apart.
    */
   modelErrorMm?: number;
+  /**
+   * RM: the parts of the maker's file a rebuilt copy left out (O_far), in the file's coordinates, sent with the file
+   * while the worker does not hold S1, and kept with it.
+   */
+  outside?: WeldedMesh | null;
+  /** RM: the stage input 'outside': 'glue' while the raster and the box hold those parts (S3, S10). */
+  outsideTier?: '' | 'glue';
 }
 
 export interface ParsedModel {
@@ -117,6 +126,12 @@ export interface OrientedStage {
    */
   exterior: Uint32Array | null;
   sealedAir: { surface: WeldedMesh | null; recesses: number | null };
+  /**
+   * RM: the parts of the file a rebuilt copy left out, as the model stands, cut at the base plane (orientedOutside),
+   * and their box; null where there are none. Which stages take them is S3's and S10's input 'outside'.
+   */
+  outside: WeldedMesh | null;
+  outsideBounds: Bounds | null;
   diagnostics: Diagnostic[];
 }
 
@@ -223,6 +238,10 @@ export class FieldStages {
    * moved. Only the groups: the pieces' lists of triangles would hold 35 MB on 3 million triangles.
    */
   private groups: { mesh: WeldedMesh; value: number[][] } | null = null;
+  /** RM: the file's parts a rebuilt copy left out, kept with S1, which they came with. */
+  private far: { key: string; mesh: WeldedMesh | null } | null = null;
+  /** RM: the oriented model with those parts appended, for the S2 it was made from. */
+  private joined: { oriented: OrientedStage; mesh: WeldedMesh } | null = null;
 
   constructor(private readonly now: () => number = () => 0) {}
 
@@ -244,13 +263,15 @@ export class FieldStages {
 
   /** What the stages keep between jobs, for the memory meter, which counts the arrays in them (MM1). */
   heldArrays(): unknown[] {
-    return [this.s1, this.s2, this.s3, this.s4, this.s5, this.s6, this.s10, this.s7, this.groups];
+    return [this.s1, this.s2, this.s3, this.s4, this.s5, this.s6, this.s10, this.s7, this.groups, this.far, this.joined];
   }
 
   /** Drops everything, as loading another file does: the old model's arrays are the biggest thing here. */
   clear(): void {
     this.s1 = this.s2 = this.s3 = this.s4 = this.s5 = this.s6 = this.s10 = this.s7 = null;
     this.groups = null;
+    this.far = null;
+    this.joined = null;
   }
 
   /**
@@ -274,6 +295,7 @@ export class FieldStages {
         return { format: parsed.format, rawTriangles: parsed.rawTriangleCount, triangles: parsed.triangleCount, degenerate: parsed.degenerateCount, welded, audit: auditEdges(welded), diagnostics: parsed.diagnostics };
       });
       this.s1 = { key: keys.S1, value };
+      this.far = { key: keys.S1, mesh: inputs.outside ?? null };
       return value;
     };
 
@@ -307,6 +329,7 @@ export class FieldStages {
         // The mold's z of a point of the file is the transform's third row: up . p + level.
         const [, , , , , , g, h, i] = oriented.transform.rotation;
         const sealed = mesh.indices.length / 3 > DISPLAY_TRIANGLE_LIMIT ? null : plateSealedAir(mesh, [g, h, i], oriented.transform.translation[2], planeTol);
+        const far = this.far?.key === keys.S1 && this.far.mesh ? orientedOutside(this.far.mesh, oriented.transform) : null;
         return {
           candidates,
           chosen,
@@ -316,6 +339,8 @@ export class FieldStages {
           modelVolume,
           exterior: exterior === oriented.mesh ? null : exterior.indices,
           sealedAir: { surface: sealed?.surface ?? null, recesses: sealed ? sealed.recesses.length : null },
+          outside: far,
+          outsideBounds: outsideBounds(far),
           diagnostics: [...diagnostics, ...oriented.diagnostics],
         };
       });
@@ -323,22 +348,30 @@ export class FieldStages {
       return value;
     };
 
+    // RM: in glue mode a rebuilt model's raster and box hold the file's left-out parts too (D26).
+    const glue = inputs.outsideTier === 'glue';
+    const planBounds = (oriented: OrientedStage): Bounds => (glue ? unionBounds(oriented.bounds, oriented.outsideBounds) : oriented.bounds);
+    const planMesh = (oriented: OrientedStage): WeldedMesh => {
+      if (!glue || !oriented.outside) return oriented.oriented.mesh;
+      if (this.joined?.oriented !== oriented) this.joined = { oriented, mesh: withOutside(oriented.oriented.mesh, oriented.outside) };
+      return this.joined.mesh;
+    };
     const cellOf = (oriented: OrientedStage): number => {
-      const cell = previewCell(params, oriented.bounds) * inputs.cellScale;
+      const cell = previewCell(params, planBounds(oriented)) * inputs.cellScale;
       // A cell of 0, from a typed value or a project file, asks for an endless lattice. That is the
       // user's input and no crash, so it must not be retried at a coarser cell as one.
       if (!(cell > 0) || !Number.isFinite(cell)) throw new InlineError('cell', `A preview cell of ${cell} mm cannot be built: give it a value above 0.`);
       return cell;
     };
     const extra = inputs.modelErrorMm ?? 0;
-    const settingsOf = (oriented: OrientedStage, cell: number): FieldSettings => fieldSettings(params, oriented.bounds, cell, extra);
+    const settingsOf = (oriented: OrientedStage, cell: number): FieldSettings => fieldSettings(params, planBounds(oriented), cell, extra);
 
     const s3 = (): Lattice => {
       if (this.s3?.key === keys.S3) return this.s3.value;
       const oriented = s2();
       const value = timed('S3', () => {
-        const { grid, i0, j0 } = tightLattice(oriented.bounds, cellOf(oriented), 1);
-        return { field: rasterize(oriented.oriented.mesh, grid), i0, j0 };
+        const { grid, i0, j0 } = tightLattice(planBounds(oriented), cellOf(oriented), 1);
+        return { field: rasterize(planMesh(oriented), grid), i0, j0 };
       });
       this.s3 = { key: keys.S3, value };
       return value;
@@ -350,7 +383,7 @@ export class FieldStages {
       const oriented = s2();
       const value = timed('S4', () => {
         const { cell } = raster.field;
-        const { rEff } = planField(oriented.bounds, { ...settingsOf(oriented, cell), nx: 1, ny: 1 });
+        const { rEff } = planField(planBounds(oriented), { ...settingsOf(oriented, cell), nx: 1, ny: 1 });
         // Room for the radius and a little more, which is all dilation needs.
         const pad = Math.ceil(rEff / cell) + 2;
         const grid: Grid = { nx: raster.field.nx + 2 * pad, ny: raster.field.ny + 2 * pad, cell, x0: (raster.i0 - pad) * cell, y0: (raster.j0 - pad) * cell };
@@ -367,9 +400,9 @@ export class FieldStages {
       const envelope = s4();
       const value = timed('S5', () => {
         const settings = settingsOf(oriented, envelope.field.cell);
-        const plan = planField(oriented.bounds, settings);
+        const plan = planField(planBounds(oriented), settings);
         // Past the node cap the plan raises the cell, and then the raster and envelope are made again at it.
-        const tile = plan.cell === envelope.field.cell ? embed(envelope, plan.tile, 0) : dilate(rasterize(oriented.oriented.mesh, plan.tile), plan.rEff);
+        const tile = plan.cell === envelope.field.cell ? embed(envelope, plan.tile, 0) : dilate(rasterize(planMesh(oriented), plan.tile), plan.rEff);
         return { plan, settings: { ...settings, cell: plan.cell }, tile, composite: compositeTiles(tile, plan).field };
       });
       this.s5 = { key: keys.S5, value };
@@ -400,7 +433,8 @@ export class FieldStages {
       const oriented = s2();
       const value = timed('S10', () => {
         // Always the export plan's bounds and offsets, whatever cell the preview runs at.
-        const mold = moldBounds(oriented.oriented.mesh, oriented.bounds, fieldSettings(params, oriented.bounds, undefined, extra));
+        const bounds = planBounds(oriented);
+        const mold = moldBounds(planMesh(oriented), bounds, fieldSettings(params, bounds, undefined, extra));
         return { mold, rim: deriveRim(mold, params) };
       });
       this.s10 = { key: keys.S10, value };
@@ -415,7 +449,7 @@ export class FieldStages {
       const value = timed('S7', () => {
         const { settings, field, tile } = conditioned;
         const single = { ...settings, nx: 1, ny: 1 };
-        const tilePlan = planField(oriented.bounds, single);
+        const tilePlan = planField(planBounds(oriented), single);
         const opening = placementSettings(params, oriented.bounds);
         const { mesh } = oriented.oriented;
         // The same mesh gives its pieces in the same order, so the groups found once index them every time.

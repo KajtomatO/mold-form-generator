@@ -1,11 +1,14 @@
 import { useEffect, useRef } from 'preact/hooks';
-import { largeFigures, memoryQuote, SIMPLIFY_MAX_ERROR_MM, simplifiedName, simplifyQuote, TARGET_RANGE } from '../../app/largeModel';
+import { largeFigures, memoryQuote, repairedName, SIMPLIFY_MAX_ERROR_MM, simplifiedName, simplifyQuote, TARGET_RANGE } from '../../app/largeModel';
 import { MAX_ROUNDS } from '../../core/mesh/simplify';
-import { errorText } from '../../app/simplified';
-import type { LargePrompt, Simplifying, Store } from '../../app/store';
+import { REDUCE_ROUNDS } from '../../core/mesh/reduce';
+import { REPAIR_CELL_MAX, REPAIR_CELL_MIN, REPAIR_CELL_STEP } from '../../core/mesh/repair';
+import { errorText, filledWords, holesText, LEFT_OUT_KINDS, nearWords } from '../../app/simplified';
+import type { RepairOffer } from '../../app/pipeline';
+import type { LargePrompt, Repairing, Simplifying, Store } from '../../app/store';
 import { useStore } from '../context';
 import { FileButton, OPEN_LABEL, OPEN_TITLE } from '../files';
-import { formatCount, formatNormal, formatNumber, units } from '../format';
+import { formatCount, formatNormal, formatNumber, originLabel, units } from '../format';
 import { Cross } from '../icons';
 import { ParamRow } from '../ParamRow';
 import { Section } from './Section';
@@ -24,7 +27,8 @@ export function ModelSection() {
   const keys = pipeline.modelName ? pipeline.keys() : null;
   // Only a report for the plane on screen may offer a move, or a second click would move it twice.
   const footprint = keys && pipeline.footprint?.key === keys.S2 && pipeline.oriented?.key === keys.S2 ? pipeline.footprint.value : null;
-  const upper = footprint?.levels.useUpper ?? null;
+  // RM: a rebuilt copy's grid facets are no level to stand on in glue mode (Pipeline.upperLevel).
+  const upper = footprint ? store.pipeline.upperLevel() : null;
   const offset = oriented?.chosen.offset ?? 0;
   // S2 stands on the named level only if it still finds it; otherwise a warning says so.
   const standing = oriented !== undefined && plane.upper !== false && Math.abs(offset - plane.upper) <= oriented.planeTol;
@@ -32,6 +36,8 @@ export function ModelSection() {
   const project = store.projectName.value, notice = store.fileNotice.value, busy = store.fileBusy.value, saving = store.saving.value, replacing = store.replacing.value;
   // MM2: the large-model question, a copy being made, and the copy on screen (R42).
   const large = store.large.value, simplifying = store.simplifying.value, origin = pipeline.modelOrigin();
+  // RM: Repair mesh, offered only when the import finds a problem, the repair being made, and the repaired copy (R43).
+  const repairing = store.repairing.value, offer = store.repairOffer();
   const saveName = store.projectFileName();
   const canSave = store.canSave();
   const unsaved = store.unsaved();
@@ -49,7 +55,7 @@ export function ModelSection() {
   // a warning or a question opens the sidebar, and each scrolls into sight, as nothing else on screen changes.
   const attention = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!busy && !notice && !replacing && !large && !simplifying) return;
+    if (!busy && !notice && !replacing && !large && !simplifying && !repairing) return;
     if (replacing || large || (notice && notice.severity !== 'info')) store.sidebarCollapsed.value = false;
     const frame = requestAnimationFrame(() => {
       const el = attention.current, box = el?.closest<HTMLElement>('[data-testid="sections"]');
@@ -60,7 +66,7 @@ export function ModelSection() {
       else if (at.bottom > view.bottom) box.scrollTop += at.bottom - view.bottom + 8;
     });
     return () => cancelAnimationFrame(frame);
-  }, [busy, notice, replacing, large, simplifying]);
+  }, [busy, notice, replacing, large, simplifying, repairing]);
 
   return (
     <Section id="model" title="Model">
@@ -83,7 +89,7 @@ export function ModelSection() {
           </span>
         ) : null}
         <span class="name" data-testid="file-name">
-          {pipeline.modelName ? `${pipeline.modelName}${parsed ? `, ${formatCount(parsed.triangles)} triangles${origin ? ' (simplified)' : ''}` : ''}` : 'Or drop an STL or a project on the view.'}
+          {pipeline.modelName ? `${pipeline.modelName}${parsed ? `, ${formatCount(parsed.triangles)} triangles${originLabel(origin)}` : ''}` : 'Or drop an STL or a project on the view.'}
         </span>
       </p>
       {store.canSimplify() && !large ? (
@@ -99,7 +105,9 @@ export function ModelSection() {
           </button>
         </div>
       ) : null}
-      {origin && !simplifying ? <SimplifiedNote store={store} /> : null}
+      {origin?.record && !simplifying ? <SimplifiedNote store={store} /> : null}
+      {origin?.repair && !repairing ? <RepairedNote store={store} /> : null}
+      {offer && !repairing ? <RepairOfferNote store={store} offer={offer} /> : null}
       <div ref={attention}>
         {busy ? (
           <p class="lead file-busy" data-testid="file-busy" role="status">
@@ -108,6 +116,7 @@ export function ModelSection() {
           </p>
         ) : null}
         {simplifying ? <SimplifyBusy store={store} simplifying={simplifying} /> : null}
+        {repairing ? <RepairBusy store={store} repairing={repairing} /> : null}
         {large ? <LargeQuestion store={store} prompt={large} /> : null}
         {replacing ? (
           <div class="note warning file-replace" data-testid="replace-prompt" role="alert">
@@ -324,7 +333,8 @@ function LargeQuestion({ store, prompt }: { store: Store; prompt: LargePrompt })
 /** MM2: the copy on screen: how far from the file, and the way back to the file, or the copy saved as an STL. */
 function SimplifiedNote({ store }: { store: Store }) {
   const origin = store.pipeline.modelOrigin()!;
-  const { from, record } = origin;
+  const { from } = origin;
+  const record = origin.record!;
   const merged = store.project.value.params.base.mode === 'merged';
   const within = record.errorMm > record.maxErrorMm ? `within ${errorText(record.errorMm)} of ${from.name}, as the copy could not keep to ${record.maxErrorMm} mm everywhere` : `within ${errorText(record.errorMm)} of ${from.name}`;
   const short = record.stoppedBy === 'error' && record.triangles > record.target ? ` Not ${formatCount(record.target)}: simplifying further would have moved the surface more than ${record.maxErrorMm} mm.` : '';
@@ -345,6 +355,173 @@ function SimplifiedNote({ store }: { store: Store }) {
         </button>
         <button type="button" class="btn small" data-testid="save-simplified" title={`Save the simplified copy the mold is made from as ${simplifiedName(from.name)}.`} onClick={() => store.saveSimplified()}>
           Save simplified STL
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const count = (n: number): string => formatCount(n);
+
+/** RM: what is wrong with the file, as the offer's first paragraph says it. */
+function offerProblem(name: string, offer: RepairOffer): string {
+  if (offer.kind === 'folds') return `${name} folds through itself in ${count(offer.folds)} ${offer.folds === 1 ? 'place' : 'places'}, where its surface turns inside out, so its volume and a merged base may be wrong.`;
+  const parts = [
+    offer.holes > 0 ? holesText(offer.holes, offer.holeArea) : '',
+    offer.nonManifold > 0 ? `${count(offer.nonManifold)} ${offer.nonManifold === 1 ? 'edge' : 'edges'} shared by more than two faces` : '',
+    offer.misoriented > 0 ? `${count(offer.misoriented)} ${offer.misoriented === 1 ? 'edge' : 'edges'} between faces turned opposite ways` : '',
+  ].filter(Boolean);
+  const has = parts.length === 0 ? 'its surface encloses no space' : `it has ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`}`;
+  return units(`${name} is not a closed solid: ${has}. So merged mode cannot be used with it, and the silicone thickness cannot be measured.`);
+}
+
+/** RM: what Repair mesh will do, as the offer's second paragraph says it. */
+function offerAction(offer: RepairOffer, cell: number): string {
+  const after = 'The mold is then made from that closed copy; model_oriented.stl stays your own file.';
+  if (offer.fill) {
+    const holes = offer.kind === 'open' ? offer.holes : 0;
+    const turned = offer.kind === 'open' && offer.misoriented > 0;
+    const close = holes > 0 ? `closes ${holes === 1 ? 'its hole' : `its ${count(holes)} holes`} with new triangles` : '';
+    const turn = turned ? 'turns its faces the right way' : '';
+    return `Repair mesh ${[close, turn].filter(Boolean).join(' and ')} and keeps every triangle of your file. ${after}`;
+  }
+  return `Repair mesh rebuilds it as one closed solid on a grid of ${cell.toFixed(2)} mm, which takes from seconds to a minute: details thinner than the grid, such as fins and narrow gaps, go, and parts closer than it join. ${after}`;
+}
+
+/**
+ * RM: the offer under the file row, shown only when the import finds a problem (decision B): what is wrong, what
+ * Repair mesh will do, the grid of a rebuild (empty for auto), and the button. Never automatic, never a dialog.
+ */
+function RepairOfferNote({ store, offer }: { store: Store; offer: RepairOffer }) {
+  const name = store.pipeline.modelName ?? '';
+  const known = store.repairCellFacts();
+  const typed = store.repairCell.value;
+  const auto = known?.auto ?? REPAIR_CELL_MIN;
+  const problem = store.repairCellProblem();
+  return (
+    <div class="note warning repair-offer" data-testid="repair-offer" data-kind={offer.kind}>
+      <p>{offerProblem(name, offer)}</p>
+      <p>{offerAction(offer, typed ?? auto)}</p>
+      {offer.fill ? null : (
+        <label class="repair-cell" title="The grid the surface is rebuilt on: a finer one keeps thinner details but makes more triangles and takes longer. Auto picks the finest this model takes, about 3 million triangles before they are reduced.">
+          <span>Grid</span>
+          <input
+            type="number"
+            class="num"
+            data-testid="repair-cell"
+            aria-label="Grid to rebuild the surface on, in mm"
+            min={REPAIR_CELL_MIN}
+            max={REPAIR_CELL_MAX}
+            step={REPAIR_CELL_STEP}
+            placeholder={`auto, ${auto.toFixed(2)}`}
+            value={typed === null ? '' : String(typed)}
+            onChange={(event) => {
+              const text = (event.currentTarget as HTMLInputElement).value.trim();
+              store.setRepairCell(text === '' ? null : Number(text));
+            }}
+          />
+          <span>mm</span>
+        </label>
+      )}
+      {problem ? (
+        <p class="repair-cell-problem" data-testid="repair-cell-problem">
+          {problem}
+        </p>
+      ) : null}
+      <div class="file-replace-buttons">
+        <button
+          type="button"
+          class="btn small primary"
+          data-testid="repair-mesh"
+          disabled={problem !== null}
+          title={`Make a closed copy of ${name} and make the mold from it. Your settings, base face, moved openings and removed vents stay; the undo history is cleared. model_oriented.stl stays your own file.`}
+          onClick={() => void store.repairMesh()}
+        >
+          Repair mesh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** RM: what a repair being made is doing, as its worker says. */
+function repairWords(repairing: Repairing): string {
+  const grid = (repairing.cell ?? repairing.auto ?? 0).toFixed(2);
+  const round = `round ${repairing.round} of at most ${MAX_ROUNDS}`;
+  switch (repairing.step) {
+    case 'read':
+      return 'reading the file…';
+    case 'parse':
+      return 'reading the model…';
+    case 'orient':
+      return 'checking its faces…';
+    case 'fill':
+      return 'closing its holes…';
+    case 'rebuild':
+      return `rebuilding its surface on a ${grid} mm grid, ${repairing.total > 0 ? Math.round((100 * repairing.done) / repairing.total) : 0}%…`;
+    case 'reduce':
+      return `reducing the rebuilt surface, round ${Math.max(1, repairing.done)} of at most ${REDUCE_ROUNDS}…`;
+    case 'check':
+      return 'checking the repaired copy is a closed solid…';
+    case 'compare':
+      return 'measuring how far your file lies from the repaired copy…';
+    case 'simplify':
+      return `${round}, simplifying the repaired copy…`;
+    case 'measure':
+      return `${round}, checking it keeps within ${SIMPLIFY_MAX_ERROR_MM} mm…`;
+    default:
+      return 'writing the repaired copy…';
+  }
+}
+
+/** RM: the busy line while a repair is made, with Cancel, which leaves the page as it was. */
+function RepairBusy({ store, repairing }: { store: Store; repairing: Repairing }) {
+  return (
+    <p class="lead file-busy" data-testid="repair-busy" role="status">
+      <span class="spinner" aria-hidden="true" />
+      <span>
+        Repairing {repairing.name}: {repairWords(repairing)}
+      </span>
+      <button type="button" class="btn small" data-testid="repair-cancel" onClick={() => store.cancelRepair()}>
+        Cancel
+      </button>
+    </p>
+  );
+}
+
+/** RM: the repaired copy on screen: what the repair did, how far the file lies from it, and the way back, or the copy saved. */
+function RepairedNote({ store }: { store: Store }) {
+  const origin = store.pipeline.modelOrigin()!;
+  const { from } = origin;
+  const record = origin.repair!.record;
+  const merged = store.project.value.params.base.mode === 'merged';
+  let text: string;
+  if (record.method === 'filled') {
+    const added = (record.simplified ? 0 : record.triangles - from.triangles);
+    const closedWith = record.holes > 0 && record.turned === 0 && added > 0 ? ` with ${count(added)} new ${added === 1 ? 'triangle' : 'triangles'}` : '';
+    const then = record.simplified ? `, then simplified to ${count(record.simplified.triangles)} triangles within ${errorText(record.simplified.errorMm)}` : '';
+    text = `Made from a repaired copy: ${filledWords(record)}${closedWith}, every triangle of ${from.name} kept${then}. ${merged ? 'In merged mode the base carries this copy.' : 'model_oriented.stl is your own file.'}`;
+  } else {
+    const far = record.outside;
+    const left = far ? `, except ${count(far.triangles)} ${far.triangles === 1 ? 'triangle' : 'triangles'} the repair left out, up to ${far.farthestMm.toFixed(2)} mm away, ${LEFT_OUT_KINDS} (Diagnostics shows where)` : '';
+    const last = merged ? `In merged mode the base carries this copy${far ? ', without those parts' : ''}.` : `model_oriented.stl is your own file${far ? ', and the mold leaves room for those parts too' : ''}.`;
+    text = `Made from a copy of ${from.name} rebuilt as one closed solid on a ${(record.cell ?? 0).toFixed(2)} mm grid${record.cellAsked === null ? ' (auto)' : ''}, ${count(record.triangles)} triangles. Your file lies ${nearWords(record)}${left}. ${last}`;
+  }
+  return (
+    <div class="note repaired-note" data-testid="repaired-note">
+      <p>{units(text)}</p>
+      <div class="file-replace-buttons">
+        <button
+          type="button"
+          class="btn small"
+          data-testid="use-original"
+          title={`Open ${from.name} again as it is, keeping the settings, base face, moved openings and removed vents; the undo history is cleared.`}
+          onClick={() => void store.useOriginal()}
+        >
+          Use the original
+        </button>
+        <button type="button" class="btn small" data-testid="save-repaired" title={`Save the repaired copy the mold is made from as ${repairedName(from.name)}.`} onClick={() => store.saveRepaired()}>
+          Save repaired STL
         </button>
       </div>
     </div>

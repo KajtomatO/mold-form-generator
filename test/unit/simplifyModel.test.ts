@@ -168,7 +168,7 @@ describe('MM2: the prepare job (runPrepareJob)', () => {
     expect(prepared.from).toEqual({ name: '3dbenchy.stl', bytes: bytes.length, sha256: sha256(bytes), format: 'binary', trianglesInFile: parsed.rawTriangleCount, triangles: 225_154 });
     expect(prepared.record).toMatchObject({ triangles: 49_998, target: 50_000, maxErrorMm: 0.05, stoppedBy: 'target', sha256: sha256(prepared.stl) });
     // Proved within 0.0005 mm of the largest distance found, 0.0362 mm (MM2's review).
-    expect(prepared.record.errorMm).toBeCloseTo(BENCHY_PROVED, 6);
+    expect(prepared.record!.errorMm).toBeCloseTo(BENCHY_PROVED, 6);
     expect(createHash('sha256').update(prepared.stl).digest('hex')).toBe('995c7b1010ce703f82660a64ccf8d3e6f10fbe2c4a3cc51b4a1ebf3748929b71');
     // The STL parses and welds back to the copy.
     expect(weld(parseStl(prepared.stl).positions).indices.length / 3).toBe(49_998);

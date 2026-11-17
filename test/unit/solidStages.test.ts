@@ -25,7 +25,7 @@ beforeAll(async () => {
 /** jersey at defaults, as main would send it to solid.worker. */
 function jerseyJob(): { keys: Record<StageId, string>; inputs: SolidInputs } {
   const params = defaultParams();
-  const keys = stageKeys(params, { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+  const keys = stageKeys(params, { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
   const { S1, S2, S6, S7 } = new FieldStages().run(keys, ['S1', 'S2', 'S6', 'S7'], params, { file: exampleBytes('jersey').slice().buffer, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] });
   const space = placementSpace(S6!.field, S6!.rim, S6!.mold.offsets, openingSizes(params));
   return {
@@ -104,7 +104,7 @@ describe('solid.worker\'s stage cache', () => {
 /** S1 and S2 of an example on a plane, as main sends them for base confirmation, before any field. */
 function footprintJob(id: ExampleId, plane: PlaneChoice): { keys: Record<StageId, string>; inputs: SolidInputs } {
   const params = defaultParams();
-  const keys = stageKeys(params, { file: id, import: 'plain', plane: JSON.stringify(plane), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+  const keys = stageKeys(params, { file: id, import: 'plain', plane: JSON.stringify(plane), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
   const { S1, S2 } = new FieldStages().run(keys, ['S1', 'S2'], params, { file: exampleBytes(id).slice().buffer, import: PLAIN_IMPORT, plane, cellScale: 1, pins: [], removed: [] });
   return {
     keys,
@@ -196,7 +196,7 @@ describe('the display proxy (G1.8)', () => {
     const heavy = tessellatedBox(160, 40);
     expect(heavy.indices.length / 3).toBeGreaterThan(DISPLAY_TRIANGLE_LIMIT);
     const params = defaultParams();
-    const keys = stageKeys(params, { file: 'heavy', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+    const keys = stageKeys(params, { file: 'heavy', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
     const stages = new SolidStages(api, () => 0, MeshoptSimplifier);
     const out = stages.run(keys, ['S1'], params, { ...jerseyJob().inputs, model: { welded: heavy, audit: auditEdges(heavy) } }).S1!;
     expect(out.report.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);

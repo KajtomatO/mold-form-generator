@@ -1,6 +1,6 @@
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { withArena } from '../../src/core/solid/arena';
-import type { WeldedMesh } from '../../src/core/mesh/weld';
+import { weld, type WeldedMesh } from '../../src/core/mesh/weld';
 
 type V3 = [number, number, number];
 
@@ -605,4 +605,58 @@ export function lShape(api: ManifoldToplevel): WeldedMesh {
     const tall = cuboid(api, keep, [-20, -20, 0], [-10, 20, 25]);
     return keep(low.add(tall));
   });
+}
+
+/**
+ * RM: the mesh repair's fixtures (the design's, docs/PLAN.md, RM), each welded as the app welds a file, so vertices
+ * on each other are one. A 30 x 20 x 12 box with a 5 mm fin of no thickness standing on its top's diagonal: the
+ * diagonal is then an edge three faces share, so it is no solid Manifold takes, and the fin is thinner than any cell.
+ */
+export function finnedBox(): WeldedMesh {
+  const b = box([0, 0, 0], [30, 20, 12]);
+  return weldedFixture({ positions: Float32Array.from([...b.positions, 0, 0, 17, 30, 20, 17]), indices: Uint32Array.from([...b.indices, 4, 6, 9, 4, 9, 8]) });
+}
+
+/** The 30 x 20 x 12 box with its top missing: one hole of 600 mm2, 4 open edges. */
+export function openTopBox(): WeldedMesh {
+  return weldedFixture(withoutTriangles(box([0, 0, 0], [30, 20, 12]), BOX_TOP));
+}
+
+/**
+ * A 20 x 20 x 10 box whose two top corners at x = 20 are pushed down to z = -6, so its top goes through its bottom:
+ * closed and wound one way, so Manifold takes it, but it folds through itself. Where its winding is positive it
+ * holds 1,250 mm3; its signed volume is 800.
+ */
+export function foldedBox(): WeldedMesh {
+  const b = box([0, 0, 0], [20, 20, 10]);
+  const positions = b.positions.slice();
+  positions[5 * 3 + 2] = -6;
+  positions[6 * 3 + 2] = -6;
+  return weldedFixture({ positions, indices: b.indices });
+}
+
+/** Two boxes that overlap, the first with a top triangle missing: their union is 8,500 mm3. */
+export function openOverlap(): WeldedMesh {
+  return weldedFixture(join(withoutTriangles(box([0, 0, 0], [20, 20, 10]), [2]), box([10, 5, 0], [30, 25, 15])));
+}
+
+/**
+ * The 30 x 20 x 12 box with a wall from x0 to x1, 10 mm long (y 5 to 15) and 4 mm tall on its top, and a 3 mm fin
+ * of no thickness hanging from its front face's diagonal, which makes the mesh no solid; thinner than a 0.5 mm cell,
+ * a wall 0.15 mm thick between the lattice's nodes is lost whole, and one 0.3 mm thick is kept thickened.
+ */
+export function thinWallBox(x0: number, x1: number): WeldedMesh {
+  const fin: WeldedMesh = { positions: Float32Array.from([0, 0, 0, 30, 0, 12, 30, -3, 12, 0, -3, 0]), indices: Uint32Array.from([0, 1, 2, 0, 2, 3]) };
+  return weldedFixture(join(box([0, 0, 0], [30, 20, 12]), box([x0, 5, 12], [x1, 15, 16]), fin));
+}
+
+/** A box beside a closed sliver of no volume, four triangles on one plane, as war-barricade has 16 of: Manifold takes it. */
+export function boxWithSliver(): WeldedMesh {
+  const sliver: WeldedMesh = { positions: Float32Array.from([20, 0, 5, 30, 0, 5, 20, 10, 5, 25, 5, 5]), indices: Uint32Array.from([0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0]) };
+  return weldedFixture(join(box([0, 0, 0], [10, 10, 10]), sliver));
+}
+
+/** A mesh welded as the app welds a file's triangles. */
+export function weldedFixture(mesh: WeldedMesh): WeldedMesh {
+  return weld(toSoup(mesh));
 }

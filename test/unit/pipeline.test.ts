@@ -310,7 +310,7 @@ describe('the pipeline in one process, on the real stage code', () => {
     expect(p.diagnostics.map((d) => d.code)).toContain(code);
     expect(applied(p, 'oriented')).toHaveLength(oriented);
     // What shows is keyed by the import's mesh, not the welded one field.worker began with.
-    const plain = stageKeys(p.params, { file: 'f1', import: PLAIN_IMPORT.key, plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+    const plain = stageKeys(p.params, { file: 'f1', import: PLAIN_IMPORT.key, plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
     expect(p.oriented!.key).not.toBe(plain.S2);
     expect(p.oriented!.key).toBe(p.keys().S2);
     expect(p.status()).toMatchObject({ stale: false, error: null });
@@ -763,7 +763,7 @@ describe('transfers', () => {
       replies.push({ sent: message, received, transfer: transfer as ArrayBuffer[] });
     }, () => 0);
     const params = defaultParams();
-    const keys = stageKeys(params, { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null });
+    const keys = stageKeys(params, { file: 'f', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' });
     const job = (file: ArrayBuffer | null): ToWorker => ({ t: 'field', id: 1, keys, want: ['S6', 'S7'], params, inputs: { file, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] } });
     handle(job(exampleBytes('jersey').slice().buffer));
     // The second job has no file, so its field can only come from the cache the first one left.

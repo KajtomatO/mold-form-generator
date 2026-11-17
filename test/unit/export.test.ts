@@ -813,7 +813,7 @@ describe('the export of jersey in Node', () => {
       expect(marked('missing-surface')).toHaveLength(1);
       marked('missing-surface')[0].forEach((v, k) => expect(Math.abs(v - at[k]), `axis ${k}`).toBeLessThan(0.5));
       expect(marked('missing-top-surface')).toEqual(name === 'open-top.stl' ? marked('missing-surface') : []);
-      expect(soup.message).toMatch(/silicone thickness cannot be measured: it stays as planned, and no export can check it\. To use merged mode and a measured thickness, repair the mesh, for example with your slicer's repair, and open it again\.$/);
+      expect(soup.message).toMatch(/silicone thickness cannot be measured: it stays as planned, and no export can check it\. To use merged mode and a measured thickness, use Repair mesh in the Model section to make a closed copy of it\.$/);
       // Merged mode is refused inline, and blocks the export, rather than building a base of nothing.
       p.setParams((params) => (params.base.mode = 'merged'));
       await p.idle();

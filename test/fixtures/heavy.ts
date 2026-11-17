@@ -124,3 +124,41 @@ export function heightBlockSoup(block: HeightBlock): Float32Array {
 export function heightBlockMesh(block: HeightBlock, weld: (soup: Float32Array) => WeldedMesh): WeldedMesh {
   return weld(heightBlockSoup(block));
 }
+
+/**
+ * RM: the 3 million triangle block broken as a scan can be (the design's bar case, docs/PLAN.md, RM): a hole of 24 x
+ * 24 top cells, about 2 x 2 mm, cut out of its top, and a fin of no thickness, 5 mm high, standing on 300 top edges
+ * along row 400, about 24.5 mm long, each of which three faces then share. So it is no solid, and its repair is a
+ * rebuild with a part left out. 3,010,488 triangles, as a binary STL written straight into its bytes.
+ */
+export function heightBlockHoleFinStl(block: HeightBlock = HEAVY_BLOCK): Uint8Array {
+  const { n } = block;
+  const base = heightBlockSoup(block);
+  const T = heightBlockTriangles(n);
+  const dropped = (t: number): boolean => {
+    if (t >= 2 * n * n) return false;
+    const cell = Math.floor(t / 2), i = cell % n, j = Math.floor(cell / n);
+    return i >= 600 && i < 624 && j >= 600 && j < 624;
+  };
+  const FIN = 300, ROW = 400;
+  const count = T - 2 * 24 * 24 + 2 * FIN;
+  const bytes = new Uint8Array(84 + 50 * count);
+  bytes.set(new TextEncoder().encode(`RM heavy block with a hole and a fin, ${n} x ${n} cells`));
+  const view = new DataView(bytes.buffer);
+  view.setUint32(80, count, true);
+  let at = 84;
+  const write = (c: ArrayLike<number>): void => {
+    for (let k = 0; k < 9; k++) view.setFloat32(at + 12 + 4 * k, c[k], true);
+    at += 50;
+  };
+  for (let t = 0; t < T; t++) if (!dropped(t)) write(base.subarray(t * 9, t * 9 + 9));
+  for (let i = 300; i < 300 + FIN; i++) {
+    // Triangle 2 (j n + i) is (i, j), (i + 1, j), (i + 1, j + 1): its first two corners are the edge the fin stands on.
+    const t = 2 * (ROW * n + i);
+    const ax = base[t * 9], ay = base[t * 9 + 1], az = base[t * 9 + 2];
+    const bx = base[t * 9 + 3], by = base[t * 9 + 4], bz = base[t * 9 + 5];
+    write([ax, ay, az, bx, by, bz, bx, by, bz + 5]);
+    write([ax, ay, az, bx, by, bz + 5, ax, ay, az + 5]);
+  }
+  return bytes;
+}

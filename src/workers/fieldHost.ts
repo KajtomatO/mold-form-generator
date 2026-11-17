@@ -20,6 +20,8 @@ export interface OrientedWire {
   modelVolume: number;
   exterior: Uint32Array | null;
   sealedAir: { surface: WeldedMesh | null; recesses: number | null };
+  /** RM: the box of the file's parts a rebuilt copy left out, as the model stands; main holds the parts themselves. */
+  outsideBounds: Bounds | null;
   diagnostics: Diagnostic[];
 }
 
@@ -43,7 +45,7 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
     arrays.push(welded.positions, welded.indices);
   }
   if (outputs.S2) {
-    const { oriented, chosen, candidates, exterior, sealedAir, ...rest } = outputs.S2;
+    const { oriented, chosen, candidates, exterior, sealedAir, outside: _outside, ...rest } = outputs.S2;
     const { mesh: _mesh, ...orientedRest } = oriented;
     const members = chosen.members.slice();
     const listed = candidates.map((c) => ({ ...c, members: c.members.slice() }));

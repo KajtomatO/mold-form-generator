@@ -10,7 +10,8 @@ import { displayProxy, HEAVY_LIMITS, importFromCopy, manifoldPathSolid, type Hea
 import type { WeldedMesh } from '../core/mesh/weld';
 import { crossParameterErrors } from '../core/params/rules';
 import type { Params } from '../core/params/schema';
-import { buildBaseBody, buildGlueBase, buildMergedBase, layerDiagnostics, orientedSolid, pocketOutline, triangleContour } from '../core/parts/base';
+import { buildBaseBody, buildGlueBase, buildMergedBase, layerDiagnostics, orientedSolid, outsideFoot, pocketOutline, triangleContour } from '../core/parts/base';
+import { orientedOutside } from '../core/field/outsidePart';
 import { buildCoverBody, buildCoverFinal, toolDiagnostics } from '../core/parts/cover';
 import { buildFunnel } from '../core/parts/funnel';
 import type { CutOpening } from '../core/parts/openings';
@@ -33,9 +34,12 @@ export interface SolidInputs {
    * The welded mesh and its audit, sent only while the worker does not hold S1. `known` is an import of the
    * same mesh that checked it whole, sent past G1.8's limit, so this worker builds only the copy (M11).
    */
-  model: { welded: WeldedMesh; audit: MeshAudit; known?: SolidReport | null } | null;
-  /** The whole candidate, as G2.6's report on the footprint reads its levels. */
-  plane: { candidate: BaseCandidate; transform: RigidTransform; needsTrim: boolean; planeTol: number; pocketDepth: number };
+  model: { welded: WeldedMesh; audit: MeshAudit; known?: SolidReport | null; outside?: WeldedMesh | null } | null;
+  /**
+   * The whole candidate, as G2.6's report on the footprint reads its levels. RM: `repairNearMm`, how far a rebuilt
+   * model's file lies outside its copy, which widens a glue-mode pocket, as the file is what is glued in.
+   */
+  plane: { candidate: BaseCandidate; transform: RigidTransform; needsTrim: boolean; planeTol: number; pocketDepth: number; repairNearMm?: number };
   /** Null in a job that only imports, which runs before any field exists. */
   rim: Rim | null;
   /** The export plan's tile offsets. */
@@ -122,7 +126,7 @@ export class SolidStages {
    * The import. For a mesh past G1.8's limit its solid is the simplified copy every later Manifold step
    * uses, and the whole one is freed once checked, so the two never stand in the heap together for long.
    */
-  private model: Held<{ solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean }> | null = null;
+  private model: Held<{ solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean; outside: WeldedMesh | null }> | null = null;
   private footprint: { key: string; footprint: Footprint; mesh: WeldedMesh; overlap: number } | null = null;
   private tool: Held<ToolEntry> | null = null;
   private coverBody: Held | null = null;
@@ -158,7 +162,7 @@ export class SolidStages {
    * the meter counts whole; their handles are passed over.
    */
   heldArrays(): unknown[] {
-    return [this.model?.value.solid, this.model?.value.outcome, this.footprint];
+    return [this.model?.value.solid, this.model?.value.outcome, this.model?.value.outside, this.footprint];
   }
 
   /** Live handles held between jobs: what a soak test watches besides the heap. */
@@ -208,10 +212,12 @@ export class SolidStages {
       this.dragRest = null;
     }
 
-    const imported = (): { solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean } => {
+    const imported = (): { solid: ImportedSolid; outcome: ImportInput; simplified: Diagnostic[]; whole: boolean; outside: WeldedMesh | null } => {
       if (this.model?.key === keys.S1) return this.model.value;
       if (!inputs.model) throw new StageMiss('S1');
       const { welded, audit, known } = inputs.model;
+      // RM: a rebuilt model's left-out parts, kept with the model they came with, for a glue-mode pocket.
+      const outside = inputs.model.outside ?? null;
       this.model = timed('S1', () => keep(null, keys.S1, (arena) => {
         // Past G1.8's limit, a worker told that an import has checked the mesh whole builds the copy alone,
         // as the whole solid holds 1.3 GB of its heap; the pipeline ends the worker that checked it.
@@ -220,7 +226,7 @@ export class SolidStages {
           // GC: the copy's own mesh is for the export's clearance. The preview never reads it, so it is not held,
           // and the memory meter does not count it (about 18 MB for a copy of 1 million triangles).
           const { copy: _mesh, ...copy } = fromCopy;
-          return { solid: copy, outcome: copy.mesh === welded ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: false, mesh: copy.mesh, openLoops: [] }, simplified: copy.simplified, whole: false };
+          return { solid: copy, outcome: copy.mesh === welded ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: false, mesh: copy.mesh, openLoops: [] }, simplified: copy.simplified, whole: false, outside };
         }
         // The import ladder makes many pieces on the way. Only the solid itself is worth keeping.
         const solid = withArena(api, (scratch) => {
@@ -232,7 +238,7 @@ export class SolidStages {
         // The usual case leaves the welded mesh as it was, and field.worker has already started on that.
         const plain = solid.solid !== null && solid.mesh === welded;
         const outcome: ImportInput = plain ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: solid.solid === null, mesh: solid.mesh, openLoops: solid.openLoops };
-        return { solid, outcome, simplified: [], whole: true };
+        return { solid, outcome, simplified: [], whole: true, outside };
       }));
       return this.model.value;
     };
@@ -348,8 +354,12 @@ export class SolidStages {
           return { ...meshOf(merged.base ?? body), diagnostics, merged: merged.base !== null };
         }
         const placed = orientedSolid(arena, imported, { transform, needsTrim });
-        const section = placed ? arena.track(placed.slice(pocketDepth)) : triangleContour(arena, mesh, pocketDepth);
-        const outline = pocketOutline(arena, print, section, params.base.pocketEnlarge);
+        const own = placed ? arena.track(placed.slice(pocketDepth)) : triangleContour(arena, mesh, pocketDepth);
+        // RM: a rebuilt model's file is what is glued in, so the pocket takes its foot too (outsideFoot, D26).
+        const far = this.model!.value.outside;
+        const foot = far ? outsideFoot(arena, orientedOutside(far, transform) ?? { positions: new Float32Array(), indices: new Uint32Array() }, pocketDepth) : null;
+        const section = foot ? arena.track(own.add(foot)) : own;
+        const outline = pocketOutline(arena, print, section, params.base.pocketEnlarge + (inputs.plane.repairNearMm ?? 0));
         const glue = buildGlueBase(arena, body, outline, pocketDepth, inputs.offsets);
         diagnostics.push(...glue.diagnostics);
         return { ...meshOf(glue.base), diagnostics, merged: false };

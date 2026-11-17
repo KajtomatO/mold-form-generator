@@ -51,7 +51,8 @@ export interface ExportJobMessage extends ExportJob {
 
 /**
  * MM2: a model prepared before it loads, its simplified copy made, in a fresh solid worker of its own that is
- * terminated when it answers. Its progress carries `memory` as an export's does, for the meter's 'simplify'.
+ * terminated when it answers. Its progress carries `memory` as an export's does, for the meter's 'simplify', or for
+ * a repair (RM) its 'repair', which asks for a reading under the same step as its arrays grow.
  */
 export interface PrepareJobMessage extends PrepareJob {
   t: 'prepare';

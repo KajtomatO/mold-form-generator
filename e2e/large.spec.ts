@@ -110,7 +110,7 @@ test.describe('MM2: large models', () => {
     await expect(page.getByTestId('file-name')).toHaveText('3dbenchy.stl, 49,998 triangles (simplified)');
     await idle(page);
     // The same copy as Node makes, in this browser too: the format does not need it, README.txt's "the same copy" does.
-    const origin = await app(page, (a) => a.store.pipeline.modelOrigin()!.record);
+    const origin = await app(page, (a) => a.store.pipeline.modelOrigin()!.record!);
     expect(origin.sha256).toBe(BENCHY_50K);
     expect(await app(page, (a) => a.store.pipeline.memory.parts().simplify)).toBeUndefined();
     await expect(page.locator('[data-testid="diagnostics"] [data-code="model-simplified"]')).toContainText('The mold is made from a copy of 3dbenchy.stl simplified from 225,154 to 49,998 triangles');

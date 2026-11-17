@@ -3,6 +3,7 @@ import { withoutDoubledVoids, type GeometryReports } from '../core/analysis/repo
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
 import { pickable } from '../core/base/candidates';
 import { transformPositions } from '../core/base/orient';
+import type { UpperLevel } from '../core/base/footprint';
 import { findStoredPlane, PLANE_MATCH_MM, planeGap, planeOf, type StoredPlane } from '../core/base/storedPlane';
 import type { SolidReport } from '../core/mesh/shells';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
@@ -25,7 +26,10 @@ import { hashFloats, hashMesh, hashString } from './hash';
 import { INIT_TIMEOUT_MS, JobGate, realTimers, type GateEvent, type GateTarget, type LogEntry, type Timers } from './jobGate';
 import { MemoryLedger, type MemorySource, type WorkerMemory } from './memory';
 import type { Project } from './project';
-import { displayProxyMessage, simplifiedMessage, type ModelOrigin } from './simplified';
+import { displayProxyMessage, repairedMessage, simplifiedMessage, type ModelOrigin } from './simplified';
+import { fillable } from '../core/mesh/repair';
+import { unionBounds } from '../core/field/outsidePart';
+import type { Bounds } from '../core/mesh/weld';
 import { stageKeys, type StageId, type StageInputs } from './stages';
 import { BUILD } from './buildInfo';
 import { bodiesByPart, type SavedBy } from './version';
@@ -46,8 +50,12 @@ interface Target extends GateTarget {
     importInput: ImportInput;
     parsed: ParsedModel | null;
     oriented: OrientedWire | null;
-    /** MM2: a simplified model's proved error, which widens the margin; 0 for a model as loaded. */
+    /** MM2: a simplified model's proved error, which widens the margin; 0 for a model as loaded. RM: e_near in glue mode. */
     modelErrorMm: number;
+    /** RM: a repaired model's left-out parts, in the file's coordinates, or null. */
+    outside: WeldedMesh | null;
+    /** RM: how far a repaired model's file lies outside its copy, for a glue-mode pocket; 0 otherwise. */
+    repairNearMm: number;
   };
 }
 
@@ -131,10 +139,20 @@ interface PlaneCheck {
   moved: boolean;
   /**
    * Why the choice may name another face: a project from another version of the app, or MM2's project carried
-   * between a simplified copy and the file it was made from, whose faces are numbered differently.
+   * between a simplified copy and the file it was made from, or RM's between a repaired copy and its file, whose
+   * faces are numbered differently.
    */
-  reason: 'version' | 'simplified';
+  reason: 'version' | 'simplified' | 'repaired';
 }
+
+/**
+ * RM: why the Model section offers Repair mesh (decision B): the file is no closed solid, so it loaded in soup mode
+ * ('open'), or it is closed but folds through itself ('folds'). `fill` says whether closing its holes alone is
+ * expected to do (rung A), which only the wording uses: the job decides.
+ */
+export type RepairOffer =
+  | { kind: 'open'; holes: number; holeArea: number; openEdges: number; nonManifold: number; misoriented: number; fill: boolean }
+  | { kind: 'folds'; folds: number; fill: false };
 
 /** A 3D marker of the Show toggle: a pin at a point, and the line of a cut to it where there is one. */
 export interface Marker {
@@ -170,7 +188,7 @@ export interface PipelineStatus {
 export interface PipelineSnapshot {
   bytes: Uint8Array;
   name: string;
-  /** MM2: what a simplified model was made from, or null. */
+  /** MM2: what a simplified model was made from, or RM's repaired one, or null. */
   origin: ModelOrigin | null;
   params: Params;
   plane: PlaneChoice;
@@ -344,6 +362,8 @@ export class Pipeline {
   /** An STL as it is, or with `origin` the simplified copy of the maker's file (MM2), named after that file. */
   load(bytes: Uint8Array, name: string, origin: ModelOrigin | null = null): void {
     this.startFile(bytes, name, origin);
+    // The last model's diagnostics go at once, not when the new one's first stage is in (RM's review).
+    this.collectDiagnostics();
     this.changed();
   }
 
@@ -361,6 +381,7 @@ export class Pipeline {
     this.removed = project.removed;
     this.planeCheck = stored ? { file: this.file!.id, stored, tried: false, moved: false, reason } : null;
     this.numbering = { file: this.file!.id, savedBy };
+    this.collectDiagnostics();
     this.changed();
   }
 
@@ -522,9 +543,105 @@ export class Pipeline {
     return this.file?.origin ?? null;
   }
 
-  /** MM2: how far the copy on screen lies from the maker's file, measured, which widens the margin; 0 for a model as loaded. */
+  /**
+   * MM2: how far the copy on screen lies from the maker's file, measured, which widens the margin; 0 for a model as
+   * loaded. RM: for a repaired model in glue mode, how far the file lies outside the copy (e_near), which the maker
+   * prints; in merged mode the base carries the copy itself, so nothing (D26).
+   */
   modelErrorMm(): number {
-    return this.file?.origin?.record.errorMm ?? 0;
+    const origin = this.file?.origin;
+    return (origin?.record?.errorMm ?? 0) + (origin?.repair && this.params.base.mode === 'glue' ? origin.repair.record.nearMm : 0);
+  }
+
+  /**
+   * RM: the stage input 'outside': 'glue' while a repaired model's field and box hold the file's left-out parts and
+   * the margin is wider by e_near, which is in glue mode for a copy that lies off the file anywhere; '' otherwise.
+   */
+  outsideTier(): '' | 'glue' {
+    const repair = this.file?.origin?.repair;
+    return repair && this.params.base.mode === 'glue' && (repair.record.nearMm > 0 || repair.outside !== null) ? 'glue' : '';
+  }
+
+  /** RM: the file's parts the repaired copy on screen left out, in its coordinates, while glue mode holds them; else null. */
+  private outsideHeld(): WeldedMesh | null {
+    return this.outsideTier() === 'glue' ? (this.file?.origin?.repair?.outside ?? null) : null;
+  }
+
+  /** RM: the box the plan is made for: the model's, with the left-out parts' where glue mode holds them (S2's outsideBounds). */
+  planBounds(): Bounds | null {
+    const oriented = this.oriented?.value;
+    if (!oriented) return null;
+    return this.outsideTier() === 'glue' ? unionBounds(oriented.bounds, oriented.outsideBounds) : oriented.bounds;
+  }
+
+  /**
+   * The plane's own notes. RM: on a repaired model the vertices below the plane are the copy's, and in glue mode the
+   * file printed is cut only where it reaches below the plane itself (decision C), so `below-plane` says so.
+   */
+  private planeNotes(): Diagnostic[] {
+    const oriented = this.oriented?.value, repair = this.file?.origin?.repair;
+    if (!oriented) return [];
+    if (!repair) return oriented.diagnostics;
+    const { vertexCount, depth } = oriented.oriented.below;
+    const below = `${vertexCount} vertices of the repaired copy lie up to ${depth.toFixed(2)} mm below this plane`;
+    const message = this.params.base.mode === 'merged'
+      ? `${below} and will be trimmed off the copy the base carries.`
+      : `${below}, so the mold is made for the copy trimmed there; model_oriented.stl, your own file, is trimmed only where it reaches below the plane too.`;
+    return oriented.diagnostics.map((d) => (d.code === 'below-plane' ? { ...d, message } : d));
+  }
+
+  /**
+   * G2.6's level the model could stand on instead, or null. RM: in glue mode a rebuilt copy's level within its grid
+   * of the plane is the grid's facets, not the file's, which is what is printed (RM's review), so none is offered.
+   */
+  upperLevel(): UpperLevel | null {
+    const levels = this.footprint?.value.levels;
+    if (!levels?.useUpper) return null;
+    const record = this.file?.origin?.repair?.record;
+    const facets = record?.method === 'rebuilt' && this.params.base.mode === 'glue' && levels.useUpper.gap <= (record.cell ?? 0);
+    return facets ? null : levels.useUpper;
+  }
+
+  /** G2.6's notes on the levels above the plane, less the one upperLevel does not offer. */
+  private levelNotes(): Diagnostic[] {
+    const levels = this.footprint?.value.levels;
+    if (!levels) return [];
+    return levels.useUpper && !this.upperLevel() ? levels.diagnostics.filter((d) => d.code !== 'upper-level') : levels.diagnostics;
+  }
+
+  /**
+   * RM: whether model_oriented.stl of the repaired model on screen is sure to be trimmed at the base plane: a filled
+   * copy has the file's vertices, all of them, so it is where the copy is; a rebuilt one where a part it left out
+   * reaches below the plane. The export decides by the file itself, which may also lose a sliver within e_near of a
+   * rebuilt copy that reaches below; README.txt says what it did.
+   */
+  private fileCut(): boolean {
+    const oriented = this.oriented?.value, repair = this.file?.origin?.repair;
+    if (!oriented || !repair || this.params.base.mode === 'merged') return false;
+    if (repair.record.method === 'filled') return oriented.oriented.needsTrim;
+    const far = repair.outside;
+    if (!far) return false;
+    const [, , , , , , g, h, i] = oriented.oriented.transform.rotation;
+    const tz = oriented.oriented.transform.translation[2], P = far.positions;
+    for (let k = 0; k < P.length; k += 3) if (Math.fround(g * P[k] + h * P[k + 1] + i * P[k + 2] + tz) < -oriented.planeTol) return true;
+    return false;
+  }
+
+  /**
+   * RM: whether, and why, the Model section offers Repair mesh for the model on screen (decision B): once the import
+   * has said for this file, a soup, or a closed mesh that folds; never for a repaired model, and never only because
+   * Manifold merged the file's edges, as the oil barrel's and war-barricade's.
+   */
+  repairOffer(): RepairOffer | null {
+    const parsed = this.parsed?.value;
+    if (!this.file || this.file.origin?.repair || !parsed || this.parsed!.key !== this.keys().S1 || this.imported?.key !== this.parsed!.key) return null;
+    const report = this.imported.value;
+    if (report.route === 'soup') {
+      const { audit } = parsed;
+      const fill = audit.nonManifoldEdges === 0 && (audit.openLoops.length === 0 || fillable({ ...audit, misorientedEdges: 0 }));
+      return { kind: 'open', holes: audit.openLoops.length, holeArea: audit.openArea, openEdges: audit.openEdges, nonManifold: audit.nonManifoldEdges, misoriented: audit.misorientedEdges, fill };
+    }
+    return report.folds > 0 ? { kind: 'folds', folds: report.folds, fill: false } : null;
   }
 
   /**
@@ -673,6 +790,7 @@ export class Pipeline {
   heldArrays(): unknown[] {
     return [
       this.file?.bytes,
+      this.file?.origin?.repair?.outside,
       this.importInput,
       this.parsed?.value,
       this.oriented?.value,
@@ -888,13 +1006,16 @@ export class Pipeline {
     const { normal, offset, area } = oriented.chosen;
     const notes = [
       ...parsed.diagnostics,
-      ...oriented.diagnostics,
-      ...(this.footprint?.value.levels.diagnostics ?? []),
+      ...this.planeNotes(),
+      ...this.levelNotes(),
       ...this.wallDiagnostics(),
       ...(this.placement?.value.placement.diagnostics ?? []),
       ...siliconeAdvice(this.params, this.field?.value.rim ?? null),
     ];
     const origin = this.file!.origin;
+    // RM's review: in merged mode a cast that lacks parts of the file is a warning on screen, so README.txt has it too.
+    const repaired = origin?.repair ? repairedMessage(origin.from.name, origin.repair.record, this.params.base.mode === 'merged') : null;
+    if (repaired?.severity === 'warning') notes.push({ code: 'model-repaired', ...repaired });
     return {
       model: this.file!.name,
       modelSha256: this.file!.sha256,
@@ -904,7 +1025,8 @@ export class Pipeline {
       project: this.project(),
       plane: { normal: [normal[0], normal[1], normal[2]], offset, area, planeTol: oriented.planeTol },
       notes: notes.map(plain),
-      ...(origin ? { simplified: { from: origin.from, record: origin.record } } : {}),
+      ...(origin?.record ? { simplified: { from: origin.from, record: origin.record } } : {}),
+      ...(origin?.repair ? { repaired: { from: origin.from, record: origin.repair.record } } : {}),
     };
   }
 
@@ -929,10 +1051,16 @@ export class Pipeline {
             importReport: this.heavyMesh(parsed!.welded) && this.imported?.key === this.keys().S1 ? this.imported.value : null,
             // MM2: a simplified model's error, which widens the margin, and its file, which the ZIP's model_oriented.stl
             // is in glue mode, read by the export's worker itself. A File goes by reference, not by its bytes.
-            ...(origin ? { modelErrorMm: origin.record.errorMm } : {}),
+            ...(origin?.record ? { modelErrorMm: origin.record.errorMm } : {}),
+            // RM: a repaired model in glue mode: how far the file lies outside the copy, and the parts it left out,
+            // which the field holds and the clearance measures on their own (D26).
+            ...(origin?.repair && params.base.mode === 'glue' ? { repairNearMm: origin.repair.record.nearMm, outside: origin.repair.outside ? { positions: origin.repair.outside.positions.slice(), indices: origin.repair.outside.indices.slice() } : null } : {}),
             // An inside-out separate body the copy's import flipped is flipped in the file by its whole solid,
-            // which is read before the build, as a trim is (MM2's review).
-            ...(origin && request.want === 'zip' && params.base.mode === 'glue' ? { original: { source: origin.original, sha256: origin.from.sha256, facts: origin.from, wholeSolid: this.imported?.value.diagnostics.some((d) => d.code === 'shell-inverted') ?? false } } : {}),
+            // which is read before the build, as a trim is (MM2's review). RM: a repaired model's file is turned as
+            // its own import turns it, which its record keeps (decision C).
+            ...(origin && request.want === 'zip' && params.base.mode === 'glue'
+              ? { original: { source: origin.original, sha256: origin.from.sha256, facts: origin.from, wholeSolid: origin.repair ? origin.repair.record.original.inverted : (this.imported?.value.diagnostics.some((d) => d.code === 'shell-inverted') ?? false), ...(origin.repair ? { repaired: origin.repair.record.original } : {}) } }
+              : {}),
           }
         : null;
     const params = this.params;
@@ -983,7 +1111,7 @@ export class Pipeline {
         };
         const inputs = inputsFor();
         const message: ExportJobMessage = { t: 'export', id: 1, ...request, params, inputs, meta, cellScale, ...(armed ? { fault: armed } : {}) };
-        worker.postMessage(message, inputs ? [inputs.welded.positions.buffer, inputs.welded.indices.buffer, inputs.candidate.members.buffer, ...(inputs.stl ? [inputs.stl.buffer] : [])] : []);
+        worker.postMessage(message, inputs ? [inputs.welded.positions.buffer, inputs.welded.indices.buffer, inputs.candidate.members.buffer, ...(inputs.stl ? [inputs.stl.buffer] : []), ...(inputs.outside ? [inputs.outside.positions.buffer, inputs.outside.indices.buffer] : [])] : []);
       });
     const crashed = (error: unknown): error is Error => error instanceof Error && CRASH_NAMES.has(error.name);
     return run(1, fault).catch((error: unknown) => {
@@ -1008,6 +1136,7 @@ export class Pipeline {
       pins: this.pins,
       removed: this.removed,
       drag: this.dragState,
+      outside: this.outsideTier(),
     };
   }
 
@@ -1046,7 +1175,8 @@ export class Pipeline {
   }
 
   private target<T extends Target>(keys: Record<StageId, string>, extra: Omit<T, keyof Target> & Pick<GateTarget, 'builds'>, idParts: unknown[]): T {
-    const source = { bytes: this.file?.bytes ?? null, importInput: this.importInput, parsed: this.parsed?.value ?? null, oriented: this.oriented?.value ?? null, modelErrorMm: this.modelErrorMm() };
+    const repair = this.file?.origin?.repair ?? null;
+    const source = { bytes: this.file?.bytes ?? null, importInput: this.importInput, parsed: this.parsed?.value ?? null, oriented: this.oriented?.value ?? null, modelErrorMm: this.modelErrorMm(), outside: repair?.outside ?? null, repairNearMm: repair ? repair.record.nearMm : 0 };
     return { id: hashString(JSON.stringify(idParts)), rev: this.rev, modelKey: this.modelKey(), keys, params: this.params, inputs: this.inputs(), source, ...extra } as T;
   }
 
@@ -1210,8 +1340,12 @@ export class Pipeline {
     if (mesh) transfer.push(mesh.positions.buffer, mesh.indices.buffer);
     const { pins, removed, cellScale } = target.inputs;
     const plane = JSON.parse(target.inputs.plane) as PlaneChoice;
+    // RM: a repaired model's left-out parts go with the file, which the worker keeps them with.
+    const far = file ? target.source.outside : null;
+    const outside = far ? { positions: far.positions.slice(), indices: far.indices.slice() } : null;
+    if (outside) transfer.push(outside.positions.buffer, outside.indices.buffer);
     return {
-      message: { t: 'field', id: 0, keys, want: target.want, params: target.params, inputs: { file, import: { ...imported, mesh }, plane, cellScale, pins, removed, modelErrorMm: target.source.modelErrorMm } },
+      message: { t: 'field', id: 0, keys, want: target.want, params: target.params, inputs: { file, import: { ...imported, mesh }, plane, cellScale, pins, removed, modelErrorMm: target.source.modelErrorMm, outside, outsideTier: target.inputs.outside } },
       transfer,
     };
   }
@@ -1223,8 +1357,11 @@ export class Pipeline {
     const needsModel = (want.includes('S1') || want.includes('S2') || want.includes('S15')) && cached.S1 !== keys.S1;
     // M11: past G1.8's limit, the import that checked the whole mesh, so a fresh worker builds only the copy.
     const known = parsed && this.heavyMesh(parsed.welded) && this.imported?.key === keys.S1 ? this.imported.value : null;
-    const model = needsModel && parsed ? { welded: { positions: parsed.welded.positions.slice(), indices: parsed.welded.indices.slice() }, audit: parsed.audit, known } : null;
+    const far = needsModel ? target.source.outside : null;
+    const outside = far ? { positions: far.positions.slice(), indices: far.indices.slice() } : null;
+    const model = needsModel && parsed ? { welded: { positions: parsed.welded.positions.slice(), indices: parsed.welded.indices.slice() }, audit: parsed.audit, known, ...(outside ? { outside } : {}) } : null;
     if (model) transfer.push(model.welded.positions.buffer, model.welded.indices.buffer);
+    if (model && outside) transfer.push(outside.positions.buffer, outside.indices.buffer);
     const needsField = want.includes('S13') && cached.S12 !== keys.S12 && cached.S11 !== keys.S11;
     const field = needsField && target.field ? { ...target.field.field, values: target.field.field.values.slice() } : null;
     if (field) transfer.push(field.values.buffer);
@@ -1249,6 +1386,7 @@ export class Pipeline {
             needsTrim: oriented?.oriented.needsTrim ?? false,
             planeTol: oriented?.planeTol ?? 0,
             pocketDepth: bounds ? resolveAuto(params, bounds).pocketDepth : params.print.layerHeight,
+            ...(target.source.repairNearMm > 0 ? { repairNearMm: target.source.repairNearMm } : {}),
           },
           rim,
           offsets,
@@ -1427,10 +1565,11 @@ export class Pipeline {
     const oriented = this.oriented.value;
     const bounds = meshBounds(mesh.positions);
     const gap = planeGap(planeOf(oriented.chosen), check.stored, bounds);
-    const saved = `${check.reason === 'simplified' ? 'The base face you chose' : 'The base face saved with this project'}, facing ${formatNormal(check.stored.normal)}${check.stored.upper === false ? '' : `, on its level ${check.stored.upper.toFixed(2)} mm up`},`;
+    const carried = check.reason !== 'version';
+    const saved = `${check.reason === 'repaired' ? 'The base face the model stood on' : carried ? 'The base face you chose' : 'The base face saved with this project'}, facing ${formatNormal(check.stored.normal)}${check.stored.upper === false ? '' : `, on its level ${check.stored.upper.toFixed(2)} mm up`},`;
     if (gap <= PLANE_MATCH_MM) {
       this.planeCheck = null;
-      const where = check.reason === 'simplified' ? 'on this model, as the simplified copy and the file it was made from number their faces differently' : 'in this version of the app, which numbers the faces differently';
+      const where = carried ? `on this model, as the ${check.reason} copy and the file it was made from number their faces differently` : 'in this version of the app, which numbers the faces differently';
       if (check.moved) this.notes.push({ code: 'plane-found', severity: 'info', message: `${saved} is ${choiceName(this.plane)} ${where}, so the model stands on it as saved.` });
       return false;
     }
@@ -1448,7 +1587,7 @@ export class Pipeline {
     // The best guess stands: the nearest plane found, or the saved choice as this version reads it.
     this.planeCheck = null;
     const off = Number.isFinite(gap) ? `up to ${gap.toFixed(2)} mm off it across the model` : `which faces ${formatNormal(oriented.chosen.normal)}`;
-    const finds = check.reason === 'simplified' ? 'is not one found on this model' : 'is not one this version of the app finds';
+    const finds = carried ? 'is not one found on this model' : 'is not one this version of the app finds';
     this.notes.push({ code: 'plane-mismatch', severity: 'warning', message: `${saved} ${finds}, so the model stands on ${choiceName(this.plane)}, ${off}. Check the base face before you export.` });
     return false;
   }
@@ -1479,15 +1618,19 @@ export class Pipeline {
     const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.params)];
     if (this.parsed) all.push(...this.parsed.value.diagnostics);
     // A hole's Show marks the middle of its rim; the cavity's warning marks only the holes facing up.
-    if (this.imported) all.push(...this.imported.value.diagnostics.map((d) => (d.code === 'missing-surface' ? { ...d, markers: this.holeMarkers(false) } : d)));
-    if (this.oriented) all.push(...this.oriented.value.diagnostics.map((d) => (d.code === 'missing-top-surface' ? { ...d, markers: this.holeMarkers(true) } : d)));
+    // RM: a fold's Show marks each place it folds through itself.
+    if (this.imported) all.push(...this.imported.value.diagnostics.map((d) => (d.code === 'missing-surface' ? { ...d, markers: this.holeMarkers(false) } : d.code === 'mesh-folds' ? { ...d, markers: this.fileMarkers(this.imported!.value.foldAt) } : d)));
+    if (this.oriented) all.push(...this.planeNotes().map((d) => (d.code === 'missing-top-surface' ? { ...d, markers: this.holeMarkers(true) } : d)));
     // MM2: the copy the mold is made from, and what model_oriented.stl is.
     const origin = this.file?.origin;
-    if (origin) all.push({ code: 'model-simplified', severity: 'info', message: simplifiedMessage(origin, this.params.base.mode === 'merged', this.oriented?.value.oriented.needsTrim ?? false) });
+    const trimmed = this.oriented?.value.oriented.needsTrim ?? false;
+    if (origin?.record) all.push({ code: 'model-simplified', severity: 'info', message: simplifiedMessage({ from: origin.from, record: origin.record }, this.params.base.mode === 'merged', trimmed) });
+    // RM: the repaired copy, marked where it closed a hole or left a part of the file out.
+    if (origin?.repair) all.push({ code: 'model-repaired', ...repairedMessage(origin.from.name, origin.repair.record, this.params.base.mode === 'merged', this.fileCut()), markers: this.fileMarkers(origin.repair.record.marks) });
     if (this.displayProxy && this.parsed) {
       all.push({ code: 'display-proxy', severity: 'info', message: displayProxyMessage(this.displayProxy.indices.length / 3, this.parsed.value.triangles, origin !== null && origin !== undefined) });
     }
-    if (this.footprint) all.push(...this.footprint.value.diagnostics, ...this.footprint.value.levels.diagnostics);
+    if (this.footprint) all.push(...this.footprint.value.diagnostics, ...this.levelNotes());
     all.push(...this.wallDiagnostics());
     if (this.field) all.push(...this.field.value.diagnostics, ...this.field.value.rim.diagnostics);
     if (this.placement) all.push(...this.placement.value.placement.diagnostics);
@@ -1507,6 +1650,14 @@ export class Pipeline {
       seen.add(key);
       return true;
     });
+  }
+
+  /** RM: points in the file's coordinates, turned as the model stands, as Show's markers. */
+  private fileMarkers(points: readonly [number, number, number][]): Marker[] {
+    const transform = this.oriented?.value.oriented.transform;
+    if (!transform || points.length === 0) return [];
+    const turned = transformPositions(Float32Array.from(points.flat()), transform);
+    return points.map((_, k): Marker => ({ at: [turned[k * 3], turned[k * 3 + 1], turned[k * 3 + 2]] }));
   }
 
   /** Each hole of an open mesh at the middle of its rim, in mold coordinates; with `up`, only those whose missing cap faces up. */
@@ -1613,8 +1764,11 @@ export class Pipeline {
       this.notify();
     };
     const sent = { positions: mesh.positions.slice(), indices: mesh.indices.slice() };
-    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform, modelErrorMm: this.modelErrorMm() } };
-    worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer]);
+    // RM: in glue mode the export's field holds a rebuilt model's left-out parts too.
+    const far = this.outsideHeld();
+    const outside = far ? { positions: far.positions.slice(), indices: far.indices.slice() } : null;
+    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform, modelErrorMm: this.modelErrorMm(), ...(outside ? { outside } : {}) } };
+    worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer, ...(outside ? [outside.positions.buffer, outside.indices.buffer] : [])]);
   }
 }
 

@@ -130,6 +130,37 @@ export function pocketOutline(arena: Arena, footprint: Footprint, section: Cross
   return enlarge > 0 ? arena.track(whole.offset(enlarge, 'Round', undefined, POCKET_SEGMENTS)) : whole;
 }
 
+/** How far round each corner of a left-out part's foot the pocket reaches, so a part of no thickness still has room. */
+const FOOT_PAD = 0.01;
+
+/**
+ * RM, D26: the outline of a rebuilt model's left-out parts (O_far, as the model stands, cut at the base plane) that lie
+ * below the pocket's top: each triangle's part under `depth`, seen from above, as the hull round its corners, each a
+ * square FOOT_PAD across, so a fin of no thickness has room too. The maker glues the file itself into the pocket, so
+ * the pocket must take its foot, which the repaired copy may lack. Null where none reaches below `depth`.
+ */
+export function outsideFoot(arena: Arena, outside: WeldedMesh, depth: number): CrossSection | null {
+  const { positions: P, indices: I } = outside;
+  const square = (x: number, y: number): Vec2[] => [[x - FOOT_PAD, y - FOOT_PAD], [x + FOOT_PAD, y - FOOT_PAD], [x + FOOT_PAD, y + FOOT_PAD], [x - FOOT_PAD, y + FOOT_PAD]];
+  const pieces: CrossSection[] = [];
+  for (let t = 0; t < I.length; t += 3) {
+    const corners = [I[t], I[t + 1], I[t + 2]];
+    if (Math.min(...corners.map((v) => P[v * 3 + 2])) >= depth) continue;
+    const points: Vec2[] = [];
+    for (let k = 0; k < 3; k++) {
+      const a = corners[k], b = corners[(k + 1) % 3];
+      const za = P[a * 3 + 2], zb = P[b * 3 + 2];
+      if (za < depth) points.push(...square(P[a * 3], P[a * 3 + 1]));
+      if ((za < depth) !== (zb < depth)) {
+        const f = (depth - za) / (zb - za);
+        points.push(...square(P[a * 3] + f * (P[b * 3] - P[a * 3]), P[a * 3 + 1] + f * (P[b * 3 + 1] - P[a * 3 + 1])));
+      }
+    }
+    pieces.push(arena.track(arena.api.CrossSection.hull([points])));
+  }
+  return pieces.length === 0 ? null : arena.track(arena.api.CrossSection.union(pieces));
+}
+
 export interface GlueBase {
   base: Manifold;
   /** One pocket's volume under z = 0, from its outline. */

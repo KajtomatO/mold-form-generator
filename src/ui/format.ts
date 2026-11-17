@@ -1,5 +1,6 @@
 /** How numbers read in the sidebar and status strip. Shared with the browser tests, which compare against Node. */
 
+import type { ModelOrigin } from '../app/simplified';
 import { MEMORY_SOURCES, MEMORY_WARN_BYTES, type MemorySource, type WorkerMemory } from '../app/memory';
 
 /** Up to `digits` decimals, without trailing zeros: 3, 0.2, 0.125. */
@@ -62,6 +63,7 @@ export const MEMORY_LABELS: Record<MemorySource, string> = {
   reports: 'Reports worker',
   export: 'Export',
   simplify: 'Simplify',
+  repair: 'Repair',
 };
 
 /**
@@ -74,10 +76,12 @@ export const MEMORY_LABELS: Record<MemorySource, string> = {
  * Chromium and 2.6 GB more in Firefox, most of it while the model opened, and in Firefox in its main
  * process, which holds the opened file and which no page can see into. MM2's review: while a simplified
  * copy is made, the meter's Simplify part follows the lock loop's arrays each half round, but not
- * meshoptimizer's own working memory, which no page can read.
+ * meshoptimizer's own working memory, which no page can read. RM: while a mesh is repaired, its Repair part
+ * follows every large array of each step as it grows, and counts meshoptimizer's working memory as estimated
+ * from the triangles it is given (120 bytes each, as measured at RM).
  */
 export const MEMORY_NOT_COUNTED =
-  "Not counted: the rest of the browser, with your other tabs and its extensions (on the test computer, 0.5 to 0.6 GB with only this page open and no model); the app's plain JavaScript data; copies of the parts on the graphics card; the memory a step uses while it runs, of which the meter sees only what is left when the step ends (opening a large model uses the most); and, while a simplified copy is made, the simplifier's own working memory. So a system monitor shows more: on the test computer, up to 2.6 GB more with a 3 million triangle model. No web page can see how much memory the computer has free.";
+  "Not counted: the rest of the browser, with your other tabs and its extensions (on the test computer, 0.5 to 0.6 GB with only this page open and no model); the app's plain JavaScript data; copies of the parts on the graphics card; the memory a step uses while it runs, of which the meter sees only what is left when the step ends (opening a large model uses the most); and, while a simplified copy is made, the simplifier's own working memory. While a mesh is repaired, the Repair part counts that working memory too, as an estimate. So a system monitor shows more: on the test computer, up to 2.6 GB more with a 3 million triangle model. No web page can see how much memory the computer has free.";
 
 /** Past MEMORY_WARN_BYTES, what to do. */
 export const MEMORY_ADVICE = 'That is a lot for one web page: close other browser tabs to free memory, or open a model with fewer triangles.';
@@ -110,4 +114,11 @@ export function memoryTitle(reading: Reading, warnAt = MEMORY_WARN_BYTES, simpli
   }
   lines.push(MEMORY_NOT_COUNTED);
   return lines.join('\n');
+}
+
+/** The file row's and the status strip's word on a copy: simplified (MM2), repaired (RM), or both. */
+export function originLabel(origin: ModelOrigin | null): string {
+  if (!origin) return '';
+  if (origin.repair) return origin.repair.record.simplified ? ' (repaired, simplified)' : ' (repaired)';
+  return ' (simplified)';
 }

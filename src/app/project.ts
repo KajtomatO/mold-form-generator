@@ -3,7 +3,7 @@ import type { StoredPlane } from '../core/base/storedPlane';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import type { PlaneChoice } from '../workers/fieldStages';
 import { BUILD } from './buildInfo';
-import type { SimplifiedEntry } from './simplified';
+import type { RepairedEntry, SimplifiedEntry } from './simplified';
 
 export type { StoredPlane } from '../core/base/storedPlane';
 
@@ -36,11 +36,17 @@ export interface ProjectFile extends Project {
    * project.json of any other keeps its bytes, and the format stays 6.
    */
   simplified?: SimplifiedEntry;
+  /**
+   * RM: the mold was made from a repaired copy of `model` (R43), which a .moldproj holds as repaired.stl beside the
+   * file itself; `plane`, `pins` and `removed` are the copy's. Only for a repaired model, so the project.json of any
+   * other keeps its bytes, and the format stays 6. A version that does not know it leaves it out and opens the file.
+   */
+  repaired?: RepairedEntry;
 }
 
 /** The fields in the order project.json lists them, so the file reads from what it is about to what it holds. */
-export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null; simplified?: SimplifiedEntry }): ProjectFile {
-  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...(identity.simplified ? { simplified: identity.simplified } : {}), ...project };
+export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null; simplified?: SimplifiedEntry; repaired?: RepairedEntry }): ProjectFile {
+  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...(identity.simplified ? { simplified: identity.simplified } : {}), ...(identity.repaired ? { repaired: identity.repaired } : {}), ...project };
 }
 
 /** project.json's text, as both a .moldproj and the export ZIP write it. */
