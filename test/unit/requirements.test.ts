@@ -68,9 +68,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     for (const cells of users) expect(cells[2], cells[0]).toMatch(/^R\d\d(, R\d\d)*$/);
   });
 
-  it('records the decisions D1 to D24 with what each changed, the user\'s answers, and keeps the open items open', () => {
+  it('records the decisions D1 to D25 with what each changed, the user\'s answers, and keeps the open items open', () => {
     const decisions = tableRows(section(requirements, 4)!).filter((cells) => /^D\d+$/.test(cells[0]));
-    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 24 }, (_, k) => `D${k + 1}`));
+    expect(decisions.map((cells) => cells[0])).toEqual(Array.from({ length: 25 }, (_, k) => `D${k + 1}`));
     // R1's, the user's of 2026-11-09, with their date, the base layer's of the same day, and R2's of 2026-11-11.
     expect(section(requirements, 4)).toContain('D10 to D15 on 2026-11-09, and D16');
     expect(section(requirements, 4)).toContain('D17 records how the user\'s decisions of 2026-11-11 were carried out');
@@ -112,6 +112,9 @@ describe('the requirement map in docs/REQUIREMENTS.md', () => {
     expect(meter).toMatch(/^Built in 0\.2\.0 \(MM1 and MM2; R41, R42, D23, D24\)/);
     // MM2's answers of 2026-11-16, as recorded in section 2: the copy's count, the warning point, and Simplify… for a model loaded anyway.
     for (const answer of ['from 10,000 to 1,000,000 triangles, 300,000 by default', 'set from the memory curve measured at MM2', 'a Simplify… button in the Model section']) expect(section(requirements, 2)).toContain(answer);
+    // GC's, the clearance's error MM2's design found overstated, proved for every model and done in 0.2.0.
+    expect(section(requirements, 4)).toContain('D25 records how the clearance\'s error, which MM2\'s design found overstated on 2026-11-17, was proved for every model');
+    expect(future.find((cells) => cells[0].startsWith('2026-11-17, found by MM2\'s design'))?.[2]).toMatch(/^Done in 0\.2\.0 \(`docs\/PLAN\.md`, GC; D25\)/);
     // So are the user's reset button and the marks on changed settings, after PrusaSlicer.
     expect(section(requirements, 8)).toMatch(/global Reset button[\s\S]*PrusaSlicer: a grey dot/);
   });

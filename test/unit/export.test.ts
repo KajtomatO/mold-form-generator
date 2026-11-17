@@ -1173,14 +1173,16 @@ describe('models of parts that overlap, exported in Node', () => {
   }, 120_000);
 });
 
-describe('MM2: a model loaded as it is exports what 92724e8 exported: every STL byte for byte, the texts with the version masked, README.txt by its words', () => {
+describe('MM2: a model loaded as it is exports what 92724e8 exported, but for the decimation\'s error GC proves over 60,000 triangles: every STL byte for byte, the texts with the version masked, README.txt by its words', () => {
   /**
    * SHA-256 of every file of the ZIP with the fit test, of report.json without its timings, and of the .moldproj
    * Save project packs, each text with the build's version string masked, and README.txt by its words alone, its
    * line breaks collapsed, as a version of another length wraps its lines elsewhere: as captured at 92724e8 before
    * MM2's first change. Benchy, over G4's 60,000 triangles, takes the decimated clearance (MM2's review). A
    * simplified model's keys and sentences appear only when a model was simplified, and a margin widened by 0 is the
-   * margin. Update them only for a change that means to change the export.
+   * margin. GC: Benchy's README.txt and report.json give the decimation's error proved, 0.037 mm where meshoptimizer
+   * said 0.007, and the clearance less it, 3.18 mm where they said 3.21; its STLs and every other hash are
+   * 92724e8's. Update them only for a change that means to change the export.
    */
   const PINNED: Record<string, Record<string, string>> = {
     'jersey at defaults': {
@@ -1240,7 +1242,7 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported: every STL 
     },
     'Benchy at defaults': {
       '.moldproj': '7558fe63c70cb7e4c4e9a4303b2704a64c6441c404a99a4e55ea6c4072aed4b4',
-      'README.txt': '64a21e4853be57e3406afd0c2edd4ce5d28df83cd6f047a97905b848179f73b2',
+      'README.txt': '32de16fba15d40628fdb8d6cb8eb22e985ba4a67a47903b7f3ed42b89c596165',
       'base.stl': '143eb64a7f369f45681adf8baad516f4e0aec9c07211d045fb7ede8890537deb',
       'cover.stl': 'dcc9adc508455d02e9b77423e9cf4483232e62356e051813597f45c71f2007f6',
       'fit_test/README.txt': 'cc2bedb13778d88c3392de582aa2a1f4dfe72e155c4e7530738c2b03515b2f84',
@@ -1263,7 +1265,7 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported: every STL 
       'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
       'model_oriented.stl': 'b06bd96e52efc3488426a636930e4e89c98fc590dd4e09635682f9e8840c376d',
       'project.json': '63ff6b3649aacc864384dc98d1a6f2ae2b3071d0f8671dd8764120b8f9141d53',
-      'report.json': '0d2f228c1ca2f02adad06bb9c110349a34caa844fc8cf80682cbc2753508aaef',
+      'report.json': 'aff136df8dc489a1e7c711ef5b9ad9224f8ba96c6a0d782ef33ed691686b764b',
     },
   };
   const CHANGES: Record<string, (p: Params) => void> = {

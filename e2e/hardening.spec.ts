@@ -315,15 +315,15 @@ test.describe('3 million triangles', () => {
       expect(preview.reading.total).toBeGreaterThanOrEqual(MEMORY_WARN_BYTES);
       expect(preview.tickMs, 'one reading of the meter on main, in ms').toBeLessThan(2);
 
-      // Merged mode unions a copy simplified to a million triangles, and says by how much under Mode.
+      // Merged mode unions a copy simplified to a million triangles, and says so under Mode, with no error figure,
+      // as meshoptimizer's is no bound (GC): the export proves what the silicone needs.
       memory.phase('merged');
       await hooks(page, (h) => h.setParam('base.mode', 'merged'));
       await hooks(page, (h) => h.idle());
       lap('merged');
       const warning = page.locator('[data-param="base.mode"] [data-code="mode-b-simplified"]');
       await expect(warning).toContainText('This model has 3,011,040 triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to');
-      const mm = Number(/with up to (\S+) mm of error/.exec((await warning.textContent())!)?.[1] ?? 0);
-      expect(mm).toBeGreaterThan(0);
+      await expect(warning).not.toContainText('mm of error');
       expect(await app(page, (a) => a.store.pipeline.base?.value.merged)).toBe(true);
       await hooks(page, (h) => h.setParam('base.mode', 'glue'));
       await hooks(page, (h) => h.idle());
@@ -355,7 +355,7 @@ test.describe('3 million triangles', () => {
       await page.getByTestId('section').uncheck();
 
       const peak = memory.stop();
-      console.log(`3M triangles in ${info.project.name}: ms ${JSON.stringify(times)}; merged copy's error ${mm} mm; export total ${Math.round(report.timings.total)} ms, ZIP ${(saved.bytes.length / 1e6).toFixed(1)} MB; browser tree peak RSS ${peak.rssMb.toFixed(0)} MiB (${peak.phase}, ${peak.processes} processes: ${JSON.stringify(peak.each)}), PSS ${peak.pssMb.toFixed(0)} MiB, by phase ${JSON.stringify(peak.phases)}, swap +${peak.swapGrowthMb.toFixed(0)} MiB, ${peak.samples} samples`);
+      console.log(`3M triangles in ${info.project.name}: ms ${JSON.stringify(times)}; clearance ${JSON.stringify(report.clearance)}; export total ${Math.round(report.timings.total)} ms, ZIP ${(saved.bytes.length / 1e6).toFixed(1)} MB; browser tree peak RSS ${peak.rssMb.toFixed(0)} MiB (${peak.phase}, ${peak.processes} processes: ${JSON.stringify(peak.each)}), PSS ${peak.pssMb.toFixed(0)} MiB, by phase ${JSON.stringify(peak.phases)}, swap +${peak.swapGrowthMb.toFixed(0)} MiB, ${peak.samples} samples`);
 
       // MM1: the meter counts only what the app holds, so it never reads more than the browser's PSS, and the
       // rest is the browser's own: its empty app, and in Firefox the main process, which holds the file.

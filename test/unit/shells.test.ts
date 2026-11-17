@@ -368,15 +368,17 @@ describe('simplification for heavy input (G1.8, thresholds lowered here; the 3M 
     expect(displayProxy(welded, MeshoptSimplifier)).toBeNull();
   });
 
-  it('simplifies to a compact, valid solid and reports the error it measured', () => {
+  it('simplifies to a compact, valid solid, keeps meshoptimizer\'s own error figure for the record and leaves it out of its warning', () => {
     const { welded } = loadExample('goddess');
     const simplified = simplifyForManifold(welded, MeshoptSimplifier, 5000);
     expect(simplified).not.toBeNull();
-    const { mesh, errorMm, diagnostics } = simplified!;
+    const { mesh, reportedMm: errorMm, diagnostics } = simplified!;
     expect(mesh.indices.length / 3).toBeLessThanOrEqual(5000);
     expect(new Set(mesh.indices).size).toBe(mesh.positions.length / 3);
     expect(diagnostics.map((d) => [d.code, d.severity])).toEqual([['mode-b-simplified', 'warning']]);
-    expect(diagnostics[0].message).toContain(`${errorMm.toFixed(3)} mm`);
+    // GC: the figure is no bound, so the warning gives none.
+    expect(diagnostics[0].message).not.toContain(`${errorMm.toFixed(3)} mm`);
+    expect(diagnostics[0].message).not.toMatch(/\d mm/);
 
     // Checks the error in mm against the real distance from the original surface to the simplified
     // one, on a sample of vertices. The reported figure is an estimate, so only its size must

@@ -1,19 +1,23 @@
 import { unzipSync } from 'fflate';
 import type { ManifoldToplevel } from 'manifold-3d';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MeshoptSimplifier } from 'meshoptimizer';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { allDiagnostics, DIAGNOSTIC_PARAM } from '../../src/app/derived';
 import { Pipeline } from '../../src/app/pipeline';
+import { transformPositions } from '../../src/core/base/orient';
 import { auditEdges } from '../../src/core/mesh/audit';
 import { importSolid } from '../../src/core/mesh/shells';
-import type { HeavyLimits } from '../../src/core/mesh/simplify';
+import { simplifyForManifold, type HeavyLimits } from '../../src/core/mesh/simplify';
 import { weld, type WeldedMesh } from '../../src/core/mesh/weld';
+import { coverPose } from '../../src/core/parts/poses';
 import { withArena } from '../../src/core/solid/arena';
 import { parseStl } from '../../src/core/stl/parse';
-import type { ExportReport } from '../../src/workers/exportJob';
+import { measuredError, MIN_GAP_TRIANGLES, type ExportReport } from '../../src/workers/exportJob';
 import type { ToWorker, WorkerLike } from '../../src/workers/protocol';
 import { heightBlockMesh, HEAVY_BLOCK } from '../fixtures/heavy';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { loadManifold } from '../fixtures/loadExamples';
+import { unpose } from '../fixtures/solidChecks';
 import { asciiStl, box, inverted, join, toSoup } from '../fixtures/synthetic';
 
 /**
@@ -40,16 +44,17 @@ let api: ManifoldToplevel;
 const pipelines: Pipeline[] = [];
 beforeAll(async () => {
   api = await loadManifold();
+  await MeshoptSimplifier.ready;
 });
 afterAll(() => pipelines.splice(0).forEach((p) => p.dispose()));
 
 /** A pipeline whose solid workers have the test's limits, recording each worker spawned and every message sent to one. */
-function heavyPipeline(): { p: Pipeline; spawned: () => number; sent: ToWorker[] } {
+function heavyPipeline(limits: HeavyLimits = LIMITS): { p: Pipeline; spawned: () => number; sent: ToWorker[] } {
   let spawned = 0;
   const sent: ToWorker[] = [];
   const spawnSolid = (): WorkerLike => {
     spawned++;
-    const worker = inProcessSolid(LIMITS);
+    const worker = inProcessSolid(limits);
     const post = worker.postMessage.bind(worker);
     worker.postMessage = (message: ToWorker, transfer?: Transferable[]) => {
       sent.push(message);
@@ -57,9 +62,19 @@ function heavyPipeline(): { p: Pipeline; spawned: () => number; sent: ToWorker[]
     };
     return worker;
   };
-  const p = new Pipeline({ spawnField: inProcessField, spawnSolid, frozen: true, manifoldLimit: LIMITS.limit });
+  const p = new Pipeline({ spawnField: inProcessField, spawnSolid, frozen: true, manifoldLimit: limits.limit });
   pipelines.push(p);
   return { p, spawned: () => spawned, sent };
+}
+
+/**
+ * GC: the model as the export stands it, and G1.8's copy of it at `limits`, made as the export makes it: the
+ * pipeline's welded mesh, which the import keeps as it is, turned by the plan's transform.
+ */
+function standing(p: Pipeline, limits: HeavyLimits = LIMITS): { model: WeldedMesh; copy: WeldedMesh } {
+  const welded = p.parsed!.value.welded, transform = p.oriented!.value.oriented.transform;
+  const copy = simplifyForManifold(welded, MeshoptSimplifier, limits.limit, limits.target)!.mesh;
+  return { model: { positions: transformPositions(welded.positions, transform), indices: welded.indices }, copy: { positions: transformPositions(copy.positions, transform), indices: copy.indices } };
 }
 
 /** The block with its void and a part passing into its top, which the import finds as one body of the block and part less the void and their overlap. */
@@ -84,6 +99,31 @@ function spikedBlock(): WeldedMesh {
   return join(spiked, box([48, 48, -0.3], [52, 52, 5]));
 }
 
+/**
+ * GC: a smooth block of 66,960 triangles, past 60,000: its 60,000 triangle decimation lies close to it, the copy of
+ * 2,000 farther. Its floor is 5 mm up, so the plan moves it down to stand, as the export must move G1.8's copy too
+ * (the review: a block standing as it is would pass with the copy left where the import has it). It is not laid on
+ * its side: a copy left unturned would then lie 25 mm and more off, which the proof takes many minutes to bound.
+ */
+function smoothBlock(): WeldedMesh {
+  const mesh = heightBlockMesh({ ...HEAVY_BLOCK, n: 180, size: 50, height: 10, ripple: 0.3, wavelength: 12.5 }, weld);
+  const positions = mesh.positions.slice();
+  for (let i = 2; i < positions.length; i += 3) positions[i] += 5;
+  return { positions, indices: mesh.indices };
+}
+
+/** The smooth block loaded, standing on its own floor by a transform that moves it 5 mm down. */
+async function smoothPipeline(): Promise<Pipeline> {
+  const mesh = smoothBlock();
+  expect(mesh.indices.length / 3).toBeGreaterThan(MIN_GAP_TRIANGLES);
+  const { p } = heavyPipeline();
+  p.load(asciiStl(toSoup(mesh), 'smooth block'), 'smooth-block.stl');
+  await p.idle();
+  expect(p.oriented!.value.oriented.transform.translation[2]).toBeCloseTo(-5, 4);
+  return p;
+}
+
+const flat =(bytes: Uint8Array): string => new TextDecoder().decode(bytes).replace(/\r\n\s*/g, ' ');
 const solidJobs = (sent: ToWorker[]) => sent.filter((m): m is Extract<ToWorker, { t: 'solid' }> => m.t === 'solid');
 const exportJobs = (sent: ToWorker[]) => sent.filter((m): m is Extract<ToWorker, { t: 'export' }> => m.t === 'export');
 
@@ -113,7 +153,7 @@ describe('a mesh past G1.8\'s limit in the pipeline (limits of 4,000 and 2,000 t
     expect(p.log.some((e) => e.gate === 'solid' && e.event === 'respawned' && e.detail === 'recycled')).toBe(true);
     // The copy's warning comes with the base, and belongs under Mode.
     const simplified = (): string | undefined => allDiagnostics(p).find((d) => d.code === 'mode-b-simplified')?.message;
-    expect(simplified()).toMatch(/^This model has [\d,]+ triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to [\d,]+ triangles, with up to \d+\.\d+ mm of error\./);
+    expect(simplified()).toMatch(/^This model has [\d,]+ triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to [\d,]+ triangles\. The cover and model_oriented\.stl come from the whole mesh\.$/);
     expect(DIAGNOSTIC_PARAM['mode-b-simplified']).toBe('base.mode');
     p.setParams((params) => (params.base.mode = 'merged'));
     await p.idle();
@@ -134,13 +174,118 @@ describe('a mesh past G1.8\'s limit in the pipeline (limits of 4,000 and 2,000 t
     expect(report.parts['model_oriented.stl'].volumeMm3!).toBeCloseTo(wholeVolume, 3);
     expect(Math.abs(report.model.volumeMm3! - whole.report.solidVolume)).toBeGreaterThan(VOID_MM3 * 0.99);
     expect(parseStl(outputs.files['model_oriented.stl']).rawTriangleCount).toBe(mesh.indices.length / 3);
-    // The model is under 60,000 triangles, so minGap measured the copy itself, which gives up the copy's error.
-    const copyError = Number(/with up to (\d+\.\d+) mm of error/.exec(simplified()!)![1]);
-    expect(outputs.clearance!.error).toBeGreaterThan(0);
-    expect(outputs.clearance!.error.toFixed(3)).toBe(copyError.toFixed(3));
+    // The model is under 60,000 triangles, so minGap measured the copy itself, which gives up how far the whole
+    // mesh lies from it, proved over all of it (GC), not meshoptimizer's figure: here 0.846 mm against its 0.431.
+    const { model, copy } = standing(p);
+    const proved = measuredError(model, copy);
+    expect(outputs.clearance!.error).toBe(proved);
+    expect(proved).toBeGreaterThan(1.5 * simplifyForManifold(p.parsed!.value.welded, MeshoptSimplifier, LIMITS.limit, LIMITS.target)!.reportedMm);
+    expect(report.clearance.decimationError).toBe(proved);
     expect(report.clearance.minGap! - report.clearance.measured!).toBeCloseTo(outputs.clearance!.error, 9);
+    expect(flat(outputs.files['README.txt'])).toContain(`between the model and the cover, measured on a simplified copy of the model with its error of ${proved.toFixed(3)} mm taken off.`);
     expect(outputs.clearance!.measured).toBeGreaterThanOrEqual(p.params.silicone.t);
     expect(outputs.diagnostics.map((d) => d.code)).toContain('mode-b-simplified');
+  }, 300_000);
+
+  it('GC: in merged mode the base carries the copy, so the gap is the copy\'s own, measured on it with nothing taken off, and README.txt says it is the copy\'s', async () => {
+    const { p } = heavyPipeline();
+    p.load(asciiStl(toSoup(hollowBlock()), 'hollow block'), 'hollow-block.stl');
+    await p.idle();
+    p.setParams((params) => (params.base.mode = 'merged'));
+    await p.idle();
+    const outputs = await p.exportParts();
+    const report = JSON.parse(new TextDecoder().decode(outputs.files['report.json'])) as ExportReport;
+    // Under 60,000 triangles, minGap measured the copy's own solid, which is what the base carries.
+    expect(outputs.clearance).toMatchObject({ error: 0, copy: true });
+    expect(report.clearance.decimationError).toBe(0);
+    expect(report.clearance.minGap).toBe(report.clearance.measured);
+    expect(flat(outputs.files['README.txt'])).toContain(`Measured clearance: ${report.clearance.measured!.toFixed(2)} mm at the thinnest point between the simplified copy the base carries and the cover.`);
+    // The copy reassembled with the cover: its gap is the one measured.
+    const t = p.params.silicone.t;
+    const gap = withArena(api, (arena) => {
+      const cover = unpose(arena, outputs.files['cover.stl'], coverPose(outputs.rim!));
+      const { copy } = standing(p);
+      return importSolid(arena, copy, auditEdges(copy)).solid!.minGap(cover, t + 2);
+    });
+    expect(gap).toBeGreaterThanOrEqual(t - 1e-6);
+    expect(Math.abs(gap - report.clearance.measured!)).toBeLessThan(1e-3);
+  }, 300_000);
+
+  it('GC: past 60,000 triangles, glue mode takes off how far the whole mesh lies from its decimated copy and merged mode how far the base\'s copy does, each proved, and neither says more than the gap it is for', async () => {
+    const p = await smoothPipeline();
+    const { model, copy } = standing(p);
+    const decimated = simplifyForManifold(model, MeshoptSimplifier, MIN_GAP_TRIANGLES)!.mesh;
+    const ofModel = measuredError(model, decimated), ofCopy = measuredError(copy, decimated);
+    expect(ofCopy).toBeGreaterThan(ofModel + 0.01);
+    const t = p.params.silicone.t;
+    for (const mode of ['glue', 'merged'] as const) {
+      p.setParams((params) => (params.base.mode = mode));
+      await p.idle();
+      const outputs = await p.exportParts();
+      const report = JSON.parse(new TextDecoder().decode(outputs.files['report.json'])) as ExportReport;
+      const proved = mode === 'glue' ? ofModel : ofCopy;
+      expect(outputs.clearance!.error, mode).toBe(proved);
+      expect(report.clearance.decimationError, mode).toBe(proved);
+      expect(outputs.clearance!.copy, mode).toBe(mode === 'merged' ? true : undefined);
+      expect(flat(outputs.files['README.txt']), mode).toContain(mode === 'merged'
+        ? `at the thinnest point between the simplified copy the base carries and the cover, measured on a lighter copy of the model, less ${proved.toFixed(3)} mm for how far the base's copy lies from it.`
+        : `at the thinnest point between the model and the cover, measured on a simplified copy of the model with its error of ${proved.toFixed(3)} mm taken off.`);
+      // What the silicone surrounds: the whole model glued in, or the copy the base carries; its own gap is never under the figure.
+      const gap = withArena(api, (arena) => {
+        const cover = unpose(arena, outputs.files['cover.stl'], coverPose(outputs.rim!));
+        const surface = mode === 'glue' ? model : copy;
+        return importSolid(arena, surface, auditEdges(surface)).solid!.minGap(cover, t + 2);
+      });
+      expect(gap, mode).toBeGreaterThanOrEqual(t - 1e-6);
+      expect(report.clearance.measured!, mode).toBeLessThanOrEqual(gap + 1e-3);
+    }
+  }, 300_000);
+
+  it('GC: where the 60,000 triangle decimation is no solid, minGap measures G1.8\'s copy itself: glue mode takes off how far the whole mesh lies from it, proved, and merged mode, whose base carries it, nothing', async () => {
+    const p = await smoothPipeline();
+    const { model, copy } = standing(p);
+    const proved = measuredError(model, copy);
+    expect(proved).toBeGreaterThan(0.01);
+    const t = p.params.silicone.t;
+    // The export's decimation for minGap loses a triangle, so it is open and Manifold refuses it; G1.8's copy is whole.
+    const simplify = MeshoptSimplifier.simplify;
+    const decimations: number[] = [];
+    const open = vi.spyOn(MeshoptSimplifier, 'simplify').mockImplementation((...args: Parameters<typeof simplify>) => {
+      const [indices, error] = simplify(...args);
+      if (args[3] !== MIN_GAP_TRIANGLES * 3) return [indices, error];
+      decimations.push(indices.length / 3);
+      return [indices.slice(3), error];
+    });
+    try {
+      for (const mode of ['glue', 'merged'] as const) {
+        p.setParams((params) => (params.base.mode = mode));
+        await p.idle();
+        const before = decimations.length;
+        const outputs = await p.exportParts();
+        expect(decimations.length, mode).toBe(before + 1);
+        const report = JSON.parse(new TextDecoder().decode(outputs.files['report.json'])) as ExportReport;
+        const error = mode === 'glue' ? proved : 0;
+        expect(outputs.clearance!.error, mode).toBe(error);
+        expect(report.clearance.decimationError, mode).toBe(error);
+        expect(report.clearance.minGap! - report.clearance.measured!, mode).toBeCloseTo(error, 9);
+        expect(outputs.clearance!.copy, mode).toBe(mode === 'merged' ? true : undefined);
+        expect(flat(outputs.files['README.txt']), mode).toContain(mode === 'merged'
+          ? `at the thinnest point between the simplified copy the base carries and the cover.`
+          : `at the thinnest point between the model and the cover, measured on a simplified copy of the model with its error of ${proved.toFixed(3)} mm taken off.`);
+        const gap = withArena(api, (arena) => {
+          const cover = unpose(arena, outputs.files['cover.stl'], coverPose(outputs.rim!));
+          const surface = mode === 'glue' ? model : copy;
+          return importSolid(arena, surface, auditEdges(surface)).solid!.minGap(cover, t + 2);
+        });
+        expect(gap, mode).toBeGreaterThanOrEqual(t - 1e-6);
+        expect(report.clearance.measured!, mode).toBeLessThanOrEqual(gap + 1e-3);
+        // Merged mode measured the copy the base carries itself, so its figure is that copy's own gap.
+        if (mode === 'merged') expect(Math.abs(gap - report.clearance.measured!)).toBeLessThan(1e-3);
+      }
+    } finally {
+      open.mockRestore();
+    }
+    expect(MeshoptSimplifier.simplify).toBe(simplify);
   }, 300_000);
 
   it('an export that trims the model imports it whole, reads the trimmed model_oriented.stl and the volume from it, and builds on the copy', async () => {

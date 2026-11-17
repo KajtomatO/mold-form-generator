@@ -215,8 +215,13 @@ export class SolidStages {
       this.model = timed('S1', () => keep(null, keys.S1, (arena) => {
         // Past G1.8's limit, a worker told that an import has checked the mesh whole builds the copy alone,
         // as the whole solid holds 1.3 GB of its heap; the pipeline ends the worker that checked it.
-        const copy = known && this.simplifier ? importFromCopy(arena, welded, known, this.simplifier, this.limits.limit, this.limits.target) : null;
-        if (copy) return { solid: copy, outcome: copy.mesh === welded ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: false, mesh: copy.mesh, openLoops: [] }, simplified: copy.simplified, whole: false };
+        const fromCopy = known && this.simplifier ? importFromCopy(arena, welded, known, this.simplifier, this.limits.limit, this.limits.target) : null;
+        if (fromCopy) {
+          // GC: the copy's own mesh is for the export's clearance. The preview never reads it, so it is not held,
+          // and the memory meter does not count it (about 18 MB for a copy of 1 million triangles).
+          const { copy: _mesh, ...copy } = fromCopy;
+          return { solid: copy, outcome: copy.mesh === welded ? PLAIN_IMPORT : { key: `import:${keys.S1}`, soup: false, mesh: copy.mesh, openLoops: [] }, simplified: copy.simplified, whole: false };
+        }
         // The import ladder makes many pieces on the way. Only the solid itself is worth keeping.
         const solid = withArena(api, (scratch) => {
           const found = importSolid(scratch, welded, audit);

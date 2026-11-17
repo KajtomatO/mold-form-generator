@@ -45,7 +45,7 @@ import { originalBytes } from './prepareJob';
 /** G4: minGap runs against the model decimated to at most this many triangles. */
 export const MIN_GAP_TRIANGLES = 60_000;
 /** G4: the margin is raised by the shortfall plus this, once. */
-const RAISE_EXTRA = 0.05;
+export const RAISE_EXTRA = 0.05;
 /** M3: 8 mm cannot see t = 10, so the search reaches past t. */
 const SEARCH_PAST_T = 0.7;
 /** Fixed, so the same mold always gives the same ZIP. */
@@ -123,7 +123,11 @@ export interface ExportJob extends ExportRequest {
 export interface Clearance {
   /** minGap between the decimated model and the cover, less the decimation's error. */
   measured: number;
-  /** The decimation's error, in mm. When the model's own solid was measured, 0, or past G1.8's limit its copy's error. */
+  /**
+   * The decimation's error, in mm, proved over every point of the surface the gap is for (GC): how far that surface
+   * lies from what minGap measured. When the model's own solid was measured, 0; past G1.8's limit in glue mode, how
+   * far the whole mesh lies from the copy measured.
+   */
   error: number;
   /** By how much the margin was raised for a second build, or 0. */
   raisedBy: number;
@@ -132,6 +136,8 @@ export interface Clearance {
    * taken off, so `measured` holds for the file. Only for a simplified model.
    */
   simplify?: number;
+  /** GC: past G1.8's limit in merged mode, the gap is the copy's the base carries, not the whole mesh's. */
+  copy?: true;
 }
 
 /** report.json: every number of the export, for the maker to check and for M9 and support to read. */
@@ -350,9 +356,12 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     // MM2: the maker's own file for model_oriented.stl, where the plane trims it, before the build: see exportSteps.
     const original = reads === 'before' ? timed('original', () => readOriginal(api, inputs, imported.report, overlap, readBlob, holding)) : null;
     // G1.8: past the limit every Manifold step after the import uses a simplified copy.
-    const path: ManifoldPath = fromCopy ? { solid: fromCopy.solid, heavy: true, diagnostics: fromCopy.simplified, errorMm: fromCopy.errorMm } : timed('import', () => manifoldPathSolid(arena, imported, simplifier, limits.limit, limits.target));
+    const path: ManifoldPath = fromCopy ? { solid: fromCopy.solid, heavy: true, diagnostics: fromCopy.simplified, copy: fromCopy.copy } : timed('import', () => manifoldPathSolid(arena, imported, simplifier, limits.limit, limits.target));
     // The copy stands in for the whole solid from here on. One that is no closed solid leaves the whole one in use.
     if (path.heavy && !fromCopy) arena.release(imported.solid!).delete();
+    // GC: the copy's mesh as the model stands, for the clearance, which proves how far it lies (see decimate).
+    const copyMesh: WeldedMesh | null = path.heavy && path.copy ? { positions: transformPositions(path.copy.positions, inputs.transform), indices: path.copy.indices } : null;
+    if (copyMesh) holding.push(copyMesh);
     const model = orientedSolid(arena, { solid: path.solid }, { transform: inputs.transform, needsTrim: inputs.needsTrim });
     // The whole solid trimmed: past the limit that was read above, from the whole one, not from the copy.
     if (inputs.needsTrim && model && !path.heavy) shared = overlap > 0 ? timed('import', () => sharedVolume(arena, model)) : 0;
@@ -421,10 +430,12 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     // MM2: a simplified model's gap is measured through its copy, with both errors measured, not meshoptimizer's
     // figure: in glue mode the maker's file lies within `extra` of the copy, which lies within the decimation's
     // error of what minGap measures. In merged mode the base carries the copy, so the copy is the model in the mold.
+    // GC: every model's decimation error is proved so, also for a model loaded as it is.
     const simplified = inputs.modelErrorMm !== undefined;
     const throughCopy = simplified && scaled.base.mode === 'glue' ? extra : null;
+    const merged = scaled.base.mode === 'merged';
     // Decimating a heavy model is part of measuring it, so it shows as that step.
-    const probe = model ? timed('clearance', () => decimate(arena, simplifier, mesh, { solid: model, error: path.errorMm }, inputs.needsTrim, simplified)) : null;
+    const probe = model ? timed('clearance', () => decimate(arena, simplifier, mesh, { solid: model, copy: copyMesh }, inputs.needsTrim, merged)) : null;
     if (probe) {
       const gapOf = (b: Built): number => timed('clearance', () => {
         const copies = b.offsets.map(([x, y]) => arena.track(probe.solid.translate([x, y, 0])));
@@ -442,7 +453,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         measured = gapOf(built);
         diagnostics.push({ code: 'margin-raised', severity: 'warning', message: `The silicone measured thinner than ${scaled.silicone.t} mm in places, so the safety margin was raised by ${raisedBy.toFixed(2)} mm and the mold built again, a little larger than the preview shows.` });
       }
-      clearance = { measured, error: probe.error, raisedBy, ...(throughCopy === null ? {} : { simplify: throughCopy }) };
+      clearance = { measured, error: probe.error, raisedBy, ...(throughCopy === null ? {} : { simplify: throughCopy }), ...(merged && copyMesh ? { copy: true as const } : {}) };
       if (measured < scaled.silicone.t) diagnostics.push({ code: 'clearance-short', severity: 'error', message: `Even after a wider safety margin, the silicone is only ${measured.toFixed(2)} mm thick at its thinnest, under the ${scaled.silicone.t} mm asked for. Raise Print margin under Advanced, Silicone, and export again.` });
     } else {
       diagnostics.push({ code: 'clearance-unverified', severity: 'warning', message: `The model's mesh has holes, so the silicone thickness could not be measured: the mold is planned to leave at least ${scaled.silicone.t} mm, but that is not checked.` });
@@ -630,21 +641,25 @@ function exportBolts(built: Built, advice: BoltAdvice, raise: number): ExportBol
 }
 
 /**
- * G4: the model for minGap, decimated when it is heavy. The model itself when it is not, or when the
- * decimated copy is no solid. `model.error` is how far the model's solid may lie from the mesh: 0, or
- * past G1.8's limit the simplified copy's error, which a gap measured on it must give up.
+ * G4: the model for minGap, decimated to MIN_GAP_TRIANGLES when it has more, and how far the surface the gap is for
+ * lies from it at most, proved over every point of that surface (measuredError), as meshoptimizer's own figure is
+ * no bound: on the examples the surface moved 1.7 to 6.7 times what it reported (GC; MM2 proved it so for a
+ * simplified model alone). That surface is the mesh (the model, or a simplified model's copy, MM2), except past
+ * G1.8's limit in merged mode, where the base carries `model.copy`, the copy every Manifold step uses, so the
+ * silicone's gap is that copy's. The model's own solid is measured where the mesh is light enough or the decimated
+ * copy is no solid: its error is 0, as it is the model, or the base's copy itself in merged mode; past G1.8's limit
+ * in glue mode it is the copy, and how far the whole mesh lies from it is proved the same way.
  */
-function decimate(arena: Arena, simplifier: MeshSimplifier, mesh: WeldedMesh, model: { solid: Manifold; error: number }, needsTrim: boolean, measure = false): { solid: Manifold; error: number } {
+function decimate(arena: Arena, simplifier: MeshSimplifier, mesh: WeldedMesh, model: { solid: Manifold; copy: WeldedMesh | null }, needsTrim: boolean, merged: boolean): { solid: Manifold; error: number } {
+  const own = (): { solid: Manifold; error: number } => ({ solid: model.solid, error: model.copy && !merged ? measuredError(mesh, model.copy) : 0 });
   const simplified = simplifyForManifold(mesh, simplifier, MIN_GAP_TRIANGLES);
-  if (!simplified) return model;
+  if (!simplified) return own();
   try {
     const solid = arena.manifold(new arena.api.Mesh({ numProp: 3, vertProperties: simplified.mesh.positions, triVerts: simplified.mesh.indices }));
-    // MM2: for a simplified model, how far the model lies from the decimated copy, proved, as meshoptimizer's
-    // figure is not a bound (docs/PLAN.md, MM2). Models loaded as they are keep G4's figure, and their bytes.
-    return { solid: needsTrim ? trimToBase(arena, solid) : solid, error: measure ? measuredError(mesh, simplified.mesh) : simplified.errorMm };
+    return { solid: needsTrim ? trimToBase(arena, solid) : solid, error: measuredError(merged && model.copy ? model.copy : mesh, simplified.mesh) };
   } catch (error) {
     // A simplified copy can fold onto itself. Measuring the model's own solid is slower, and as close as its error.
-    if (error instanceof Error && error.name === 'ManifoldError') return model;
+    if (error instanceof Error && error.name === 'ManifoldError') return own();
     throw error;
   }
 }
@@ -655,7 +670,7 @@ const noReader = (): Uint8Array => {
 
 /**
  * MM2: how far `mesh`'s surface lies from `copy`'s at most, proved over every point of it (SurfaceIndex.bound), with
- * a reach that grows until no point is beyond it.
+ * a reach that grows until no point is beyond it. GC: G4's error for every decimation it makes.
  */
 export function measuredError(mesh: WeldedMesh, copy: WeldedMesh): number {
   for (let reach = 0.5; ; reach *= 2) {

@@ -9,7 +9,10 @@ import { defaultParams, resolveAuto } from '../../src/core/params/defaults';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, type PlaneChoice } from '../../src/workers/fieldStages';
 import { SolidStages, type SolidInputs } from '../../src/workers/solidStages';
 import { MeshoptSimplifier } from 'meshoptimizer';
+import { arrayBytes } from '../../src/app/memory';
 import { auditEdges } from '../../src/core/mesh/audit';
+import { importSolid, type ImportedSolid } from '../../src/core/mesh/shells';
+import { withArena } from '../../src/core/solid/arena';
 import { DISPLAY_TRIANGLE_LIMIT } from '../../src/core/mesh/simplify';
 import { meshBounds, weld as weldSoup, type WeldedMesh } from '../../src/core/mesh/weld';
 import { exampleBytes, loadManifold, skipWithout, type ExampleId } from '../fixtures/loadExamples';
@@ -219,7 +222,7 @@ describe('G1.8\'s copy in the preview\'s base', () => {
   // jersey's 1,340 triangles past a limit of 1,000, as 3 million are past 2 million.
   const LIMITS = { limit: 1000, target: 500 };
 
-  it('says what the base used: the copy with its error, or, where the copy is no closed solid, the whole mesh', async () => {
+  it('says what the base used: the copy, or, where the copy is no closed solid, the whole mesh', async () => {
     await MeshoptSimplifier.ready;
     const { keys, inputs } = jerseyJob();
     const codes = (simplifier: typeof MeshoptSimplifier): string[] => {
@@ -237,5 +240,21 @@ describe('G1.8\'s copy in the preview\'s base', () => {
     const used = codes(open);
     expect(used).toContain('mode-b-unsimplified');
     expect(used).not.toContain('mode-b-simplified');
+  }, 60_000);
+
+  it('GC: imported from the copy alone, the preview holds the import\'s mesh and not the copy\'s, which only the export\'s clearance reads', async () => {
+    await MeshoptSimplifier.ready;
+    const { keys, inputs } = jerseyJob();
+    const { welded, audit } = inputs.model!;
+    const known = withArena(api, (arena) => importSolid(arena, welded, audit).report);
+    const stages = new SolidStages(api, () => 0, MeshoptSimplifier, LIMITS);
+    stages.run(keys, ['S1'], defaultParams(), { ...inputs, model: { welded, audit, known } });
+    const [held] = stages.heldArrays() as [ImportedSolid];
+    // The copy stands in for the solid, so the import was the copy's alone.
+    expect(held.solid!.numTri()).toBeLessThanOrEqual(LIMITS.target);
+    expect(held.mesh).toBe(welded);
+    // What MM1's meter counts is the mesh the import checked, as before GC: none of the copy's arrays.
+    expect(arrayBytes(stages.heldArrays())).toBe(welded.positions.byteLength + welded.indices.byteLength);
+    stages.clear();
   }, 60_000);
 });

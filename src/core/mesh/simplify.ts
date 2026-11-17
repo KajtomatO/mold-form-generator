@@ -36,8 +36,12 @@ const MAX_RELATIVE_ERROR = 0.02;
 
 export interface SimplifiedMesh {
   mesh: WeldedMesh;
-  /** Geometric error reported by meshoptimizer, in mm. */
-  errorMm: number;
+  /**
+   * meshoptimizer's own error figure, in mm, which is not a bound: G4's 60,000 triangle copy of Benchy reports
+   * 0.0066 mm where its surface moved 0.0362 (docs/PLAN.md, MM2). Kept for the record and the tests only: what a
+   * guarantee or a printed figure needs is proved over the surface (SurfaceIndex.bound, GC).
+   */
+  reportedMm: number;
   /** The warning G1.8 asks for, to be shown in Mode B. */
   diagnostics: Diagnostic[];
 }
@@ -69,17 +73,18 @@ export function compacted(positions: Float32Array, indices: Uint32Array): Welded
 export function simplifyForManifold(mesh: WeldedMesh, simplifier: MeshSimplifier, limit = MANIFOLD_TRIANGLE_LIMIT, target = limit): SimplifiedMesh | null {
   if (mesh.indices.length / 3 <= limit) return null;
   const [indices, error] = simplifier.simplify(mesh.indices, mesh.positions, 3, target * 3, MAX_RELATIVE_ERROR);
-  const errorMm = error * simplifier.getScale(mesh.positions, 3);
+  const reportedMm = error * simplifier.getScale(mesh.positions, 3);
   const diagnostics: Diagnostic[] = [
     {
       code: 'mode-b-simplified',
       severity: 'warning',
-      // meshoptimizer works in float32 on the model scaled to 1, so an error far under a micron on a smooth
-      // surface reads as exactly 0: that is said as it is, not as a figure of 0 mm.
-      message: `This model has ${(mesh.indices.length / 3).toLocaleString('en-US')} triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to ${(indices.length / 3).toLocaleString('en-US')} triangles, ${errorMm > 0 ? `with up to ${errorMm >= 0.001 ? errorMm.toFixed(3) : errorMm.toPrecision(2)} mm of error` : 'with less error than the simplifier can measure'}. The cover and model_oriented.stl come from the whole mesh.`,
+      // GC: no figure for the copy's error, as meshoptimizer's is no bound (on the 3 million triangle test block it
+      // read 0.020 mm where the surface moved 0.096), and proving it over 3 million triangles takes about 11 s in
+      // Node and 140 MB or more beside the preview's heap. The export proves what the silicone needs (exportJob.ts).
+      message: `This model has ${(mesh.indices.length / 3).toLocaleString('en-US')} triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to ${(indices.length / 3).toLocaleString('en-US')} triangles. The cover and model_oriented.stl come from the whole mesh.`,
     },
   ];
-  return { mesh: compacted(mesh.positions, indices), errorMm, diagnostics };
+  return { mesh: compacted(mesh.positions, indices), reportedMm, diagnostics };
 }
 
 /** Fast, topology-breaking copy for the viewport only. Returns null within the limit. */
@@ -94,27 +99,30 @@ export interface ManifoldPath {
   /** The solid is the simplified copy, not the import's own. */
   heavy: boolean;
   diagnostics: Diagnostic[];
-  /** How far the copy may lie from the whole mesh, in mm; 0 for the import's own solid. */
-  errorMm: number;
+  /**
+   * GC: the copy's mesh, in the import's coordinates, null for the import's own solid. How far it lies from the
+   * whole mesh is proved where the export's clearance needs it (exportJob.ts), not taken from meshoptimizer.
+   */
+  copy: WeldedMesh | null;
 }
 
 /**
  * G1.8: the solid every Manifold operation after the import uses. Above MANIFOLD_TRIANGLE_LIMIT it is a copy
- * simplified to MANIFOLD_TRIANGLE_TARGET triangles, made from the mesh, with its error said in a warning:
- * the import has checked the whole mesh by then, and the cover and model_oriented.stl never need a solid.
+ * simplified to MANIFOLD_TRIANGLE_TARGET triangles, made from the mesh, said in a warning: the import has
+ * checked the whole mesh by then, and the cover and model_oriented.stl never need a solid.
  * Below the limit, and in soup mode, it is the import's own solid. The copy is owned by `arena`.
  */
 export function manifoldPathSolid(arena: Arena, imported: Pick<ImportedSolid, 'solid' | 'mesh'>, simplifier: MeshSimplifier | null, limit = MANIFOLD_TRIANGLE_LIMIT, target = Math.min(limit, MANIFOLD_TRIANGLE_TARGET)): ManifoldPath {
-  if (!imported.solid || !simplifier) return { solid: imported.solid, heavy: false, diagnostics: [], errorMm: 0 };
+  if (!imported.solid || !simplifier) return { solid: imported.solid, heavy: false, diagnostics: [], copy: null };
   const simplified = simplifyForManifold(imported.mesh, simplifier, limit, target);
-  if (!simplified) return { solid: imported.solid, heavy: false, diagnostics: [], errorMm: 0 };
+  if (!simplified) return { solid: imported.solid, heavy: false, diagnostics: [], copy: null };
   try {
     const solid = arena.manifold(new arena.api.Mesh({ numProp: 3, vertProperties: simplified.mesh.positions, triVerts: simplified.mesh.indices }));
-    return { solid, heavy: true, diagnostics: simplified.diagnostics, errorMm: simplified.errorMm };
+    return { solid, heavy: true, diagnostics: simplified.diagnostics, copy: simplified.mesh };
   } catch (error) {
     // A simplified copy can fold onto itself. The whole mesh is slower and heavier, never wrong.
     if (!(error instanceof Error && error.name === 'ManifoldError')) throw error;
-    return { solid: imported.solid, heavy: false, diagnostics: [{ code: 'mode-b-unsimplified', severity: 'warning', message: `This model is too heavy for the geometry engine, and its simplified copy is not a closed solid, so the base uses the whole mesh, which may run out of memory.` }], errorMm: 0 };
+    return { solid: imported.solid, heavy: false, diagnostics: [{ code: 'mode-b-unsimplified', severity: 'warning', message: `This model is too heavy for the geometry engine, and its simplified copy is not a closed solid, so the base uses the whole mesh, which may run out of memory.` }], copy: null };
   }
 }
 
@@ -125,7 +133,7 @@ export function manifoldPathSolid(arena: Arena, imported: Pick<ImportedSolid, 's
  * holds passed 3 GB. Null where the copy cannot stand in: under the limit, an open mesh, a mesh the import
  * recomposed, or a copy that is no closed solid; the caller then imports in full.
  */
-export function importFromCopy(arena: Arena, welded: WeldedMesh, known: SolidReport, simplifier: MeshSimplifier, limit = MANIFOLD_TRIANGLE_LIMIT, target = Math.min(limit, MANIFOLD_TRIANGLE_TARGET)): (ImportedSolid & { simplified: Diagnostic[]; errorMm: number }) | null {
+export function importFromCopy(arena: Arena, welded: WeldedMesh, known: SolidReport, simplifier: MeshSimplifier, limit = MANIFOLD_TRIANGLE_LIMIT, target = Math.min(limit, MANIFOLD_TRIANGLE_TARGET)): (ImportedSolid & { simplified: Diagnostic[]; copy: WeldedMesh }) | null {
   if (welded.indices.length / 3 <= limit || known.route === 'soup' || known.diagnostics.some((d) => d.code === 'shell-inverted')) return null;
   const mesh = known.flipped ? { positions: welded.positions, indices: reversed(welded.indices) } : welded;
   const copy = simplifyForManifold(mesh, simplifier, limit, target)!;
@@ -137,7 +145,7 @@ export function importFromCopy(arena: Arena, welded: WeldedMesh, known: SolidRep
     throw error;
   }
   if (!(solid.volume() > 0)) return null;
-  return { solid, mesh, openLoops: [], report: known, joined: null, simplified: copy.diagnostics, errorMm: copy.errorMm };
+  return { solid, mesh, openLoops: [], report: known, joined: null, simplified: copy.diagnostics, copy: copy.mesh };
 }
 
 /**

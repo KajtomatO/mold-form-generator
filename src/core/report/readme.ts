@@ -26,8 +26,11 @@ export interface ReadmeInput {
   pitch: [number, number] | null;
   /** The assembled mold: the cover's outside, and from the base's underside to the flat top. */
   box: [number, number, number];
-  /** Null for an open mesh, which has no solid to measure. `simplify`, MM2: a simplified model's own error, also taken off in glue mode. */
-  clearance: { measured: number; error: number; raisedBy: number; simplify?: number } | null;
+  /**
+   * Null for an open mesh, which has no solid to measure. `simplify`, MM2: a simplified model's own error, also taken
+   * off in glue mode. `copy`, GC: past G1.8's limit in merged mode, the gap is the copy's the base carries.
+   */
+  clearance: { measured: number; error: number; raisedBy: number; simplify?: number; copy?: true } | null;
   silicone: { ml: number; grams: number };
   /** S9: the demold estimate and the air, or null when the export could not work them out. */
   reports: GeometryReports | null;
@@ -284,8 +287,12 @@ export function exportReadme(input: ReadmeInput): string {
       ? clearance.error > 0
         ? `, measured on a lighter copy of the simplified model, less ${(clearance.error + copyError).toFixed(3)} mm for the two copies' errors (${clearance.error.toFixed(3)} mm for the lighter one, ${copyError.toFixed(3)} mm for the simplified one)`
         : `, measured on the copy the mold was made from, less its error of ${copyError.toFixed(3)} mm`
-      : clearance.error > 0 ? `, measured on a simplified copy of the model with its error of ${clearance.error.toFixed(3)} mm taken off` : '';
-    const between = simplified?.merged ? 'between the simplified model the base carries and the cover' : 'between the model and the cover';
+      : clearance.error > 0
+        ? clearance.copy
+          ? `, measured on a lighter copy of the model, less ${clearance.error.toFixed(3)} mm for how far the base's copy lies from it`
+          : `, measured on a simplified copy of the model with its error of ${clearance.error.toFixed(3)} mm taken off`
+        : '';
+    const between = simplified?.merged ? 'between the simplified model the base carries and the cover' : clearance.copy ? 'between the simplified copy the base carries and the cover' : 'between the model and the cover';
     item(`Measured clearance: ${clearance.measured.toFixed(2)} mm at the thinnest point ${between}${decimated}.`);
     if (clearance.raisedBy > 0) item(`The first build measured less than ${mm(t, 2)}, so the safety margin was raised by ${clearance.raisedBy.toFixed(2)} mm and the mold was built again. The cavity and the box are a little larger than the preview showed.`);
   } else {

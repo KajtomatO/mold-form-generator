@@ -16,11 +16,12 @@ import { coverPose } from '../../src/core/parts/poses';
 import { withArena } from '../../src/core/solid/arena';
 import { parseStl } from '../../src/core/stl/parse';
 import { writeBinaryStl } from '../../src/core/stl/write';
-import { exportSteps, measuredError, MIN_GAP_TRIANGLES, type ExportJob, type ExportReport } from '../../src/workers/exportJob';
+import { exportSteps, measuredError, MIN_GAP_TRIANGLES, RAISE_EXTRA, type ExportJob, type ExportReport } from '../../src/workers/exportJob';
 import { runPrepareJob } from '../../src/workers/prepareJob';
 import type { ToWorker, WorkerLike } from '../../src/workers/protocol';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES, loadExample, loadManifold } from '../fixtures/loadExamples';
+import { heightBlockMesh, type HeightBlock } from '../fixtures/heavy';
 import { readPart, unpose } from '../fixtures/solidChecks';
 import { box, signedVolume } from '../fixtures/synthetic';
 
@@ -260,8 +261,8 @@ describe('MM2: a simplified model\'s export', () => {
     const dense = maxDeviation(decimated.mesh, [points], 0.25);
     expect(dense).toBeLessThanOrEqual(proved);
     expect(proved - dense).toBeLessThan(0.01);
-    // meshoptimizer's own figure, which G4 takes for a model loaded as it is, is several times under it.
-    expect(decimated.errorMm * 2).toBeLessThan(proved);
+    // meshoptimizer's own figure, which G4 took for a model loaded as it is until GC, is several times under it.
+    expect(decimated.reportedMm * 2).toBeLessThan(proved);
     // A copy farther off than the first reach of 0.5 mm, with no triangle of it in the buckets the surface looks in:
     // the reach grows until the bound holds.
     const low: WeldedMesh = { positions: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0), indices: Uint32Array.of(0, 1, 2) };
@@ -324,4 +325,67 @@ describe('MM2: a simplified model\'s export', () => {
     expect(readme).toContain(`Your model, spiked.stl as you opened it, trimmed where the base face cuts it, ${written.toLocaleString('en-US')} triangles as written, turned so that`);
     expect(readme).not.toContain('with all its');
   }, 120_000);
+});
+
+describe('GC: G4\'s decimation error, proved for a model loaded as it is', () => {
+  /**
+   * A rippled block of 183,600 triangles, 60 mm across, whose 60,000 triangle decimation meshoptimizer says moves
+   * 0.082 mm where it moves 0.185, proved. At a print margin of 0, in the slider's range, its first build's gap lies
+   * between the two: t and more less meshoptimizer's figure, short of t less the proved one (measured at GC).
+   */
+  const RIPPLED: HeightBlock = { n: 300, size: 60, height: 5, ripple: 1, wavelength: 2 };
+
+  it('a model whose meshoptimizer figure is far under the proved one gets the proved error in report.json and README.txt in glue and merged mode, and the one raise fires where only the proved clearance is short of t', async () => {
+    const mesh = heightBlockMesh(RIPPLED, weld);
+    expect(mesh.indices.length / 3).toBe(183_600);
+    const p = await loaded(writeBinaryStl(mesh.positions, mesh.indices), 'rippled-block.stl', null);
+    p.setParams((params) => (params.silicone.printMargin = 0));
+    await p.idle();
+    const outputs = await p.exportParts();
+    const files = unzipSync(outputs.zip);
+    const report = JSON.parse(text(files['report.json'])) as ExportReport;
+    const readme = flat(files['README.txt']);
+    // The decimation the export measured, of the model as it stands, and how far the model lies from it.
+    const welded = p.parsed!.value.welded;
+    const model: WeldedMesh = { positions: transformPositions(welded.positions, p.oriented!.value.oriented.transform), indices: welded.indices };
+    const decimated = simplifyForManifold(model, MeshoptSimplifier, MIN_GAP_TRIANGLES)!;
+    const proved = measuredError(model, decimated.mesh);
+    expect(proved).toBeGreaterThan(2 * decimated.reportedMm);
+    expect(outputs.clearance!.error).toBe(proved);
+    expect(report.clearance.decimationError).toBe(proved);
+    expect(report.clearance.minGap! - report.clearance.measured!).toBeCloseTo(proved, 9);
+    expect(readme).toContain(`Measured clearance: ${report.clearance.measured!.toFixed(2)} mm at the thinnest point between the model and the cover, measured on a simplified copy of the model with its error of ${proved.toFixed(3)} mm taken off.`);
+    // The raise: the first build measured short of t by the proved error, where meshoptimizer's figure would have passed it.
+    const t = p.params.silicone.t;
+    const raisedBy = report.clearance.marginRaisedBy;
+    expect(raisedBy).toBeGreaterThan(RAISE_EXTRA);
+    const firstGap = t + RAISE_EXTRA - raisedBy + proved;
+    expect(firstGap - decimated.reportedMm).toBeGreaterThanOrEqual(t);
+    expect(outputs.diagnostics.find((d) => d.code === 'margin-raised')!.message).toContain(`raised by ${raisedBy.toFixed(2)} mm`);
+    expect(readme).toContain(`so the safety margin was raised by ${raisedBy.toFixed(2)} mm and the mold was built again.`);
+    expect(report.clearance.measured!).toBeGreaterThanOrEqual(t);
+    // The whole model with the cover as printed keeps t.
+    const gap = withArena(api, (arena) => {
+      const cover = unpose(arena, files['cover.stl'], coverPose(outputs.rim!));
+      return importSolid(arena, model, auditEdges(model)).solid!.minGap(cover, t + 2);
+    });
+    expect(gap).toBeGreaterThanOrEqual(t);
+    expect(report.clearance.measured!).toBeLessThanOrEqual(gap + 1e-3);
+
+    // Merged mode, under G1.8's limit: the base carries the model itself, so the same decimation gives up the same
+    // proved error, the gap is the model's, not a copy's, and the first build is as short and raised the same.
+    p.setParams((params) => (params.base.mode = 'merged'));
+    await p.idle();
+    const merged = await p.exportParts();
+    const mergedFiles = unzipSync(merged.zip);
+    const mergedReport = JSON.parse(text(mergedFiles['report.json'])) as ExportReport;
+    expect(merged.clearance!.error).toBe(proved);
+    expect(merged.clearance!.copy).toBeUndefined();
+    expect(mergedReport.clearance.decimationError).toBe(proved);
+    expect(mergedReport.clearance.minGap! - mergedReport.clearance.measured!).toBeCloseTo(proved, 9);
+    expect(flat(mergedFiles['README.txt'])).toContain(`Measured clearance: ${mergedReport.clearance.measured!.toFixed(2)} mm at the thinnest point between the model and the cover, measured on a simplified copy of the model with its error of ${proved.toFixed(3)} mm taken off.`);
+    expect(mergedReport.clearance.marginRaisedBy).toBeGreaterThan(RAISE_EXTRA);
+    expect(t + RAISE_EXTRA - mergedReport.clearance.marginRaisedBy + proved - decimated.reportedMm).toBeGreaterThanOrEqual(t);
+    expect(mergedReport.clearance.measured!).toBeGreaterThanOrEqual(t);
+  }, 180_000);
 });

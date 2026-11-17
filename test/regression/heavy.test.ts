@@ -6,11 +6,12 @@ import { examinedBins, findBaseCandidates } from '../../src/core/base/candidates
 import { orientToBase } from '../../src/core/base/orient';
 import { auditEdges } from '../../src/core/mesh/audit';
 import { importSolid } from '../../src/core/mesh/shells';
-import { displayProxy, importFromCopy, MANIFOLD_TRIANGLE_TARGET, manifoldPathSolid } from '../../src/core/mesh/simplify';
+import { displayProxy, importFromCopy, MANIFOLD_TRIANGLE_LIMIT, MANIFOLD_TRIANGLE_TARGET, manifoldPathSolid, simplifyForManifold } from '../../src/core/mesh/simplify';
 import { weld } from '../../src/core/mesh/weld';
 import { baseOptions, defaultParams } from '../../src/core/params/defaults';
 import { withArena } from '../../src/core/solid/arena';
 import { parseStl } from '../../src/core/stl/parse';
+import { measuredError } from '../../src/workers/exportJob';
 import { heightBlockMesh, heightBlockSoup, heightBlockStl, heightBlockTriangles, HEAVY_BLOCK, type HeightBlock } from '../fixtures/heavy';
 import { loadManifold } from '../fixtures/loadExamples';
 import { asciiStl, inverted, signedVolume } from '../fixtures/synthetic';
@@ -66,11 +67,11 @@ describe('the heavy block', () => {
     expect(parsed.degenerateCount).toBe(0);
   });
 
-  it('above the Manifold limit, every Manifold step after the import uses a simplified copy, said with its error in mm; under it, the solid itself', () => {
+  it('above the Manifold limit, every Manifold step after the import uses a simplified copy, said in a warning that gives no error figure, as meshoptimizer\'s is no bound (GC); under it, the solid itself', () => {
     const mesh = heightBlockMesh(small, weld);
     withArena(api, (arena) => {
       const imported = importSolid(arena, mesh, auditEdges(mesh));
-      expect(manifoldPathSolid(arena, imported, MeshoptSimplifier)).toEqual({ solid: imported.solid, heavy: false, diagnostics: [], errorMm: 0 });
+      expect(manifoldPathSolid(arena, imported, MeshoptSimplifier)).toEqual({ solid: imported.solid, heavy: false, diagnostics: [], copy: null });
       expect(manifoldPathSolid(arena, imported, null).solid).toBe(imported.solid);
       // A limit of 4000 and a copy of 2000, as 2 million and 1 million are for a real model.
       const heavy = manifoldPathSolid(arena, imported, MeshoptSimplifier, 4000, 2000);
@@ -79,17 +80,18 @@ describe('the heavy block', () => {
       expect(heavy.solid!.numTri()).toBeLessThanOrEqual(2000);
       expect(heavy.solid!.status()).toBe('NoError');
       expect(Math.abs(heavy.solid!.volume() - imported.solid!.volume())).toBeLessThan(imported.solid!.volume() * 0.01);
+      // The copy's own mesh comes with it, for the export to prove how far it lies, and is the solid's.
+      expect(heavy.copy!.indices.length / 3).toBe(heavy.solid!.numTri());
       expect(heavy.diagnostics).toHaveLength(1);
-      expect(heavy.errorMm).toBeGreaterThan(0);
-      expect(heavy.diagnostics[0].message).toContain(`with up to ${heavy.errorMm.toFixed(3)} mm of error`);
       expect(heavy.diagnostics[0]).toMatchObject({ code: 'mode-b-simplified', severity: 'warning' });
-      expect(heavy.diagnostics[0].message).toMatch(/^This model has 7,920 triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to [\d,]+ triangles, with up to \d+\.\d+(e-\d+)? mm of error\. The cover and model_oriented\.stl come from the whole mesh\.$/);
-      // An error under meshoptimizer's float32 resolution reads as exactly 0, which the warning says in words.
-      const blind: typeof MeshoptSimplifier = { ...MeshoptSimplifier, simplify: (...args: Parameters<typeof MeshoptSimplifier.simplify>) => [MeshoptSimplifier.simplify(...args)[0], 0] };
-      const plain = manifoldPathSolid(arena, imported, blind, 4000, 2000);
-      expect(plain.diagnostics[0].message).toMatch(/simplified to [\d,]+ triangles, with less error than the simplifier can measure\./);
+      expect(heavy.diagnostics[0].message).toMatch(/^This model has 7,920 triangles, too many for the geometry engine, so merged mode, and the pocket in glue mode, use a copy simplified to [\d,]+ triangles\. The cover and model_oriented\.stl come from the whole mesh\.$/);
+      // Whatever meshoptimizer reports, 0 or a figure far under the surface's true move, the warning says the same.
+      for (const figure of [0, 1e-4]) {
+        const told: typeof MeshoptSimplifier = { ...MeshoptSimplifier, simplify: (...args: Parameters<typeof MeshoptSimplifier.simplify>) => [MeshoptSimplifier.simplify(...args)[0], figure] };
+        expect(manifoldPathSolid(arena, imported, told, 4000, 2000).diagnostics).toEqual(heavy.diagnostics);
+      }
       // Soup mode has no solid to simplify.
-      expect(manifoldPathSolid(arena, { solid: null, mesh }, MeshoptSimplifier, 4000, 2000)).toEqual({ solid: null, heavy: false, diagnostics: [], errorMm: 0 });
+      expect(manifoldPathSolid(arena, { solid: null, mesh }, MeshoptSimplifier, 4000, 2000)).toEqual({ solid: null, heavy: false, diagnostics: [], copy: null });
     });
   });
 });
@@ -105,6 +107,7 @@ describe('a heavy mesh the preview checked, imported again from its copy alone',
       expect(copy.solid!.numTri()).toBeLessThanOrEqual(2000);
       expect(Math.abs(copy.solid!.volume() - full.solid!.volume())).toBeLessThan(full.solid!.volume() * 0.01);
       expect(copy.simplified[0].code).toBe('mode-b-simplified');
+      expect(copy.copy.indices.length / 3).toBe(copy.solid!.numTri());
       // Inside out: the import flipped it, so the copy is of the mesh turned the right way, and a solid.
       const outward = inverted(mesh);
       const flipped = importSolid(arena, outward, auditEdges(outward));
@@ -154,13 +157,16 @@ describe('3 million triangles in Node', () => {
       expect(heavy.heavy).toBe(true);
       expect(heavy.solid!.numTri()).toBeLessThanOrEqual(MANIFOLD_TRIANGLE_TARGET);
       expect(heavy.diagnostics[0].code).toBe('mode-b-simplified');
-      const error = Number(/up to (\d+\.\d+(e-\d+)?) mm/.exec(heavy.diagnostics[0].message)![1]);
-      expect(error).toBeGreaterThan(0);
-      // The ripple is 2 mm high over 2 mm, and a copy of a third of its triangles keeps it to hundredths of a mm.
-      expect(error).toBeLessThan(0.05);
+      // GC: the copy's error proved over the whole mesh, which the warning no longer gives, as proving it takes
+      // this long; meshoptimizer's own figure for it is several times under it (0.020 against 0.096 mm at GC).
+      const error = timed('copy proved', () => measuredError(imported.mesh, heavy.copy!));
+      const reported = simplifyForManifold(imported.mesh, MeshoptSimplifier, MANIFOLD_TRIANGLE_LIMIT, MANIFOLD_TRIANGLE_TARGET)!.reportedMm;
+      expect(error).toBeGreaterThan(2 * reported);
+      // The ripple is 2 mm high over 2 mm, and a copy of a third of its triangles keeps it to about a tenth of a mm.
+      expect(error).toBeLessThan(0.15);
       const section = timed('pocket section', () => arena.track(imported.solid!.slice(0.2)));
       expect(Math.abs(section.area() - 100 * 100)).toBeLessThan(1);
-      console.log(`3M triangles in Node, ms: ${JSON.stringify(times)}; merged copy ${heavy.solid!.numTri()} triangles, error ${error} mm; memory ${JSON.stringify(memory())} MB`);
+      console.log(`3M triangles in Node, ms: ${JSON.stringify(times)}; merged copy ${heavy.solid!.numTri()} triangles, proved within ${error} mm, meshoptimizer's figure ${reported} mm; memory ${JSON.stringify(memory())} MB`);
     });
   }, 900_000);
 });
