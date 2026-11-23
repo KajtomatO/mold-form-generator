@@ -1,3 +1,4 @@
+import { DEFAULT_MOLD_TYPE, isMoldType, MOLD_TYPE_IDS } from '../core/mold/types';
 import { crossParameterErrors } from '../core/params/rules';
 import { PARAM_SCHEMA, type ParamDef, type Params } from '../core/params/schema';
 import { entryDef } from '../ui/layout';
@@ -96,11 +97,19 @@ function nearest(group: string, key: string): ParamPath | null {
   return best;
 }
 
-/** One setting's value: its type, then its range, its options, or for an automatic one null. */
-function valueProblem(path: ParamPath, def: ParamDef, value: unknown): string | null {
+/**
+ * One setting's value: its type, then its range, its options, or for an automatic one null. With `numbers`, an
+ * automatic one may hold a number in its range instead, as a type's defaults give one (MT); `only` takes the number
+ * alone, as a type's own file must, since null is defaults.json's already.
+ */
+function valueProblem(path: ParamPath, def: ParamDef, value: unknown, numbers: 'no' | 'also' | 'only' = 'no'): string | null {
   const name = nameOf(path, def);
   if (value === undefined) return `${name} is missing: give it ${takes(path, def)}.`;
+  if (def.kind === 'auto' && numbers !== 'no' && (value !== null || numbers === 'only')) return autoNumberProblem(path, def, value);
   if (def.kind === 'auto') return value === null ? null : `${name} must be null, not ${shown(value)}: it is automatic (${def.rule}), and null keeps it following that rule, which stays in the code.`;
+  if (def.kind === 'choice' && path === 'mold.type' && numbers === 'no' && value !== DEFAULT_MOLD_TYPE && typeof value === 'string' && def.options.includes(value)) {
+    return `${name} must be "${DEFAULT_MOLD_TYPE}", not ${shown(value)}: a page opens with that type, and each other type's defaults are in its own defaults.<type>.json.`;
+  }
   if (def.kind === 'flag') return typeof value === 'boolean' ? null : `${name} must be true or false, not ${shown(value)}.`;
   if (def.kind === 'choice') return typeof value === 'string' && def.options.includes(value) ? null : `${name} must be ${takes(path, def)}, not ${shown(value)}.`;
   if (typeof value !== 'number' || !Number.isFinite(value)) return `${name} must be ${takes(path, def)}, not ${shown(value)}.`;
@@ -111,6 +120,20 @@ function valueProblem(path: ParamPath, def: ParamDef, value: unknown): string | 
   return null;
 }
 
+/** MT: an automatic setting a type gives a number: one in its range, or of its options where it has them. */
+function autoNumberProblem(path: ParamPath, def: ParamDef & { kind: 'auto' }, value: unknown): string | null {
+  const name = nameOf(path, def);
+  const what = def.options ? `one of ${either(def.options.map(String))}${unitOf(def)}` : `a number ${span(path, def)}`;
+  const why = `it is automatic in ${DEFAULTS_NAME}, and a type gives it a number of its own`;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return `${name} must be ${what}, not ${shown(value)}: ${why}.`;
+  if (def.options) return def.options.includes(value) ? null : `${name} is ${value}${unitOf(def)}, but must be ${what}.`;
+  const { low, high = Infinity } = rangeOf(path);
+  return value < low || value > high ? `${name} is ${value}${unitOf(def)}, but must be ${span(path, def)}.` : null;
+}
+
+/** The base set's file, as a type's problems name it. */
+const DEFAULTS_NAME = 'defaults.json';
+
 /**
  * Every problem in a parsed defaults.json, empty when there is none: a setting missing, unknown or misspelt
  * (with the one it was likely meant to be), of the wrong type, outside its range or not whole where it must
@@ -118,7 +141,7 @@ function valueProblem(path: ParamPath, def: ParamDef, value: unknown): string | 
  * flag. Only once each value passes are the defaults held to the rules between settings (crossParameterErrors),
  * each named by the setting its note shows under in the app.
  */
-export function checkDefaults(json: unknown): string[] {
+export function checkDefaults(json: unknown, options: { overrides?: boolean } = {}): string[] {
   const groups = Object.keys(PARAM_SCHEMA);
   if (!isObject(json)) return [`The file must hold one object, with a group of settings for each of ${groups.join(', ')}, not ${shown(json)}.`];
   const problems: string[] = [];
@@ -134,7 +157,8 @@ export function checkDefaults(json: unknown): string[] {
       continue;
     }
     for (const [key, def] of Object.entries(defs)) {
-      const problem = valueProblem(`${group}.${key}` as ParamPath, def, given[key]);
+      // MT: a merged set, defaults.json with a type's overrides, may hold a number on an automatic setting.
+      const problem = valueProblem(`${group}.${key}` as ParamPath, def, given[key], options.overrides ? 'also' : 'no');
       if (problem) problems.push(problem);
     }
     for (const key of Object.keys(given)) {
@@ -201,6 +225,62 @@ export function givenTwice(text: string): string[] {
  * refuses and Vite and Node, which load the file for the app and its tests, pass over.
  */
 export const withoutBom = (text: string): string => text.replace(/^\uFEFF/, '');
+
+/**
+ * MT: every problem in a type's defaults file, src/core/params/defaults.<type>.json, empty when there is none. It
+ * holds only what differs from defaults.json, by group as that file does: a setting unknown or misspelt, the type
+ * itself, a value of the wrong kind or out of range, an automatic setting given anything but a number in its range,
+ * and a value equal to defaults.json's are each refused; then the merged set, under this type, is held to every
+ * setting's check and the rules between settings, as checkDefaults holds defaults.json.
+ */
+export function checkOverrides(id: string, json: unknown): string[] {
+  if (id === DEFAULT_MOLD_TYPE) return [`The ${DEFAULT_MOLD_TYPE} type's defaults are ${DEFAULTS_NAME} itself, so take this file out.`];
+  if (!isMoldType(id)) return [`There is no mold type "${id}": name the file after one of ${either(MOLD_TYPE_IDS.filter((type) => type !== DEFAULT_MOLD_TYPE).map((type) => `"${type}"`))}, or take it out.`];
+  if (!isObject(json)) return [`The file must hold one object, with a group for each setting whose default differs in this type, not ${shown(json)}.`];
+  const problems: string[] = [];
+  const schema = PARAM_SCHEMA as unknown as Record<string, Record<string, ParamDef>>;
+  const merged = JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(schema).map(([group, defs]) => [group, Object.fromEntries(Object.entries(defs).map(([key, def]) => [key, def.default]))])))) as Record<string, Record<string, unknown>>;
+  for (const [group, given] of Object.entries(json)) {
+    if (!Object.hasOwn(schema, group)) {
+      const near = Object.keys(schema).filter((g) => distance(group, g) <= 2).sort((a, b) => distance(group, a) - distance(group, b))[0];
+      problems.push(near ? `${group} is not a group of settings: did you mean ${near}?` : `${group} is not a group of settings, so take it out.`);
+      continue;
+    }
+    if (!isObject(given)) {
+      problems.push(`${group} must be an object of settings, not ${shown(given)}.`);
+      continue;
+    }
+    for (const [key, value] of Object.entries(given)) {
+      const path = `${group}.${key}` as ParamPath;
+      if (!Object.hasOwn(schema[group], key)) {
+        const near = nearest(group, key);
+        problems.push(near ? `${path} is not a setting: did you mean ${nameOf(near, paramDef(near))}?` : `${path} is not a setting of ${group}, so take it out.`);
+        continue;
+      }
+      const def = schema[group][key];
+      if (path === 'mold.type') {
+        problems.push(`${nameOf(path, def)} is not a default a type can change, so take it out.`);
+        continue;
+      }
+      const problem = valueProblem(path, def, value, 'only');
+      if (problem) problems.push(problem);
+      else if (value === def.default) problems.push(`${nameOf(path, def)} is ${shown(value)}${unitOf(def)}, as in ${DEFAULTS_NAME}: a type's file holds only the defaults that differ, so take it out.`);
+      else merged[group][key] = value;
+    }
+  }
+  if (problems.length > 0) return problems;
+  merged.mold.type = id;
+  return checkDefaults(merged, { overrides: true });
+}
+
+/** The whole check of a type's defaults file, as the build runs it: JSON at all, each setting once, then checkOverrides. */
+export function checkOverridesText(id: string, file: string): string[] {
+  const text = withoutBom(file);
+  const syntax = jsonProblem(text);
+  if (syntax) return [syntax];
+  const twice = givenTwice(text).map((path) => `${path} is given twice: give it once, as only the last would count.`);
+  return [...twice, ...checkOverrides(id, JSON.parse(text))];
+}
 
 /** The whole check of the file's text, as the build runs it: JSON at all, each setting once, then checkDefaults. */
 export function checkDefaultsText(file: string): string[] {

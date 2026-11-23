@@ -1,5 +1,6 @@
 import { boltFigure, clampFigure, exportPitch, previewSilicone } from '../../app/derived';
 import { changedPaths } from '../../app/stages';
+import { effectiveParams, moldTypeOf } from '../../core/mold/types';
 import { PARAM_SCHEMA } from '../../core/params/schema';
 import { SEAL_SPACING_MM } from '../../core/report/clamp';
 import { useContext } from 'preact/hooks';
@@ -82,10 +83,17 @@ export function CoverSection() {
   const store = useStore();
   const clamp = clampFigure(store.pipeline);
   const n = figure;
-  const on = store.project.value.params.bolts.enabled;
-  const joint = SECTION_PARAMS.cover.filter((path) => !path.startsWith('bolts.'));
+  const params = store.project.value.params;
+  // MT: as the type holds it: the two-part cover locks the corner bolts off.
+  const on = effectiveParams(params).bolts.enabled;
+  const joint = SECTION_PARAMS.cover.filter((path) => !path.startsWith('bolts.') && !path.startsWith('clamshell.') && !path.startsWith('clips.'));
   // Only the toggle while the bolts are off: the rest has nothing to say then.
   const bolts = SECTION_PARAMS.cover.filter((path) => path.startsWith('bolts.') && (on || path === 'bolts.enabled'));
+  // MT: the two-part cover's own block, only in that type, with the clips' rows only with Seam fasteners Clips (G13.14).
+  const type = moldTypeOf(params);
+  // Headed by their schema groups' titles, the names the switch window and README.txt give them too.
+  const twoPart = SECTION_PARAMS.cover.filter((path) => path.startsWith('clamshell.') && type.applies(path));
+  const clips = SECTION_PARAMS.cover.filter((path) => path.startsWith('clips.') && params.clamshell.fastener === 'clips' && type.applies(path));
   return (
     <Section id="cover" title="Cover & joint" reset={SECTION_PARAMS.cover}>
       {joint.map((path) => (
@@ -95,6 +103,22 @@ export function CoverSection() {
       {bolts.map((path) => (
         <ParamRow key={path} path={path} />
       ))}
+      {twoPart.length > 0 ? (
+        <>
+          <h3 data-testid="two-part-group">{GROUP_TITLES.clamshell}</h3>
+          {twoPart.map((path) => (
+            <ParamRow key={path} path={path} />
+          ))}
+        </>
+      ) : null}
+      {clips.length > 0 ? (
+        <>
+          <h3 data-testid="clips-group">{GROUP_TITLES.clips}</h3>
+          {clips.map((path) => (
+            <ParamRow key={path} path={path} />
+          ))}
+        </>
+      ) : null}
       {store.pipeline.modelName && on ? <BoltAdviceFigure /> : null}
       {store.pipeline.modelName && !on ? (
         <p
@@ -121,7 +145,8 @@ export function GridSection() {
   const { pipeline } = store;
   // RM: the plan's box, which a rebuilt model's left-out parts widen in glue mode.
   const bounds = pipeline.planBounds();
-  const params = store.project.value.params;
+  // MT: the grid as the type holds it: the two-part cover makes one model.
+  const params = effectiveParams(store.project.value.params);
   const grid = params.grid.nx * params.grid.ny > 1;
   const pitch = bounds && grid ? exportPitch(params, bounds, store.pipeline.modelErrorMm()) : null;
   const walls = pipeline.wallStatus();

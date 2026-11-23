@@ -15,6 +15,12 @@ const FULL = process.env.CFG_FULL === '1';
 const DEV_SKIP = 'the build is what the user gets, and the dev server serves the same UI code';
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
+/** MT: what format 7 adds to an older file: the one-piece cover it was, and the two-part cover's settings at the values 7 started with. */
+const V7_TYPE = {
+  mold: { type: 'one-piece' },
+  clamshell: { axis: 'auto', offset: null, ceilingDeg: 20, seamLand: 2, pins: true, fastener: 'bolts' },
+  clips: { clearance: 0.1, rows: null },
+};
 const v1Fixture = readFileSync(join(import.meta.dirname, '..', 'test', 'fixtures', 'projects', 'v1-jersey-export.json'));
 
 /** A file handed to Open's own input, as the chooser hands it over. */
@@ -325,7 +331,7 @@ test.describe('project files on index.html', () => {
     await expect(notice).toContainText('matched to jersey-barrier.stl by the file name alone');
     const v1 = JSON.parse(v1Fixture.toString('utf8')) as ProjectFile;
     // Migrated to the current format, so with the bolts off, as every version 1 mold was taped, and no base layer.
-    expect((await shown(page)).project).toEqual({ params: { ...v1.params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 }, silicone: { ...v1.params.silicone, baseLayer: 0, baseLayerSlopeDeg: 2 }, funnel: { ...v1.params.funnel, flangeWidth: 0, flangeThickness: 1.2 } }, plane: v1.plane, pins: v1.pins, removed: v1.removed });
+    expect((await shown(page)).project).toEqual({ params: { ...v1.params, bolts: { enabled: false, size: 'M3', length: null, holeClearance: 0.2, nutClearance: 0.15, minWall: 1.2 }, silicone: { ...v1.params.silicone, baseLayer: 0, baseLayerSlopeDeg: 2 }, funnel: { ...v1.params.funnel, flangeWidth: 0, flangeThickness: 1.2 }, ...V7_TYPE }, plane: v1.plane, pins: v1.pins, removed: v1.removed });
     await idle(page);
     expect(await hooks(page, (h) => h.openings().find((o) => o.pinned))).toMatchObject({ id: v1.pins[0].id, x: v1.pins[0].x, y: v1.pins[0].y });
     // Settings applied in full open again to just this, so nothing is unsaved.

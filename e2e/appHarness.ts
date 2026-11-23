@@ -215,10 +215,12 @@ export async function checkLayout(page: Page, watch: PageWatch): Promise<void> {
     });
     const exportBox = box('[data-testid="export"]');
     // clientWidth is 0 for an inline box by the CSSOM spec, and Firefox still gives such a span a
-    // scrollWidth, so only boxes that have a client width of their own are measured.
+    // scrollWidth, so only boxes that have a client width of their own are measured. Text kept for
+    // screen readers alone sits in a 1 px box that clips it on purpose, so it is not measured either.
     const overflowing = [...document.querySelectorAll<HTMLElement>('body *')]
       .filter((el) => el.offsetParent !== null || el.tagName === 'CANVAS')
       .filter((el) => getComputedStyle(el).display !== 'inline')
+      .filter((el) => !el.classList.contains('visually-hidden'))
       .filter((el) => el.scrollWidth > el.clientWidth)
       .map((el) => `${el.tagName.toLowerCase()}.${el.className} (${el.scrollWidth} > ${el.clientWidth}): ${el.textContent?.slice(0, 40)}`);
     const status = box('[data-testid="status"]');

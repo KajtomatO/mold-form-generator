@@ -97,7 +97,7 @@ export function DemoldSection() {
       {body}
       <h3>How to demold</h3>
       <ol class="steps" data-testid="demold-steps">
-        {demoldSteps(reports && !failed ? reports.demold.verdict : null, pipeline.params).map((step, k) => (
+        {demoldSteps(reports && !failed ? reports.demold.verdict : null, pipeline.run).map((step, k) => (
           <li key={k}>{step}</li>
         ))}
       </ol>

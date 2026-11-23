@@ -23,7 +23,8 @@ import DEFAULTS from './defaults.json' with { type: 'json' };
  * (M10); 4 changes no field but says that the pins and removed vents number bodies as joined parts (M11c's
  * rule, R1), which the app once told by the app version; 5 the silicone base layer, which a file of an older
  * format opens without; 6 the funnel's flange, which a file of an older format opens without too; 7 (0.3.0) the optional
- * `gallery` field, the credit of an example model not ours (GA). An older file is migrated one version at a
+ * `gallery` field, the credit of an example model not ours (GA), and the mold type with the two-part cover's settings,
+ * which a file of an older format opens without, as the one-piece cover it was (MT). An older file is migrated one version at a
  * time, by src/app/projectFile.ts.
  */
 export const SCHEMA_VERSION = 7;
@@ -93,9 +94,16 @@ const D = new Proxy({} as typeof DEFAULTS, {
 });
 
 const DEG = { unit: 'deg' };
+/** G13.10.17: the rows of seam clips a maker may set, where auto works them out. */
+const CLIP_ROWS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 const MM2 = { unit: 'mm2' };
 
 export const PARAM_SCHEMA = {
+  // MT: the type each other setting is for (src/core/mold/types.ts). Its tiles set it, never Reset or the switch
+  // window, and a page opens as the one-piece cover, which the build's check holds the file to.
+  mold: {
+    type: choice('Mold type', ['one-piece', 'clamshell'] as const, D.mold.type),
+  },
   base: {
     mode: choice('Mode', ['glue', 'merged'] as const, D.base.mode),
     thickness: num('Thickness', D.base.thickness, { min: 3, max: 20 }),
@@ -201,10 +209,31 @@ export const PARAM_SCHEMA = {
     minVolumeMl: num('Smallest reported volume', D.reports.minVolumeMl, { unit: 'ml' }),
     undersidePersistence: num('Smallest air pocket depth', D.reports.undersidePersistence),
   },
+  // G13.14: the two-part cover's own settings, shown only in that type. Its geometry is MP1 to MP6's; the settings
+  // come first (MT), so format 7 is whole before it.
+  clamshell: {
+    // Auto takes the split with the least silicone among those that fit the bed.
+    axis: choice('Split axis', ['auto', 'x', 'y'] as const, D.clamshell.axis),
+    // Auto sweeps the plane for the least silicone. Past half the model's extent less 1 mm is G13.3's to refuse.
+    offset: auto('Split offset', D.clamshell.offset, 'the place along the axis that takes the least silicone', { min: -250, max: 250 }),
+    // β: air drains toward the seam. 20 degrees by the user's answer of 2026-11-22 (the design had 30), settled by MP6's pour.
+    ceilingDeg: num('Ceiling slope', D.clamshell.ceilingDeg, { ...DEG, min: 0, max: 60 }),
+    // The band's inner land, at most the joint's (rules.ts).
+    seamLand: num('Seam land', D.clamshell.seamLand, { min: 0.8 }),
+    pins: flag('Registration pins', D.clamshell.pins),
+    // G13.10: bolts the judge's choice and the default; clips by the user's answer of 2026-11-23.
+    fastener: choice('Seam fasteners', ['bolts', 'clips', 'none'] as const, D.clamshell.fastener),
+  },
+  // G13.10.19, shown with Seam fasteners Clips only.
+  clips: {
+    clearance: num('Clip clearance', D.clips.clearance, { min: 0, max: 0.5 }),
+    rows: { ...auto('Clip rows', D.clips.rows, 'as many as the seam\'s height and the forces need (G13.10.17)', { unit: '', min: 1, max: 8 }), options: CLIP_ROWS },
+  },
 } as const satisfies Record<string, Record<string, ParamDef>>;
 
 /** Each group of PARAM_SCHEMA by the name the sidebar's Advanced section and README.txt give it. */
 export const GROUP_TITLES: Record<string, string> = {
+  mold: 'Mold type',
   base: 'Base',
   silicone: 'Silicone',
   cover: 'Cover',
@@ -218,6 +247,8 @@ export const GROUP_TITLES: Record<string, string> = {
   print: 'Printer',
   quality: 'Quality',
   reports: 'Reports',
+  clamshell: 'Two-part cover',
+  clips: 'Seam clips',
 } satisfies Record<keyof typeof PARAM_SCHEMA, string>;
 
 type ValueOf<D> = D extends AutoDef ? number | null : D extends NumberDef ? number : D extends FlagDef ? boolean : D extends ChoiceDef<infer T> ? T : never;

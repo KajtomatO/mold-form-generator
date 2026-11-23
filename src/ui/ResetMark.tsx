@@ -3,12 +3,24 @@ import { formatNumber, units } from './format';
 import { ResetArrow } from './icons';
 import { OPTION_LABELS } from './layout';
 
-/** A setting's default as its mark's tooltip says it: "3 mm", "on", "Glue in (A)", or "automatic". */
-export function defaultText(def: ParamDef): string {
-  if (def.kind === 'auto') return 'automatic';
-  if (def.kind === 'flag') return def.default ? 'on' : 'off';
-  if (def.kind === 'choice') return OPTION_LABELS[def.default] ?? def.default;
-  return `${formatNumber(def.default, 4)}${def.unit ? ` ${units(def.unit)}` : ''}`;
+/**
+ * A setting's value as its mark's tooltip and the switch window say it: "3 mm", "on", "Glue in (A)", or "automatic"
+ * for an automatic one's null. Without a value, its default in defaults.json.
+ */
+export function defaultText(def: ParamDef, value: unknown = def.default, digits = 4): string {
+  if (value === null) return 'automatic';
+  if (def.kind === 'flag') return value ? 'on' : 'off';
+  if (def.kind === 'choice') return OPTION_LABELS[value as string] ?? String(value);
+  return `${formatNumber(value as number, digits)}${'unit' in def && def.unit ? ` ${units(def.unit)}` : ''}`;
+}
+
+/**
+ * MT: the default a mark reads, in the type on screen: its value, and the type's name where it is not the one-piece
+ * cover, whose marks keep their words ("Changed from its Two-part cover default, 0 mm.").
+ */
+export interface DefaultAt {
+  value: unknown;
+  type: string | null;
 }
 
 /**
@@ -27,15 +39,17 @@ export function rowControl(row: Element | null): HTMLElement | null {
  * row's options by name, such as M3 in Bolt size, finds the option alone. The arrow goes once the setting is
  * back, so focus moves to the row's control first, and a keyboard user stays where they were.
  */
-export function ResetMark({ def, changed, onReset, control }: { def: ParamDef; changed: boolean; onReset: () => void; control?: (row: Element | null) => HTMLElement | null }) {
-  const auto = def.kind === 'auto';
-  if (!changed) return <span class="mark dot" aria-hidden="true" title={auto ? 'At its default: automatic.' : `At its default, ${defaultText(def)}.`} />;
+export function ResetMark({ def, changed, onReset, control, at }: { def: ParamDef; changed: boolean; onReset: () => void; control?: (row: Element | null) => HTMLElement | null; at?: DefaultAt }) {
+  const value = at ? at.value : def.default;
+  const its = at?.type ? `its ${at.type} default` : 'its default';
+  const auto = value === null;
+  if (!changed) return <span class="mark dot" aria-hidden="true" title={auto ? `At ${its}: automatic.` : `At ${its}, ${defaultText(def, value)}.`} />;
   return (
     <button
       type="button"
       class="mark reset"
       aria-label={`Reset ${def.label}`}
-      title={auto ? 'Set by you; its default is automatic. Click to make it automatic again.' : `Changed from its default, ${defaultText(def)}. Click to reset it.`}
+      title={auto ? `Set by you; ${its} is automatic. Click to make it automatic again.` : `Changed from ${its}, ${defaultText(def, value)}. Click to reset it.`}
       onClick={(event) => {
         const row = event.currentTarget.closest('.row');
         const target = (control ?? rowControl)(row);

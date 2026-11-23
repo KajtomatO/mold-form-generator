@@ -1,4 +1,7 @@
 {
+  "mold": {
+    "type": "one-piece"
+  },
   "base": {
     "mode": "glue",
     "thickness": 4,
@@ -99,5 +102,17 @@
   "reports": {
     "minVolumeMl": 0.05,
     "undersidePersistence": 0.3
+  },
+  "clamshell": {
+    "axis": "auto",
+    "offset": null,
+    "ceilingDeg": 20,
+    "seamLand": 2,
+    "pins": true,
+    "fastener": "bolts"
+  },
+  "clips": {
+    "clearance": 0.1,
+    "rows": null
   }
 }

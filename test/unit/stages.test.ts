@@ -5,7 +5,7 @@ import { openingSizes, placementSpace } from '../../src/core/analysis/validate';
 import { resolveAuto, defaultParams } from '../../src/core/params/defaults';
 import { PARAM_SCHEMA, type ParamDef, type Params } from '../../src/core/params/schema';
 import { hashFloats, hashMesh, hashString } from '../../src/app/hash';
-import { downstream, invalidatedBy, invalidatedByInput, MAIN_ONLY, STAGES, stageKeys, upstream, type InputName, type ParamPath, type StageId, type StageInputs } from '../../src/app/stages';
+import { downstream, invalidatedBy, invalidatedByInput, MAIN_ONLY, NO_STAGE, STAGES, stageKeys, upstream, type InputName, type ParamPath, type StageId, type StageInputs } from '../../src/app/stages';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, type PlaneChoice } from '../../src/workers/fieldStages';
 import type { OpeningPin } from '../../src/core/analysis/placement';
 import { ReportStages } from '../../src/workers/reportStages';
@@ -59,7 +59,9 @@ describe('the stage table', () => {
   it('maps every schema parameter to at least one stage or to main alone, and names no parameter the schema lacks', () => {
     const declared = new Set(STAGES.flatMap((stage) => stage.params));
     const known = new Set(PATHS.map(({ path }) => path));
-    expect(PATHS.filter(({ path }) => !declared.has(path) && !MAIN_ONLY.includes(path)).map(({ path }) => path)).toEqual([]);
+    // MT: but the type and the two-part cover's settings, which no stage of the one-piece cover reads (NO_STAGE).
+    expect(PATHS.filter(({ path }) => !declared.has(path) && !MAIN_ONLY.includes(path) && !NO_STAGE.includes(path)).map(({ path }) => path)).toEqual([]);
+    expect(NO_STAGE.filter((path) => declared.has(path) || MAIN_ONLY.includes(path) || !known.has(path))).toEqual([]);
     expect([...declared].filter((path) => !known.has(path))).toEqual([]);
     // What main reads alone is in no stage, so a change of it rebuilds nothing.
     expect(MAIN_ONLY.filter((path) => declared.has(path) || !known.has(path))).toEqual([]);

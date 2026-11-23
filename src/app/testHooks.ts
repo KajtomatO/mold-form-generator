@@ -13,6 +13,8 @@ import type { Project, WallStatus } from './pipeline';
 import type { ExportReport, ExportRequest } from '../workers/exportJob';
 import type { GeometryReports } from '../core/analysis/reports';
 import type { GalleryEntry } from '../gallery/catalogue';
+import { enableMoldType, type MoldType } from '../core/mold/types';
+import type { MoldTypeUi } from '../ui/mold/moldTypeUi';
 
 export interface ExportSummary {
   files: Record<string, { bytes: number; hash: string; meshHash: string }>;
@@ -81,11 +83,23 @@ export interface TestHooks {
    * and its credit can be tested before the gallery holds such a model. Only on the app's page.
    */
   addGalleryEntry(entry: GalleryEntry): void;
+  /**
+   * MT: lifts "Not built yet" from a mold type, so the tests reach the two-part cover's tile and its window before
+   * MP5 offers it (docs/PLAN.md, MT). Only under ?test=1; a reload puts it back.
+   */
+  enableMoldType(id: string): void;
+  /**
+   * MT: adds a fixture type's tile to the switch, as a third type would, to see the tiles wrap with no other change.
+   * It cannot be chosen, as the registry has no defaults or locks for it. Only on the app's page.
+   */
+  addMoldType(id: string, ui: MoldTypeUi): void;
 }
 
-/** GA: the store's gallery, which addGalleryEntry adds to. */
+/** GA: the store's gallery, which addGalleryEntry adds to; MT: its mold types, which addMoldType adds to. */
 export interface GalleryHolder {
   gallery: { value: readonly GalleryEntry[] };
+  moldTypes?: { value: readonly MoldType[] };
+  moldTypeUi?: { value: Readonly<Record<string, MoldTypeUi>> };
 }
 
 /** One worker as a test sees it from outside the pipeline, which only a real terminate() can end. */
@@ -208,6 +222,13 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     addGalleryEntry(entry) {
       if (!gallery) throw new Error('This page has no gallery.');
       gallery.gallery.value = [...gallery.gallery.value.filter((e) => e.id !== entry.id), entry];
+    },
+    enableMoldType: (id) => enableMoldType(id),
+    addMoldType(id, ui) {
+      if (!gallery?.moldTypes || !gallery.moldTypeUi) throw new Error('This page has no mold type switch.');
+      const fixture: MoldType = { id, overrides: {}, locked: [], applies: () => true, unavailable: () => 'A test fixture, which cannot be chosen' };
+      gallery.moldTypeUi.value = { ...gallery.moldTypeUi.value, [id]: ui };
+      gallery.moldTypes.value = [...gallery.moldTypes.value.filter((t) => t.id !== id), fixture];
     },
   };
   (window as unknown as { __pipeline: TestHooks }).__pipeline = hooks;

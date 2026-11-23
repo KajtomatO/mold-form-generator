@@ -78,5 +78,26 @@ export function crossParameterErrors(params: Params): Diagnostic[] {
     problems.push({ code: 'pocket-range', severity: 'error', message: `The pocket follows the layer height of ${layer} mm, outside the pocket's range of ${min} to ${max} mm: set the pocket depth yourself.` });
   }
   if (funnel.generate) problems.push(...funnelProblems(params));
+  if (params.mold.type === 'clamshell') problems.push(...seamProblems(params));
+  return problems;
+}
+
+/**
+ * G13.14's rules for the two-part cover: the seam's band keeps its inner land within the joint's, and the top cap
+ * holds the band's land, the ridge, the groove's play on both sides and 0.8 mm of plastic over them.
+ */
+const SEAM_CAP_ROOF = 0.8;
+
+function seamProblems(params: Params): Diagnostic[] {
+  const problems: Diagnostic[] = [];
+  const { cover, joint, clamshell } = params;
+  const round = (value: number): number => Number(value.toFixed(2));
+  if (clamshell.seamLand > joint.landInner) {
+    problems.push({ code: 'seam-land', severity: 'error', message: `A seam land of ${clamshell.seamLand} mm is wider than the joint's inner land of ${joint.landInner} mm: use a seam land of at most ${joint.landInner} mm, or a wider inner land.` });
+  }
+  const cap = clamshell.seamLand + joint.ridgeWidth + 2 * joint.grooveClearance + SEAM_CAP_ROOF;
+  if (cover.topCap < cap - 1e-9) {
+    problems.push({ code: 'seam-cap', severity: 'error', message: `A top cap of ${cover.topCap} mm is under the ${round(cap)} mm the seam needs: its land, the ridge, the groove's play on each side and ${SEAM_CAP_ROOF} mm of plastic over them. Use a top cap of at least ${round(cap)} mm, or a narrower seam land.` });
+  }
   return problems;
 }

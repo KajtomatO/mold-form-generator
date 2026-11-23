@@ -242,8 +242,14 @@ describe('the docs', () => {
         '`test/regression/golden.ts`',
         '`test/unit/export.test.ts`',
         '`ML` in `e2e/export.spec.ts`',
+        // MT: each other mold type's defaults, only what differs, checked by the build too.
+        '`src/core/params/defaults.<type>.json`',
+        '`defaults.clamshell.json` for the Two-part cover',
+        'holds only the settings whose default differs in that type',
+        'The build checks these files too',
       ]),
     ).toEqual([]);
+    expect(existsSync(join(root, 'src/core/params/defaults.clamshell.json'))).toBe(true);
     for (const path of ['src/core/params/defaults.json', 'src/core/params/schema.ts', 'scripts/serve.sh', 'test/unit/params.test.ts', 'test/regression/golden.ts', 'test/unit/export.test.ts', 'e2e/export.spec.ts']) expect(existsSync(join(root, path)), path).toBe(true);
     expect(doc('e2e/export.spec.ts')).toMatch(/^const ML: /m);
   });

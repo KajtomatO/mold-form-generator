@@ -6,9 +6,11 @@ import { paramDef, type ParamPath } from '../app/stages';
  * used ones sit in Advanced, under their schema group. test/unit/layout.test.ts checks that each
  * parameter is placed exactly once, so a parameter added to the schema cannot go without a control.
  */
-export type SectionId = 'model' | 'base' | 'silicone' | 'cover' | 'pour' | 'grid' | 'advanced';
+export type SectionId = 'moldType' | 'model' | 'base' | 'silicone' | 'cover' | 'pour' | 'grid' | 'advanced';
 
 export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
+  // MT: the type's tiles, pinned at the top of the sidebar (src/ui/mold/MoldTypeSwitch.tsx).
+  moldType: ['mold.type'],
   model: ['base.planeTol'],
   base: ['base.mode', 'base.thickness', 'print.layerHeight', 'base.pocketDepth', 'base.pocketEnlarge'],
   silicone: ['silicone.t', 'silicone.baseLayer', 'silicone.wallDraftDeg', 'silicone.density'],
@@ -16,6 +18,9 @@ export const SECTION_PARAMS: Record<SectionId, readonly ParamPath[]> = {
   cover: [
     'cover.wall', 'cover.topCap', 'joint.taperDeg', 'joint.taperClearance', 'joint.grooveClearance', 'joint.ridgeWidth', 'joint.ridgeHeight', 'joint.pryNotches',
     'bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall',
+    // MT: the two-part cover's own block, shown only in that type, and its clips' rows only with Seam fasteners Clips (G13.14).
+    'clamshell.axis', 'clamshell.offset', 'clamshell.ceilingDeg', 'clamshell.seamLand', 'clamshell.pins', 'clamshell.fastener',
+    'clips.clearance', 'clips.rows',
   ],
   pour: ['pour.perModel', 'pour.diameter', 'vents.enabled', 'vents.diameter', 'seat.enabled', 'seat.depth', 'funnel.generate', 'funnel.topDiameter', 'funnel.height', 'funnel.flangeWidth'],
   grid: ['grid.nx', 'grid.ny', 'grid.spacing', 'grid.edge'],
@@ -90,6 +95,7 @@ const SLIDER_RANGES: Partial<Record<ParamPath, [number, number]>> = {
   'quality.tinTolPreview': [0.02, 0.5],
   'reports.minVolumeMl': [0, 1],
   'reports.undersidePersistence': [0, 2],
+  'clamshell.seamLand': [0.8, 6],
 };
 
 /**
@@ -121,6 +127,8 @@ const STEPS: Partial<Record<ParamPath, number>> = {
   'quality.cellFinal': 0.005,
   'silicone.density': 0.01,
   'print.density': 0.01,
+  'clamshell.offset': 0.5,
+  'clips.clearance': 0.01,
 };
 
 /**
@@ -168,7 +176,7 @@ export function stepOf(path: ParamPath, def: ParamDef): number {
 }
 
 /** Labels for a choice's options, as the user reads them. */
-export const OPTION_LABELS: Record<string, string> = { glue: 'Glue in (A)', merged: 'Merged (B)' };
+export const OPTION_LABELS: Record<string, string> = { glue: 'Glue in (A)', merged: 'Merged (B)', auto: 'Auto', x: 'X', y: 'Y', bolts: 'Bolts', clips: 'Clips', none: 'None' };
 
 /** Tooltips: what each control does, where the label alone does not say. */
 export const HINTS: Partial<Record<ParamPath, string>> = {
@@ -189,5 +197,28 @@ export const HINTS: Partial<Record<ParamPath, string>> = {
   'bolts.nutClearance': 'Added to each side of the nut in its slot. 0.15 lets a nut slide in by hand on a 0.4 mm nozzle and stay.',
   'bolts.minWall': 'The least plastic between the bolts\' holes and slots and the cavity, the groove and the outside.',
   'funnel.flangeWidth': 'A flat ring round the foot of the funnel, this far past the seat\'s edge. It rests flat on the cover\'s top, so the funnel stands steady and seals there. Vents keep clear of it. 0 leaves it out.',
+  'clamshell.axis': 'The axis the halves slide apart along. Auto takes the split with the least silicone among those that fit the bed.',
+  'clamshell.offset': 'Where the seam stands along the axis, from the model\'s middle. Auto places it for the least silicone. Click its arrow, or double-click, to follow again.',
+  'clamshell.ceilingDeg': 'Each half\'s ceilings slope down to the seam at least this much, so air runs to the vents on it.',
+  'clamshell.seamLand': 'The plastic between the seam\'s seal and the cavity, at most the joint\'s inner land.',
+  'clamshell.pins': 'Pins on one half\'s seam face and holes in the other, so the halves meet in line.',
+  'clamshell.fastener': 'What holds the halves together: M3 bolts through printed lugs, printed clips, or None for clamps or tape.',
+  'clips.clearance': 'The play each side of a clip in its socket. Set it from the clip coupon of the fit test.',
+  'clips.rows': 'Rows of clips up the seam. Auto takes as many as the seam\'s height and the forces need.',
   'funnel.flangeThickness': 'The height of the flange\'s outer edge. Above it a 45 degree chamfer runs in to the neck, so it prints without supports.',
 };
+
+/**
+ * MT: a hint that reads otherwise in a mold type, where the type's default changes what the row does: the two-part
+ * cover's base layer is 0, not automatic, and its Reset goes back to 0, not to following the silicone thickness.
+ */
+export const TYPE_HINTS: Readonly<Record<string, Partial<Record<ParamPath, string>>>> = {
+  clamshell: {
+    'silicone.baseLayer': 'Silicone over the whole base plate inside the joint. The Two-part cover leaves it out (0) by default; set a thickness to have one.',
+  },
+};
+
+/** A row's hint in the type on screen: the type's own, or the one every type shares. */
+export function hintOf(path: ParamPath, type: string): string | undefined {
+  return TYPE_HINTS[type]?.[path] ?? HINTS[path];
+}

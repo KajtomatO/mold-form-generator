@@ -22,11 +22,15 @@ import { clampTarget, defaultTarget, HEAD_BYTES, isLarge, LARGE_MODEL, minBytesT
 import type { ModelSimplifier } from './modelSimplifier';
 import { repairedEntry, simplifiedEntry, type ModelOrigin, type OriginalImport, type OriginalSource } from './simplified';
 import { autoRepairCell, cellFacts, repairCellLimit, repairCellProblem, type CellFacts } from '../core/mesh/repair';
-import { SCHEMA_VERSION } from '../core/params/schema';
+import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import { BUILD } from './buildInfo';
 import type { SavedBy } from './version';
 import { creditOf, GALLERY, galleryEntry, type GalleryCredit, type GalleryEntry } from '../gallery/catalogue';
 import { fetchGalleryModel } from '../gallery/open';
+import { DEFAULT_MOLD_TYPE, MOLD_TYPE_LIST, MOLD_TYPES, moldTypeOf, type MoldType, type MoldTypeId, type TypeContext } from '../core/mold/types';
+import { defaultOf } from '../core/params/defaults';
+import { MOLD_TYPE_UI, type MoldTypeUi } from '../ui/mold/moldTypeUi';
+import { applySwitch, planSwitch, typeOnOpen, unavailableNotice, type SwitchPlan } from './moldSwitch';
 
 export type Theme = 'dark' | 'light';
 
@@ -333,6 +337,14 @@ export class Store {
   /** GA: how a gallery model's STL is fetched, which Node tests replace. */
   galleryFetch: (entry: GalleryEntry) => Promise<Blob> = fetchGalleryModel;
   /**
+   * MT: the mold types the switch shows, in order, with their words: the registry's, to which the test hooks add a
+   * fixture type to see a third tile wrap (src/app/testHooks.ts). Only a type of MOLD_TYPES can be switched to.
+   */
+  readonly moldTypes = signal<readonly MoldType[]>(MOLD_TYPE_LIST);
+  readonly moldTypeUi = signal<Readonly<Record<string, MoldTypeUi>>>(MOLD_TYPE_UI);
+  /** MT: the switch window's question while it is open (D27): the settings changed that differ from the new type's defaults. */
+  readonly switching = signal<SwitchPlan | null>(null);
+  /**
    * MM2: the maker's file the model on screen came from, kept unread: Simplify… and Save project of a copy read
    * it in their workers. Null for a load by bytes, which then gives a Blob of the bytes when one is needed.
    */
@@ -484,6 +496,7 @@ export class Store {
     }
     if (initial && (this.opens !== 0 || this.pipeline.modelName !== null)) return;
     const ticket = ++this.opens;
+    if (!initial) this.switching.value = null;
     const busy = initial ? null : `Fetching ${entry.title}…`;
     if (busy) {
       this.fileNotice.value = null;
@@ -517,6 +530,8 @@ export class Store {
   /** What every new model resets: how the user was looking at the last one, and its history. */
   private beforeLoad(): void {
     this.opens++;
+    // MT: a switch asked about is for the settings on screen, which the new model's replace.
+    this.switching.value = null;
     // The pipeline's load follows at once, and the meter reads after it.
     this.dropReplacing(false);
     // A question about another file, or a copy being made of one, is for a model that is not coming.
@@ -554,6 +569,8 @@ export class Store {
    */
   async openFile(file: File, gallery: GalleryEntry | null = null): Promise<void> {
     const ticket = ++this.opens;
+    // MT: a model or project opened while the switch window is open cancels it first (D27).
+    this.switching.value = null;
     // GA: a gallery model's source names it, so it loads with its credit.
     const stlSource: OriginalSource = gallery ? { kind: 'gallery', blob: file, id: gallery.id } : { kind: 'stl', blob: file };
     // A newer file supersedes one still waiting for an answer, and a copy being made of another, or a repair.
@@ -1013,7 +1030,12 @@ export class Store {
       : fixed && opened.stlSha256
         ? (({ from, ...record }) => ({ original: source, from: { name: file.model, bytes: fixed.bytes, sha256: opened.stlSha256!, ...from }, record: null, repair: { record, outside: fixed.outside } }))(fixed.entry)
         : null;
-    this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion }, origin);
+    // MT: the file's type with no window, or the one-piece with a notice where its type is not available here. The
+    // model's triangles are counted from the STL in memory, exactly, as its header or its text gives them; its bodies
+    // are not known until its import, so only what is known counts (MP5 checks the rest).
+    const triangles = estimateTriangles(opened.stl!, opened.stl!.length);
+    const typed = this.typedProject(projectOf(file), { bodies: null, triangles: triangles.exact ? triangles.triangles : null, simplified: origin?.record != null });
+    this.pipeline.loadProject(opened.stl!, file.model, typed.project, file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion }, origin);
     // GA: a project saved from a gallery model not ours shows its credit again, from the file alone.
     this.pipeline.setGallery(file.gallery ?? null);
     this.source = source;
@@ -1021,9 +1043,10 @@ export class Store {
     // The history is empty, so every step from here stands on the file's choice until the user picks.
     this.fileSteps = this.history.nextSeq;
     this.projectName.value = name;
-    if (opened.notes.length > 0) {
-      const warned = opened.notes.some((note) => note.severity === 'warning');
-      this.fileNotice.value = { severity: warned ? 'warning' : 'info', message: `Opened ${name}.`, notes: opened.notes };
+    const notes = typed.note ? [typed.note, ...opened.notes] : opened.notes;
+    if (notes.length > 0) {
+      const warned = notes.some((note) => note.severity === 'warning');
+      this.fileNotice.value = { severity: warned ? 'warning' : 'info', message: `Opened ${name}.`, notes };
     }
   }
 
@@ -1040,8 +1063,13 @@ export class Store {
       this.fileNotice.value = { severity: 'warning', message: `${name} holds the settings for ${file.model}, but not the model itself. Open ${file.model} first, then open ${name} again to use them.`, notes };
       return;
     }
+    // MT: a switch asked about while the file was read is for the settings it replaces, as beforeLoad cancels one.
+    this.switching.value = null;
     const same = file.modelSha256 !== null ? file.modelSha256 === this.pipeline.modelSha256 : file.model === current;
-    const project = same ? projectOf(file) : { ...this.pipeline.project(), params: file.params };
+    // MT: its type with no window, or the one-piece with a notice where the type is not available for this model.
+    const typed = this.typedProject(same ? projectOf(file) : { ...this.pipeline.project(), params: file.params }, this.typeContext());
+    const project = typed.project;
+    if (typed.note) notes.unshift(typed.note);
     // Steps already in the history are the user's own: a resolution of the file's plane, even one found
     // during this very step, must not rewrite them, and the step's own "before" is one of them.
     this.fileSteps = Infinity;
@@ -1068,6 +1096,82 @@ export class Store {
     }
     if (file.modelSha256 === null) notes.push({ severity: 'info', message: `${name} does not record its model's contents, so it was matched to ${current} by the file name alone.` });
     this.fileNotice.value = { severity: notes.some((note) => note.severity === 'warning') ? 'warning' : 'info', message: `Applied the settings of ${name} to ${current}.`, notes };
+  }
+
+  /**
+   * MT: a project's settings as they open here: its own type, or the one-piece where that type is not available
+   * for what is known of the model, with the notice that says so, every other value kept.
+   */
+  private typedProject(project: Project, ctx: TypeContext): { project: Project; note: ProjectNote | null } {
+    const { params, unavailable } = typeOnOpen(project.params, ctx);
+    if (!unavailable) return { project, note: null };
+    const names = this.moldTypeUi.value;
+    const message = unavailableNotice(names[unavailable.type]?.name ?? unavailable.type, unavailable.reason, names[DEFAULT_MOLD_TYPE].name);
+    return { project: { ...project, params }, note: { severity: 'warning', message } };
+  }
+
+  /** MT: what the mold types' `unavailable` knows of the model on screen. */
+  typeContext(): TypeContext {
+    const origin = this.pipeline.modelOrigin();
+    return {
+      bodies: this.pipeline.imported?.value.bodies ?? null,
+      triangles: this.pipeline.parsed?.value.triangles ?? null,
+      simplified: origin?.record != null,
+    };
+  }
+
+  /** MT: the type the settings on screen are for. */
+  moldType(): MoldTypeId {
+    return moldTypeOf(this.project.value.params).id as MoldTypeId;
+  }
+
+  /** MT: the name the marks and Resets give the type on screen, or null for the one-piece cover, whose words they keep. */
+  typeShown(): string | null {
+    const type = this.moldType();
+    return type === DEFAULT_MOLD_TYPE ? null : this.moldTypeName(type);
+  }
+
+  /** MT: a type's name, as its tile and the window give it. */
+  moldTypeName(id: string): string {
+    return this.moldTypeUi.value[id]?.name ?? id;
+  }
+
+  /**
+   * MT: a tile chosen (R44, D27). Nothing for the type already on, one that cannot be chosen here, or while the
+   * replace prompt or a drag is on. With no setting to ask about, the switch is made at once, as one undo step;
+   * otherwise the window opens with the plan, and answerSwitch makes it.
+   */
+  requestSwitch(to: string): void {
+    if (this.replacing.value || this.drag.value || this.switching.value) return;
+    if (!Object.hasOwn(MOLD_TYPES, to) || to === this.moldType()) return;
+    const type = MOLD_TYPES[to as MoldTypeId];
+    if (type.unavailable(this.typeContext()) !== null) return;
+    const plan = planSwitch(this.pipeline.params, to as MoldTypeId);
+    if (plan.rows.length === 0) this.makeSwitch(plan, []);
+    else this.switching.value = plan;
+  }
+
+  /**
+   * MT: the window's answer: Discard all changes sets every listed setting to the new default, Transfer selected
+   * changes keeps the ticked ones and sets the rest, each one undo step; Cancel changes nothing and records nothing.
+   */
+  answerSwitch(answer: 'discard' | 'transfer' | 'cancel', keep: readonly ParamPath[] = []): void {
+    const plan = this.switching.value;
+    if (!plan) return;
+    this.switching.value = null;
+    if (answer === 'cancel') return;
+    this.makeSwitch(plan, answer === 'transfer' ? keep : []);
+  }
+
+  private makeSwitch(plan: SwitchPlan, keep: readonly ParamPath[]): void {
+    // A plan made on settings that have since changed would write the old ones back: nothing is made.
+    if (plan.params !== this.pipeline.params) return;
+    const next = applySwitch(plan, keep);
+    this.change(`switching to ${this.moldTypeName(plan.to)}`, null, () =>
+      this.pipeline.setParams((params) => {
+        for (const group of Object.keys(next) as (keyof Params)[]) (params as Record<string, unknown>)[group] = next[group];
+      }),
+    );
   }
 
   /**
@@ -1163,7 +1267,9 @@ export class Store {
   resetParam(path: ParamPath): void {
     if (this.drag.value || changedPaths(this.pipeline.params, [path]).length === 0) return;
     const def = paramDef(path);
-    this.change(`resetting ${def.label}`, paramGroup(path), () => this.pipeline.setParams((params) => setParamValue(params, path, def.kind === 'auto' ? null : def.default)));
+    // MT: to the default of the type on screen.
+    const value = defaultOf(path, this.moldType());
+    this.change(`resetting ${def.label}`, paramGroup(path), () => this.pipeline.setParams((params) => setParamValue(params, path, value)));
   }
 
   /**
@@ -1177,10 +1283,9 @@ export class Store {
     if (changed.length === 0) return;
     this.change(label, null, () =>
       this.pipeline.setParams((params) => {
-        for (const path of changed) {
-          const def = paramDef(path);
-          setParamValue(params, path, def.kind === 'auto' ? null : def.default);
-        }
+        // MT: to the defaults of the type on screen, which stays.
+        const type = this.moldType();
+        for (const path of changed) setParamValue(params, path, defaultOf(path, type));
       }),
     );
   }

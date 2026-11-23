@@ -27,6 +27,8 @@ import { asciiStl, box, join as joinMeshes, toSoup } from '../fixtures/synthetic
 import { THIRD_PARTY, WITH_THIRD_PARTY } from '../fixtures/galleryFixture';
 import { loadGallery } from '../fixtures/loadGallery';
 import { creditOf } from '../../src/gallery/catalogue';
+import { disableMoldType, enableMoldType } from '../../src/core/mold/types';
+import { estimateTriangles } from '../../src/core/stl/estimate';
 
 /** A binary STL of these triangles, with `count` in its header in place of the real one. */
 function binaryOf(soup: Float32Array, count: number): Uint8Array {
@@ -52,6 +54,12 @@ const V6_FLANGE = { flangeWidth: 0, flangeThickness: 1.2 };
 const V6_NOTE = {
   severity: 'info',
   message: "This mold was made before the funnel had a flange, so it opens with Flange width 0 and the funnel it had. To stand the funnel on a flat flange on the cover's top, set Flange width under Pour & funnel. A width of up to 1 mm leaves every vent where it is, so a cover you have printed takes the new funnel; a wider flange moves the vent beside each pour out from under it, so print the cover again too.",
+} as const;
+/** MT: what format 7 adds to an older file: the one-piece cover it was, and the two-part cover's settings at the values 7 started with. */
+const V7_TYPE = {
+  mold: { type: 'one-piece' },
+  clamshell: { axis: 'auto', offset: null, ceilingDeg: 20, seamLand: 2, pins: true, fastener: 'bolts' },
+  clips: { clearance: 0.1, rows: null },
 } as const;
 const nodeSha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
@@ -193,7 +201,7 @@ describe('migration', () => {
     expect(v1.schemaVersion).toBe(1);
     expect(read.from).toBe(1);
     expect(SCHEMA_VERSION).toBe(7);
-    expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE } } });
+    expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE }, ...V7_TYPE } });
     // The pocket's edited flag is its value, 0.4, where an unedited one is null.
     expect(read.file.params.base.pocketDepth).toBe(0.4);
     expect(read.file.params.silicone.printMargin).toBeNull();
@@ -206,7 +214,7 @@ describe('migration', () => {
     expect(v2).toMatchObject({ schemaVersion: 2, appVersion: '0.2.0' });
     expect(v2.params.bolts).toBeUndefined();
     expect(read.from).toBe(2);
-    expect(read.file).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, params: { ...v2.params, bolts: V3_BOLTS, silicone: { ...v2.params.silicone, ...V5_LAYER }, funnel: { ...v2.params.funnel, ...V6_FLANGE } } });
+    expect(read.file).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, params: { ...v2.params, bolts: V3_BOLTS, silicone: { ...v2.params.silicone, ...V5_LAYER }, funnel: { ...v2.params.funnel, ...V6_FLANGE }, ...V7_TYPE } });
     expect(read.file.params.bolts).toEqual(defaultParams().bolts);
     // D19: a file keeps the Infill it was saved with, 0.35 here, though a new project starts at 0.05.
     expect(read.file.params.print.infill).toBe(0.35);
@@ -238,7 +246,7 @@ describe('migration', () => {
     expect(read.from).toBe(5);
     expect(read.file.params.funnel).toEqual({ ...v2.params.funnel, ...V6_FLANGE });
     // Everything else as saved.
-    expect({ ...read.file, params: { ...read.file.params, funnel: v5.params.funnel } }).toEqual({ ...v5, schemaVersion: 7 });
+    expect({ ...read.file, params: { ...read.file.params, funnel: v5.params.funnel } }).toEqual({ ...v5, schemaVersion: 7, params: { ...v5.params, ...V7_TYPE } });
     expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 5 by an earlier version of the app, and brought up to format 7.' }, V6_NOTE]);
     // With no funnel there is nothing to say of its flange; with a land of 2 mm, a flange of 1.5 still fits the cover.
     const bare = { ...v5, params: { ...v5.params, funnel: { ...v5.params.funnel, generate: false } } };
@@ -935,7 +943,7 @@ describe('save and open with the real pipeline on jersey', () => {
       ],
     });
     // Migrated, so with the bolts off, no base layer and no flange, as version 1 molds were.
-    const params = { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE } } as ProjectFile['params'];
+    const params = { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE }, ...V7_TYPE } as ProjectFile['params'];
     expect(p.project()).toEqual({ params, plane: v1.plane, pins: v1.pins, removed: v1.removed });
     // The file opens again to just this, so leaving the page now loses nothing.
     expect(store.unsaved()).toBe(false);
@@ -1360,7 +1368,9 @@ describe('GA: format 7 and a gallery model\'s credit (R48)', () => {
     expect('gallery' in v6).toBe(false);
     const read = readProjectJson(fixture('v6-sphere.json'));
     expect(read.from).toBe(6);
-    expect(read.file).toEqual({ ...v6, schemaVersion: 7 });
+    // MT: as the one-piece cover it was, with the two-part cover's settings at the values format 7 started with.
+    expect(read.file).toEqual({ ...v6, schemaVersion: 7, params: { ...v6.params, ...V7_TYPE } });
+    expect(read.file.params.mold.type).toBe('one-piece');
     expect(read.file.gallery).toBeUndefined();
     expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 6 by an earlier version of the app, and brought up to format 7.' }]);
     expect(read.file.modelSha256).toBe(nodeSha(loadGallery('sphere')));
@@ -1536,5 +1546,159 @@ describe('GA: format 7 and a gallery model\'s credit (R48)', () => {
     expect(s.replacing.value).toEqual({ name: EXAMPLE_FILES.jersey, model: 'cube.stl' });
     await s.answerReplace('cancel');
     expect(s.pipeline.modelName).toBe('cube.stl');
+  });
+});
+
+describe('MT: format 7 carries the mold type', () => {
+  const pipelines: Pipeline[] = [];
+  afterEach(() => {
+    pipelines.splice(0).forEach((p) => p.dispose());
+    disableMoldType('clamshell');
+  });
+  const projectFiles = new ProjectFiles(inProcessProject);
+  const store = (): Store => {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    return new Store(p, () => 0, projectFiles);
+  };
+  /** A two-part cover's project, with a value of its own in its block and the base layer at its default. */
+  const twoPart = (change: (f: ProjectFile) => void = () => {}): ProjectFile =>
+    file((f) => {
+      f.params = defaultParams('clamshell');
+      f.params.clamshell.ceilingDeg = 35;
+      f.params.clamshell.fastener = 'clips';
+      change(f);
+    });
+
+  it('a two-part project round-trips, its type and its block as saved, with no note', () => {
+    const f = twoPart();
+    const read = readProjectJson(projectJson(f));
+    expect(read.file).toEqual(f);
+    expect(read.file.params.mold.type).toBe('clamshell');
+    expect(read.file.params.silicone.baseLayer).toBe(0);
+    expect(read.notes).toEqual([]);
+    // project.json lists the type first, as the schema does.
+    expect(Object.keys(JSON.parse(projectJson(f)).params)[0]).toBe('mold');
+  });
+
+  it('settings the file lacks take its type\'s defaults, named only where the type uses them; with no type it is the one-piece cover', () => {
+    const raw = JSON.parse(projectJson(twoPart())) as { params: Record<string, Record<string, unknown>> };
+    delete raw.params.silicone.baseLayer;
+    delete raw.params.clamshell.ceilingDeg;
+    const read = readProjectJson(JSON.stringify(raw));
+    expect(read.file.params.silicone.baseLayer).toBe(0);
+    expect(read.file.params.clamshell.ceilingDeg).toBe(20);
+    expect(read.notes).toEqual([{ severity: 'warning', message: 'Not in the file, so at their Two-part cover defaults: Base layer, Ceiling slope.' }]);
+    // A format 7 file with no type, as GA's were: the one-piece cover, its hidden two-part settings filled with no word.
+    const plain = JSON.parse(projectJson(file())) as { params: Record<string, unknown> };
+    delete plain.params.mold;
+    delete plain.params.clamshell;
+    delete plain.params.clips;
+    const opened = readProjectJson(JSON.stringify(plain));
+    expect(opened.file.params).toEqual(defaultParams());
+    expect(opened.notes).toEqual([]);
+    // Negative control: a setting the one-piece cover uses is named, at the one-piece's default.
+    delete (plain.params.silicone as Record<string, unknown>).baseLayer;
+    expect(readProjectJson(JSON.stringify(plain)).notes).toEqual([{ severity: 'warning', message: 'Not in the file, so at their defaults: Base layer.' }]);
+    expect(readProjectJson(JSON.stringify(plain)).file.params.silicone.baseLayer).toBeNull();
+  });
+
+  it('a value out of range in a setting the file\'s type hides is still named, as it matters once the type is switched', () => {
+    // A one-piece file with 9 clip rows: hidden there, but brought to 8 and said, path and all.
+    const read = readProjectJson(edited('params.clips.rows', 9));
+    expect(read.file.params.mold.type).toBe('one-piece');
+    expect(read.file.params.clips.rows).toBe(8);
+    expect(read.notes).toEqual([{ severity: 'warning', message: expect.stringContaining('Clip rows (clips.rows) was 9') }]);
+  });
+
+  it('a type or a seam fastener this version does not know is refused, as a newer format is, naming the file', () => {
+    expect(reason(() => readProjectJson(edited('params.mold.type', 'tripart'), MIGRATIONS, 'vase.moldproj'))).toBe('vase.moldproj was saved with a mold type this version does not know ("tripart"). Open it in the version of the app that saved it.');
+    expect(refusal(() => readProjectJson(edited('params.mold.type', 7))).details).toBe('In project.json: params.mold.type.');
+    expect(reason(() => readProjectJson(edited('params.clamshell.fastener', 'magnets'), MIGRATIONS, 'vase.moldproj'))).toBe('vase.moldproj was saved with a seam fastener this version does not know ("magnets"). Open it in the version of the app that saved it.');
+    // Negative controls: each known value opens.
+    for (const type of ['one-piece', 'clamshell']) expect(readProjectJson(edited('params.mold.type', type)).file.params.mold.type).toBe(type);
+    for (const fastener of ['bolts', 'clips', 'none']) expect(readProjectJson(edited('params.clamshell.fastener', fastener)).file.params.clamshell.fastener).toBe(fastener);
+  });
+
+  it('an unknown type opened changes nothing: the settings on screen stay, with the reason under the file row', async () => {
+    const s = store();
+    s.setParam('silicone.t', 4);
+    const before = JSON.stringify(s.pipeline.project());
+    await s.openFile(new File([edited('params.mold.type', 'tripart')], 'project.json'));
+    expect(s.fileNotice.value).toMatchObject({ severity: 'error', message: 'project.json was saved with a mold type this version does not know ("tripart"). Open it in the version of the app that saved it.' });
+    expect(JSON.stringify(s.pipeline.project())).toBe(before);
+    expect(s.history.undoLabel).toBe('the change to Silicone thickness');
+  });
+
+  it('a two-part project opens with its type and no window where it can; where it is not built yet, or the model has more than one body, it opens as the one-piece with a notice, its two-part values kept', async () => {
+    const cube = loadGallery('cube');
+    const f = twoPart((g) => {
+      g.model = 'cube.stl';
+      g.modelSha256 = nodeSha(cube);
+      g.basePlane = null;
+    });
+    const moldproj = (): File => new File([packProject(projectJson(f), cube).slice()], 'cube.moldproj');
+    // Not built yet, as outside the tests until MP5.
+    const shut = store();
+    await shut.openFile(moldproj());
+    expect(shut.pipeline.params.mold.type).toBe('one-piece');
+    expect(shut.pipeline.params.clamshell).toEqual(f.params.clamshell);
+    expect(shut.pipeline.params.silicone.baseLayer).toBe(0);
+    expect(shut.fileNotice.value).toEqual({ severity: 'warning', message: 'Opened cube.moldproj.', notes: [{ severity: 'warning', message: 'This project is a Two-part cover, which this version does not build yet. It opened as a One-piece cover, with every other setting as saved.' }] });
+    expect(shut.switching.value).toBeNull();
+    // Built: its own type, with no window and no notice.
+    enableMoldType('clamshell');
+    const open = store();
+    await open.openFile(moldproj());
+    expect(open.pipeline.params).toEqual(f.params);
+    expect(open.fileNotice.value).toBeNull();
+    expect(open.switching.value).toBeNull();
+    // The model's triangles, counted from the STL in memory, are what the type's limit is checked against (G1.8):
+    // a model past it, not simplified, opens as the one-piece (test/unit/moldTypes.test.ts holds the limit's rule).
+    const typed = vi.spyOn(Store.prototype as unknown as { typedProject: (...args: unknown[]) => unknown }, 'typedProject');
+    const counted = store();
+    await counted.openFile(moldproj());
+    expect(typed).toHaveBeenCalledWith(expect.anything(), { bodies: null, triangles: estimateTriangles(cube, cube.length).triangles, simplified: false });
+    expect(estimateTriangles(cube, cube.length).exact).toBe(true);
+    typed.mockRestore();
+    // Its settings onto a model of two bodies: the type makes one model, so the one-piece, with its reason.
+    const two = store();
+    two.load(asciiStl(toSoup(joinMeshes(box([0, 0, 0], [20, 20, 10]), box([40, 0, 0], [60, 20, 10]))), 'two.stl'), 'two.stl');
+    await two.pipeline.idle();
+    expect(two.pipeline.imported!.value.bodies).toBe(2);
+    await two.openFile(new File([projectJson({ ...f, model: 'two.stl', modelSha256: null })], 'project.json'));
+    expect(two.pipeline.params.mold.type).toBe('one-piece');
+    expect(two.pipeline.params.clamshell.ceilingDeg).toBe(35);
+    expect(two.fileNotice.value!.notes[0]).toEqual({ severity: 'warning', message: 'This project is a Two-part cover, which cannot be used for this model, because it makes one model, and this file holds 2. It opened as a One-piece cover, with every other setting as saved.' });
+  });
+
+  it('a project.json opened while the switch window is open cancels it, so Transfer cannot write the settings from before it back', async () => {
+    enableMoldType('clamshell');
+    const cube = loadGallery('cube');
+    const s = store();
+    s.load(cube, 'cube.stl');
+    await s.pipeline.idle();
+    s.setParam('silicone.t', 4);
+    const settings = file((f) => {
+      f.model = 'cube.stl';
+      f.modelSha256 = nodeSha(cube);
+      f.basePlane = null;
+      f.params.silicone.t = 5;
+    });
+    // The tile chosen while the file is read: the window opens on the settings on screen.
+    const opening = s.openFile(new File([projectJson(settings)], 'project.json'));
+    s.requestSwitch('clamshell');
+    const stale = s.switching.value;
+    expect(stale?.rows.map((row) => row.path)).toEqual(['silicone.t']);
+    await opening;
+    expect(s.pipeline.params.silicone.t).toBe(5);
+    expect(s.switching.value).toBeNull();
+    // A plan made before the file, answered anyway, writes nothing back.
+    s.switching.value = stale;
+    s.answerSwitch('transfer', ['silicone.t']);
+    expect(s.switching.value).toBeNull();
+    expect(s.pipeline.params.silicone.t).toBe(5);
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.history.undoLabel).toBe('opening the settings of project.json');
   });
 });

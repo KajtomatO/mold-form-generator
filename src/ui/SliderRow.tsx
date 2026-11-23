@@ -3,7 +3,7 @@ import type { ShownDiagnostic } from '../app/pipeline';
 import type { AutoDef, NumberDef } from '../core/params/schema';
 import { formatNumber, units } from './format';
 import { parseEntry } from './layout';
-import { ResetMark, rowControl } from './ResetMark';
+import { ResetMark, rowControl, type DefaultAt } from './ResetMark';
 
 export interface SliderRowProps {
   /** Becomes data-param and the ids, so tests and labels can find the row. */
@@ -26,6 +26,10 @@ export interface SliderRowProps {
   changed: boolean;
   /** Back to the default, or for an auto parameter to following its rule: the arrow and both double-clicks. */
   onReset: () => void;
+  /** MT: the default in the type on screen, which the mark names. */
+  defaultAt?: DefaultAt;
+  /** MT: why the type holds this setting at `value`, which turns the row off and is said under it. */
+  locked?: string | null;
 }
 
 /** Rounds a stepped value to the step's own decimals, so 0.1 steps never show 3.0000000004. */
@@ -45,7 +49,7 @@ function clamp(value: number, def: NumberDef | AutoDef): number {
  * or the box once it has focus: Shift ten steps, Ctrl a tenth of one.
  */
 export function SliderRow(props: SliderRowProps) {
-  const { name, label, unit, def, value, auto, range, step, hint, problems = [], onChange, onHold, changed, onReset } = props;
+  const { name, label, unit, def, value, auto, range, step, hint, problems = [], onChange, onHold, changed, onReset, defaultAt, locked = null } = props;
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const row = useRef<HTMLDivElement>(null);
@@ -97,13 +101,16 @@ export function SliderRow(props: SliderRowProps) {
 
   const id = `p-${name.replace('.', '-')}`;
   const following = def.kind === 'auto' && value === null;
+  // MT: an auto setting whose default in the type on screen is a number, at it, neither follows its rule nor was set:
+  // it has no tag, as a plain setting at its default has none.
+  const atNumberDefault = defaultAt !== undefined && defaultAt.value !== null && value === defaultAt.value;
   const slider = shown === null ? range[0] : Math.min(range[1], Math.max(range[0], shown));
   return (
-    <div class="row" data-param={name} data-changed={changed ? '' : undefined} title={hint} ref={row}>
-      <label for={id} onDblClick={reset}>
+    <div class="row" data-param={name} data-changed={changed ? '' : undefined} data-locked={locked ? '' : undefined} title={locked ?? hint} ref={row}>
+      <label for={id} onDblClick={locked ? undefined : reset}>
         {label}
         {unit ? <span class="unit">{units(unit)}</span> : null}
-        {def.kind === 'auto' ? <span class="tag">{following ? 'auto' : 'set'}</span> : null}
+        {def.kind === 'auto' && !atNumberDefault ? <span class="tag">{following ? 'auto' : 'set'}</span> : null}
       </label>
       <input
         type="range"
@@ -112,7 +119,7 @@ export function SliderRow(props: SliderRowProps) {
         max={range[1]}
         step={step}
         value={slider}
-        disabled={shown === null}
+        disabled={shown === null || locked !== null}
         onPointerDown={() => {
           if (!onHold) return;
           onHold(true);
@@ -133,7 +140,7 @@ export function SliderRow(props: SliderRowProps) {
         onDblClick={reset}
       />
       {/* Between the slider and the box, as the user asked; an auto row with no model yet keeps its slider off, so the box takes focus. */}
-      <ResetMark def={def} changed={changed} onReset={reset} control={(r) => (def.kind === 'auto' && auto === null ? (r?.querySelector<HTMLElement>('input.num') ?? null) : rowControl(r))} />
+      {locked ? <span class="mark" aria-hidden="true" /> : <ResetMark def={def} changed={changed} onReset={reset} at={defaultAt} control={(r) => (def.kind === 'auto' && auto === null ? (r?.querySelector<HTMLElement>('input.num') ?? null) : rowControl(r))} />}
       <input
         id={id}
         class={`num${following ? ' auto' : ''}${error ? ' invalid' : ''}`}
@@ -144,6 +151,7 @@ export function SliderRow(props: SliderRowProps) {
         // With nothing typed and not yet committed, the box shows the project's value, and Ctrl+Z is the app's.
         data-undo={draft === null ? 'app' : undefined}
         placeholder={shown === null ? 'auto' : undefined}
+        disabled={locked !== null}
         value={draft ?? (shown === null ? '' : formatNumber(shown, 3))}
         aria-invalid={error ? true : undefined}
         onInput={(event) => setDraft(event.currentTarget.value)}
@@ -157,6 +165,7 @@ export function SliderRow(props: SliderRowProps) {
         onBlur={commit}
       />
       {error ? <p class="note error">{error}</p> : null}
+      {locked ? <p class="note locked" data-testid="locked-reason">{locked}</p> : null}
       {problems.map((problem) => (
         <p key={problem.code} class={`note ${problem.severity}`} data-code={problem.code}>
           {units(problem.message)}

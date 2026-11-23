@@ -24,6 +24,13 @@ function takesText(target: EventTarget | null): boolean {
 export function App({ store, scene, canvas }: { store: Store; scene: PreviewScene | null; canvas: HTMLCanvasElement | null }) {
   useEffect(() => {
     const keys = (event: KeyboardEvent): void => {
+      // MT: while the switch window is open, the app's keys do nothing, and Ctrl+S, Ctrl+O and Ctrl+Z (Cmd on a Mac)
+      // do nothing too, so the browser's own Save page never opens behind it; Esc is the window's own, its cancel (D27).
+      if (store.switching.value) {
+        const key = event.key.toLowerCase();
+        if ((event.ctrlKey || event.metaKey) && !event.altKey && ['s', 'o', 'z', 'y'].includes(key)) event.preventDefault();
+        return;
+      }
       if (event.key === 'Escape' && store.pickMode.value) {
         store.pickMode.value = false;
         store.hoverTriangle.value = null;

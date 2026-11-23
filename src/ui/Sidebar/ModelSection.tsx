@@ -298,7 +298,7 @@ function SimplifyBusy({ store, simplifying }: { store: Store; simplifying: Simpl
  * this large took in our tests, and the copy that keeps its shape within 0.05 mm (R42). Never a dialog.
  */
 function LargeQuestion({ store, prompt }: { store: Store; prompt: LargePrompt }) {
-  const cell = store.pipeline.params.quality.cellFinal;
+  const cell = store.pipeline.run.quality.cellFinal;
   const top = Math.max(1, Math.min(TARGET_RANGE.max, prompt.triangles - 1));
   const loaded = prompt.kind === 'loaded';
   const inProject = prompt.kind === 'moldproj' ? `, the model in ${prompt.name},` : '';

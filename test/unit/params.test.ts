@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { changedPaths, PARAM_PATHS, paramDef, paramValue, setParamValue, type ParamPath } from '../../src/app/stages';
-import { baseOptions, defaultParams, isDefault, resolveAuto } from '../../src/core/params/defaults';
+import { changedPaths, PARAM_PATHS, paramDef, paramValue, setParamValue, stageKeys, type ParamPath, type StageInputs } from '../../src/app/stages';
+import { baseOptions, defaultOf, defaultParams, isDefaultAt, isDefaultIn, resolveAuto } from '../../src/core/params/defaults';
+import { effectiveParams, MOLD_TYPE_IDS, MOLD_TYPES } from '../../src/core/mold/types';
+import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import { PARAM_SCHEMA, type ParamDef } from '../../src/core/params/schema';
 import { sliderRange, stepOf } from '../../src/ui/layout';
 
@@ -90,7 +92,20 @@ const PLAN_TABLE: Record<string, [value: unknown, min?: number, max?: number]> =
   'quality.tinTolPreview': [0.1],
   'reports.minVolumeMl': [0.05],
   'reports.undersidePersistence': [0.3],
+  // MT: the type, one-piece by default, and the two-part cover's own settings (G13.14).
+  'mold.type': ['one-piece'],
+  'clamshell.axis': ['auto'],
+  'clamshell.offset': [null, -250, 250],
+  'clamshell.ceilingDeg': [20, 0, 60],
+  'clamshell.seamLand': [2, 0.8, undefined],
+  'clamshell.pins': [true],
+  'clamshell.fastener': ['bolts'],
+  'clips.clearance': [0.1, 0, 0.5],
+  'clips.rows': [null, 1, 8],
 };
+
+/** What the one-piece cover holds a setting's default to, the schema's own. */
+const isDefault = (path: string, value: unknown): boolean => isDefaultIn(path as ParamPath, value, 'one-piece');
 
 describe('parameter schema', () => {
   it('has exactly the rows of the plan, with its defaults and ranges', () => {
@@ -186,22 +201,23 @@ describe('the marks on changed settings (CS)', () => {
     expect(PARAM_PATHS).toEqual(entries.map(({ path }) => path));
     for (const { path, def } of entries) {
       expect(paramDef(path as ParamPath)).toBe(def);
-      expect(isDefault(def, def.default), path).toBe(true);
+      expect(isDefault(path, def.default), path).toBe(true);
       if (def.kind === 'number') {
         // A step either way, where the range allows it, as the slider and the wheel would leave it.
         const step = stepOf(path as ParamPath, def);
         for (const off of [def.default + step, def.default - step]) {
-          if (off >= (def.min ?? 0) && off <= (def.max ?? Infinity)) expect(isDefault(def, Number(off.toFixed(6))), `${path} at ${off}`).toBe(false);
+          if (off >= (def.min ?? 0) && off <= (def.max ?? Infinity)) expect(isDefault(path, Number(off.toFixed(6))), `${path} at ${off}`).toBe(false);
         }
       }
-      if (def.kind === 'flag') expect(isDefault(def, !def.default), path).toBe(false);
-      if (def.kind === 'choice') for (const option of def.options.filter((o) => o !== def.default)) expect(isDefault(def, option), `${path} ${option}`).toBe(false);
+      if (def.kind === 'flag') expect(isDefault(path, !def.default), path).toBe(false);
+      if (def.kind === 'choice') for (const option of def.options.filter((o) => o !== def.default)) expect(isDefault(path, option), `${path} ${option}`).toBe(false);
       // Any number on an auto one is the user's, its slider's ends among them.
-      if (def.kind === 'auto') for (const value of [...sliderRange(path as ParamPath, def), ...(def.options ?? [])]) expect(isDefault(def, value), `${path} at ${value}`).toBe(false);
+      if (def.kind === 'auto') for (const value of [...sliderRange(path as ParamPath, def), ...(def.options ?? [])]) expect(isDefault(path, value), `${path} at ${value}`).toBe(false);
     }
     expect(changedPaths(defaultParams())).toEqual([]);
-    // One change at a time: the one changed, and nothing else.
-    for (const { path, def } of entries) {
+    // One change at a time: the one changed, and nothing else. The type, and the settings the one-piece cover
+    // hides, are MT's, below.
+    for (const { path, def } of entries.filter(({ path }) => path !== 'mold.type' && MOLD_TYPES['one-piece'].applies(path as ParamPath))) {
       const params = defaultParams();
       const value = def.kind === 'flag' ? !def.default : def.kind === 'choice' ? def.options.find((o) => o !== def.default) : def.kind === 'auto' ? sliderRange(path as ParamPath, def)[1] : def.default + stepOf(path as ParamPath, def) <= (def.max ?? Infinity) ? def.default + stepOf(path as ParamPath, def) : def.default - stepOf(path as ParamPath, def);
       setParamValue(params, path as ParamPath, value);
@@ -221,7 +237,7 @@ describe('the marks on changed settings (CS)', () => {
       return value === resolveAuto(defaultParams(), BOUNDS100).pocketDepth;
     };
     expect(resolved(typed, 'base.pocketDepth')).toBe(true);
-    expect(resolved(typed, 'base.pocketDepth')).not.toBe(isDefault(paramDef('base.pocketDepth'), typed.base.pocketDepth));
+    expect(resolved(typed, 'base.pocketDepth')).not.toBe(isDefault('base.pocketDepth', typed.base.pocketDepth));
     // The layer itself is judged by its own default, so a layer of 0.3 is changed, and the pocket that follows it is not.
     const layer = defaultParams();
     layer.print.layerHeight = 0.3;
@@ -229,3 +245,78 @@ describe('the marks on changed settings (CS)', () => {
   });
 });
 
+
+const INPUTS: StageInputs = { file: 'f1', import: 'plain', plane: JSON.stringify(DEFAULT_PLANE), tier: 'preview', cellScale: 1, pins: [], removed: [], drag: null, outside: '' };
+
+describe('MT: the marks, Reset and the keys by mold type', () => {
+  it('a setting is at its default by the type the params are for: the two-part cover\'s base layer of 0 is, and automatic is changed, and the reverse in the one-piece', () => {
+    const one = defaultParams(), two = defaultParams('clamshell');
+    expect(two.mold.type).toBe('clamshell');
+    expect(two.silicone.baseLayer).toBe(0);
+    expect(one.silicone.baseLayer).toBeNull();
+    expect(defaultOf('silicone.baseLayer', 'clamshell')).toBe(0);
+    expect(defaultOf('silicone.baseLayer', 'one-piece')).toBeNull();
+    expect(isDefaultAt('silicone.baseLayer', two)).toBe(true);
+    expect(changedPaths(two)).toEqual([]);
+    two.silicone.baseLayer = null;
+    expect(isDefaultAt('silicone.baseLayer', two)).toBe(false);
+    expect(changedPaths(two)).toEqual(['silicone.baseLayer']);
+    one.silicone.baseLayer = 0;
+    expect(changedPaths(one)).toEqual(['silicone.baseLayer']);
+    // Every other setting's default is the base's in both types.
+    for (const path of PARAM_PATHS.filter((p) => p !== 'mold.type' && p !== 'silicone.baseLayer')) expect(defaultOf(path, 'clamshell'), path).toBe(defaultOf(path, 'one-piece'));
+  });
+
+  it('the type itself is never changed, so Reset keeps it; settings the type hides or holds are not counted, and keep their values', () => {
+    const two = defaultParams('clamshell');
+    expect(isDefaultAt('mold.type', two)).toBe(true);
+    // A hidden grid of 2 and pry notches the type holds off: the user's own values, kept for switching back.
+    two.grid.nx = 2;
+    two.joint.pryNotches = false;
+    two.bolts.enabled = true;
+    expect(changedPaths(two)).toEqual([]);
+    // In the one-piece cover the two-part settings are hidden, and a changed one is not counted either.
+    const one = defaultParams();
+    one.clamshell.ceilingDeg = 30;
+    one.clips.rows = 3;
+    expect(changedPaths(one)).toEqual([]);
+    // Negative control: the same values in the type that shows them are counted.
+    one.mold.type = 'clamshell';
+    expect(changedPaths(one)).toEqual(['silicone.baseLayer', 'clamshell.ceilingDeg', 'clips.rows']);
+    // What a Reset sets, every changed setting to the type's default, leaves the type as it is.
+    for (const path of changedPaths(one)) setParamValue(one, path, defaultOf(path, 'clamshell'));
+    expect(one.mold.type).toBe('clamshell');
+    expect(changedPaths(one)).toEqual([]);
+  });
+
+  it('a slider steps the same in every type, as the steps and ranges are the base\'s', () => {
+    for (const id of MOLD_TYPE_IDS) {
+      const params = defaultParams(id);
+      for (const { path, def } of entries) {
+        if (def.kind !== 'number' && def.kind !== 'auto') continue;
+        expect(stepOf(path as ParamPath, paramDef(path as ParamPath)), `${id} ${path}`).toBe(stepOf(path as ParamPath, def));
+        expect(sliderRange(path as ParamPath, paramDef(path as ParamPath)), `${id} ${path}`).toEqual(sliderRange(path as ParamPath, def));
+      }
+      expect(params.mold.type).toBe(id);
+    }
+  });
+
+  it('a hidden grid of 2 in the two-part cover makes one tile and changes no stage key, and the one-piece cover reads its params as they are', () => {
+    const two = defaultParams('clamshell');
+    const hidden = structuredClone(two);
+    hidden.grid.nx = 2;
+    hidden.grid.ny = 3;
+    const run = effectiveParams(hidden);
+    expect([run.grid.nx, run.grid.ny]).toEqual([1, 1]);
+    expect(hidden.grid.nx).toBe(2);
+    expect(stageKeys(effectiveParams(hidden), INPUTS)).toEqual(stageKeys(effectiveParams(two), INPUTS));
+    // Negative control: read as they are, the hidden grid would change the keys.
+    expect(stageKeys(hidden, INPUTS).S3).not.toBe(stageKeys(two, INPUTS).S3);
+    // The locks: one model, no corner bolts, no pry notches.
+    expect([run.bolts.enabled, run.joint.pryNotches]).toEqual([false, false]);
+    // The one-piece cover has no lock, so its params are the very object, and nothing it builds can differ.
+    const one = defaultParams();
+    one.grid.nx = 2;
+    expect(effectiveParams(one)).toBe(one);
+  });
+});

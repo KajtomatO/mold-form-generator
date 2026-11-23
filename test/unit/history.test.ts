@@ -11,6 +11,7 @@ import { SECTION_PARAMS } from '../../src/ui/layout';
 import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES, skipWithout } from '../fixtures/loadExamples';
+import { disableMoldType, enableMoldType } from '../../src/core/mold/types';
 
 /** A project that differs from the defaults only in t, so steps can be told apart. */
 function project(t: number): Project {
@@ -539,5 +540,99 @@ describe('undo and redo on the store, with the real pipeline on jersey', () => {
     expect(JSON.stringify(p.project())).toBe(after.project);
     await p.idle();
     expect(p.geometryHash().all).toBe(after.hash);
+  });
+});
+
+describe('MT: switching the mold type on the store', () => {
+  const pipelines: Pipeline[] = [];
+  afterEach(() => {
+    pipelines.splice(0).forEach((p) => p.dispose());
+    disableMoldType('clamshell');
+  });
+  const store = (): Store => {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    enableMoldType('clamshell');
+    let now = 0;
+    // Each change a second apart, so none joins the one before.
+    return new Store(p, () => (now += 1000));
+  };
+
+  it('with nothing changed the switch is made at once, as one step, which Undo takes back with the type and the values, and Redo puts back', () => {
+    const s = store();
+    s.requestSwitch('clamshell');
+    expect(s.switching.value).toBeNull();
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    expect(s.pipeline.params.silicone.baseLayer).toBe(0);
+    expect(s.history.depth).toEqual({ undo: 1, redo: 0 });
+    expect(s.history.undoLabel).toBe('switching to Two-part cover');
+    s.undo();
+    expect(s.pipeline.params).toEqual(defaultParams());
+    expect(s.history.redoLabel).toBe('switching to Two-part cover');
+    s.redo();
+    expect(s.pipeline.params).toEqual(defaultParams('clamshell'));
+    // The type on screen again, or one that cannot be chosen, does nothing.
+    s.requestSwitch('clamshell');
+    s.requestSwitch('box');
+    expect(s.history.depth.undo).toBe(1);
+  });
+
+  it('a changed setting opens the window; Cancel records nothing; Transfer and Discard are one step each, which Undo takes back whole', () => {
+    const s = store();
+    s.setParam('silicone.t', 4);
+    s.setParam('cover.wall', 4);
+    const before = structuredClone(s.pipeline.params);
+    s.requestSwitch('clamshell');
+    expect(s.switching.value!.rows.map((row) => row.path)).toEqual(['silicone.t', 'cover.wall']);
+    // Nothing is switched while it asks, and the switch cannot be asked again meanwhile.
+    expect(s.pipeline.params).toEqual(before);
+    s.answerSwitch('cancel');
+    expect(s.switching.value).toBeNull();
+    expect(s.pipeline.params).toEqual(before);
+    expect(s.history.depth).toEqual({ undo: 2, redo: 0 });
+    expect(s.history.undoLabel).toBe('the change to Wall');
+    // Transfer with Wall alone ticked: t takes the new default, the wall stays.
+    s.requestSwitch('clamshell');
+    s.answerSwitch('transfer', ['cover.wall']);
+    expect([s.pipeline.params.mold.type, s.pipeline.params.silicone.t, s.pipeline.params.cover.wall]).toEqual(['clamshell', 3, 4]);
+    expect(s.history.depth).toEqual({ undo: 3, redo: 0 });
+    expect(s.history.undoLabel).toBe('switching to Two-part cover');
+    s.undo();
+    expect(s.pipeline.params).toEqual(before);
+    // Discard: every listed setting at the new default.
+    s.requestSwitch('clamshell');
+    s.answerSwitch('discard');
+    expect(s.pipeline.params).toEqual(defaultParams('clamshell'));
+    expect(s.history.redoLabel).toBeNull();
+    s.undo();
+    expect(s.pipeline.params).toEqual(before);
+    expect(s.history.redoLabel).toBe('switching to Two-part cover');
+    // An answer with no question asked does nothing.
+    s.answerSwitch('discard');
+    expect(s.pipeline.params).toEqual(before);
+  });
+
+  it('Reset sets the type\'s defaults and keeps the type; a model or project opened while the window is open cancels it, and the switch waits while the replace prompt is open', () => {
+    const s = store();
+    s.requestSwitch('clamshell');
+    s.setParam('silicone.baseLayer', null);
+    s.setParam('silicone.t', 5);
+    s.resetAll();
+    expect(s.pipeline.params).toEqual(defaultParams('clamshell'));
+    expect(s.history.undoLabel).toBe('resetting every setting');
+    // A row's reset goes to the type's default too: the base layer to 0, not to automatic.
+    s.setParam('silicone.baseLayer', 2);
+    s.resetParam('silicone.baseLayer');
+    expect(s.pipeline.params.silicone.baseLayer).toBe(0);
+    s.setParam('silicone.t', 5);
+    s.requestSwitch('one-piece');
+    expect(s.switching.value).not.toBeNull();
+    s.load(exampleBytes('jersey'), EXAMPLE_FILES.jersey);
+    expect(s.switching.value).toBeNull();
+    // The replace prompt stands while it waits for an answer: the switch asks nothing then.
+    s.replacing.value = { name: 'other.stl', model: EXAMPLE_FILES.jersey };
+    s.requestSwitch('one-piece');
+    expect(s.switching.value).toBeNull();
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
   });
 });

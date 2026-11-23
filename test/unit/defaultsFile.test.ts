@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { ConfigEnv } from 'vite';
-import { checkDefaultsFile, DEFAULTS_FILE } from '../../vite.config';
-import { checkDefaults, checkDefaultsText, givenTwice, jsonProblem } from '../../src/app/defaultsCheck';
+import { checkDefaultsFile, DEFAULTS_FILE, overrideFiles } from '../../vite.config';
+import { checkDefaults, checkDefaultsText, checkOverrides, checkOverridesText, givenTwice, jsonProblem } from '../../src/app/defaultsCheck';
 import { defaultParams } from '../../src/core/params/defaults';
+import { crossParameterErrors } from '../../src/core/params/rules';
+import { MOLD_TYPE_IDS } from '../../src/core/mold/types';
 import { PARAM_SCHEMA, type ParamDef } from '../../src/core/params/schema';
 
 /**
@@ -40,9 +42,11 @@ describe('the defaults file', () => {
   it('is where the schema takes every default from: a value changed in it changes that default, and no label, range or order', async () => {
     // Every value changed at once, so a row that writes its default itself, even one equal to the file's, is found:
     // a number one more, a flag turned over, another option, and for an automatic setting a number it never holds.
+    // MT: but the type, as a page opens as the one-piece cover, which the check holds the file to (below).
     const changed = fresh();
     for (const [group, defs] of GROUPS) {
       for (const [key, def] of Object.entries(defs)) {
+        if (group === 'mold') continue;
         changed[group][key] = def.kind === 'flag' ? !def.default : def.kind === 'choice' ? def.options.find((option) => option !== def.default) : def.kind === 'auto' ? 0.123 : def.default + 1;
       }
     }
@@ -81,8 +85,8 @@ describe('the defaults file', () => {
         return f;
       })(), ['The group reports is missing, with its 2 settings: Smallest reported volume (reports.minVolumeMl), Smallest air pocket depth (reports.undersidePersistence).']],
       ['a group that is null', { ...fresh(), grid: null }, ['grid must be an object of settings, not null.']],
-      ['a list', [], ['The file must hold one object, with a group of settings for each of base, silicone, cover, joint, bolts, pour, vents, seat, funnel, grid, print, quality, reports, not a list.']],
-      ['null', null, ['The file must hold one object, with a group of settings for each of base, silicone, cover, joint, bolts, pour, vents, seat, funnel, grid, print, quality, reports, not null.']],
+      ['a list', [], ['The file must hold one object, with a group of settings for each of mold, base, silicone, cover, joint, bolts, pour, vents, seat, funnel, grid, print, quality, reports, clamshell, clips, not a list.']],
+      ['null', null, ['The file must hold one object, with a group of settings for each of mold, base, silicone, cover, joint, bolts, pour, vents, seat, funnel, grid, print, quality, reports, clamshell, clips, not null.']],
     ];
     for (const [name, file, expected] of cases) {
       vi.resetModules();
@@ -147,10 +151,10 @@ describe('the check of the defaults file', () => {
   });
 
   it('says when the file is no object, no JSON at all, or gives a setting twice', () => {
-    expect(checkDefaults([])).toEqual(['The file must hold one object, with a group of settings for each of base, silicone, cover, joint, bolts, pour, vents, seat, funnel, grid, print, quality, reports, not a list.']);
+    expect(checkDefaults([])).toEqual(['The file must hold one object, with a group of settings for each of mold, base, silicone, cover, joint, bolts, pour, vents, seat, funnel, grid, print, quality, reports, clamshell, clips, not a list.']);
     // JSON has no comments and no comma after a group's last value, which a maker used to code may write.
     const comment = TEXT.replace('"thickness": 4,', '"thickness": 4, // was 3');
-    expect(checkDefaultsText(comment)).toEqual([expect.stringMatching(/^The file is not valid JSON: .*\(line 4 column \d+\)\. JSON takes no comments, and no comma after a group's last value\.$/)]);
+    expect(checkDefaultsText(comment)).toEqual([expect.stringMatching(/^The file is not valid JSON: .*\(line 7 column \d+\)\. JSON takes no comments, and no comma after a group's last value\.$/)]);
     const comma = TEXT.replace('"bedReliefRun": 0.3', '"bedReliefRun": 0.3,');
     expect(checkDefaultsText(comma)).toEqual([jsonProblem(comma)]);
     expect(jsonProblem(TEXT)).toBeNull();
@@ -219,5 +223,103 @@ describe('the check of the defaults file', () => {
         vi.resetModules();
       }
     });
+  });
+});
+
+/**
+ * MT: each mold type's defaults that differ, in src/core/params/defaults.<type>.json (docs/PLAN.md, MT and G13.14):
+ * only what differs, checked by the build as defaults.json is.
+ */
+const OVERRIDES_TEXT = readFileSync(join(root, 'src', 'core', 'params', 'defaults.clamshell.json'), 'utf8');
+const overrides = (): Record<string, Record<string, unknown>> => JSON.parse(OVERRIDES_TEXT);
+
+describe('MT: the types\' defaults files', () => {
+  it('are one per type but the one-piece cover, whose defaults are defaults.json, and the two-part cover\'s holds only its base layer of 0, which the check passes', () => {
+    expect(overrideFiles().map((path) => path.split('/').pop())).toEqual(MOLD_TYPE_IDS.filter((id) => id !== 'one-piece').map((id) => `defaults.${id}.json`));
+    expect(overrides()).toEqual({ silicone: { baseLayer: 0 } });
+    expect(checkOverridesText('clamshell', OVERRIDES_TEXT)).toEqual([]);
+    expect(OVERRIDES_TEXT).toBe(`${JSON.stringify(overrides(), null, 2)}\n`);
+  });
+
+  it('each merged set passes every setting\'s check and the rules between settings, under its type', () => {
+    for (const id of MOLD_TYPE_IDS) {
+      const merged = defaultParams(id);
+      expect(merged.mold.type, id).toBe(id);
+      expect(checkDefaults(merged, { overrides: true }), id).toEqual([]);
+      expect(crossParameterErrors(merged), id).toEqual([]);
+    }
+  });
+
+  it('a number on an automatic setting is taken in a type\'s file and a merged set, and still refused in defaults.json', () => {
+    const merged = defaultParams('clamshell');
+    expect(merged.silicone.baseLayer).toBe(0);
+    expect(checkDefaults(merged, { overrides: true })).toEqual([]);
+    const base = fresh();
+    base.silicone.baseLayer = 0;
+    expect(checkDefaults(base)).toEqual(['Base layer (silicone.baseLayer) must be null, not 0: it is automatic (the silicone thickness), and null keeps it following that rule, which stays in the code.']);
+    // A merged set still holds a number to its range.
+    const far = defaultParams('clamshell');
+    far.silicone.baseLayer = 25;
+    expect(checkDefaults(far, { overrides: true })).toEqual(['Base layer (silicone.baseLayer) is 25 mm, but must be from 0 to 20 mm.']);
+  });
+
+  it('defaults.json opens the page as the one-piece cover: another type there is refused', () => {
+    const file = fresh();
+    file.mold.type = 'clamshell';
+    expect(checkDefaults(file)).toEqual(['Mold type (mold.type) must be "one-piece", not "clamshell": a page opens with that type, and each other type\'s defaults are in its own defaults.<type>.json.']);
+    file.mold.type = 'box';
+    expect(checkDefaults(file)).toEqual(['Mold type (mold.type) must be "one-piece" or "clamshell", not "box".']);
+  });
+
+  /** Each of the overrides' rules once, made on the real file, with what the check says; the real file is each one's negative control. */
+  const OVERRIDE_MISTAKES: [string, (file: Record<string, Record<string, unknown>>) => void, string[]][] = [
+    ['an unknown setting', (f) => (f.silicone.baseLayr = 0), ['silicone.baseLayr is not a setting: did you mean Base layer (silicone.baseLayer)?']],
+    ['a setting of no group', (f) => (f.silicone.colour = 'red'), ['silicone.colour is not a setting of silicone, so take it out.']],
+    ['an unknown group', (f) => (f.silicon = { t: 4 }), ['silicon is not a group of settings: did you mean silicone?']],
+    ['a group that is no object', (f) => ((f as Record<string, unknown>).cover = 3), ['cover must be an object of settings, not 3.']],
+    ['the type itself', (f) => (f.mold = { type: 'clamshell' }), ['Mold type (mold.type) is not a default a type can change, so take it out.']],
+    ['an automatic setting given null', (f) => (f.silicone.baseLayer = null), ['Base layer (silicone.baseLayer) must be a number from 0 to 20 mm, not null: it is automatic in defaults.json, and a type gives it a number of its own.']],
+    ['an automatic setting given text', (f) => (f.silicone.baseLayer = 'none'), ['Base layer (silicone.baseLayer) must be a number from 0 to 20 mm, not "none": it is automatic in defaults.json, and a type gives it a number of its own.']],
+    ['an automatic setting out of its range', (f) => (f.silicone.baseLayer = 21), ['Base layer (silicone.baseLayer) is 21 mm, but must be from 0 to 20 mm.']],
+    ['an automatic list setting off its list', (f) => (f.bolts = { length: 11 }), ['Bolt length (bolts.length) is 11 mm, but must be one of 6, 8, 10, 12, 16, 20, 25, 30, 35 or 40 mm.']],
+    ['a value of the wrong kind', (f) => (f.cover = { wall: 'thick' }), ['Wall (cover.wall) must be a number at least 0.4 mm, not "thick".']],
+    ['a value out of range', (f) => (f.cover = { topCap: 2 }), ['Top cap (cover.topCap) is 2 mm, but must be from 3 to 30 mm.']],
+    ['a value equal to defaults.json\'s', (f) => (f.cover = { wall: 3 }), ['Wall (cover.wall) is 3 mm, as in defaults.json: a type\'s file holds only the defaults that differ, so take it out.']],
+    ['a choice equal to defaults.json\'s', (f) => (f.clamshell = { fastener: 'bolts' }), ['Seam fasteners (clamshell.fastener) is "bolts", as in defaults.json: a type\'s file holds only the defaults that differ, so take it out.']],
+    // The two-part cover's own rule, which holds only under its type: a seam land wider than the joint's.
+    ['a merged set that breaks a rule of its type', (f) => (f.clamshell = { seamLand: 3 }), ['Seam land (clamshell.seamLand) breaks a rule between settings: A seam land of 3 mm is wider than the joint\'s inner land of 2 mm: use a seam land of at most 2 mm, or a wider inner land.', 'Top cap (cover.topCap) breaks a rule between settings: A top cap of 5 mm is under the 5.9 mm the seam needs: its land, the ridge, the groove\'s play on each side and 0.8 mm of plastic over them. Use a top cap of at least 5.9 mm, or a narrower seam land.']],
+    ['a merged set that breaks a shared rule', (f) => (f.seat = { depth: 5 }), ['Seat depth (seat.depth) breaks a rule between settings: A seat 5 mm deep leaves under 1 mm of plastic in a top cap of 5 mm: use a seat of at most 4 mm, or a thicker cap.']],
+  ];
+
+  it.each(OVERRIDE_MISTAKES)('refuses %s, by the setting\'s label and path', (_, mistake, expected) => {
+    const file = overrides();
+    mistake(file);
+    expect(checkOverrides('clamshell', file)).toEqual(expected);
+    expect(checkOverridesText('clamshell', JSON.stringify(file, null, 2))).toEqual(expected);
+  });
+
+  it('refuses a file for no type, for the one-piece cover, no object, no JSON, or a setting given twice', () => {
+    expect(checkOverrides('box', overrides())).toEqual(['There is no mold type "box": name the file after one of "clamshell", or take it out.']);
+    expect(checkOverrides('one-piece', overrides())).toEqual(['The one-piece type\'s defaults are defaults.json itself, so take this file out.']);
+    expect(checkOverrides('clamshell', [])).toEqual(['The file must hold one object, with a group for each setting whose default differs in this type, not a list.']);
+    expect(checkOverridesText('clamshell', '{ "silicone": { "baseLayer": 0, } }')).toEqual([jsonProblem('{ "silicone": { "baseLayer": 0, } }')]);
+    expect(checkOverridesText('clamshell', '{ "silicone": { "baseLayer": 0, "baseLayer": 1 } }')).toEqual(['silicone.baseLayer is given twice: give it once, as only the last would count.']);
+    // Negative control: the same file once each is right, with a byte-order mark too.
+    expect(checkOverridesText('clamshell', '\uFEFF{ "silicone": { "baseLayer": 1 } }')).toEqual([]);
+  });
+
+  it('the build stops on a type\'s file with its problems, once defaults.json is right, and goes on with the real one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cfg-overrides-'));
+    try {
+      const base = join(dir, 'defaults.json');
+      writeFileSync(base, TEXT);
+      const bad = join(dir, 'defaults.clamshell.json');
+      writeFileSync(bad, JSON.stringify({ silicone: { baseLayer: null } }));
+      const hook = (files: string[]) => (checkDefaultsFile(base, files).config as unknown as (config: object, env: ConfigEnv) => Promise<void>)({}, { command: 'build', mode: 'production', isPreview: false });
+      await expect(hook([bad])).rejects.toThrow('src/core/params/defaults.clamshell.json has a mistake, so nothing was built:\n  - Base layer (silicone.baseLayer) must be a number from 0 to 20 mm, not null: it is automatic in defaults.json, and a type gives it a number of its own.\n');
+      await expect(hook(overrideFiles())).resolves.toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

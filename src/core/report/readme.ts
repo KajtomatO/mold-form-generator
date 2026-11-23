@@ -1,6 +1,9 @@
 import { RISING_LEVEL_NOTE } from '../analysis/air';
 import { demoldSteps, hintWords, placeWords, VERDICT_MEANING, VERDICT_WORDS, type GeometryReports } from '../analysis/reports';
 import { GROUP_TITLES, PARAM_SCHEMA, type ParamDef, type Params } from '../params/schema';
+import { moldTypeOf, type MoldTypeId } from '../mold/types';
+import { defaultOf } from '../params/defaults';
+import type { ParamPath } from '../../app/stages';
 import type { BoltLayout } from '../parts/bolts';
 import { SEAL_SPACING_MM, type BoltAdvice, type ClampAdvice, type CoverLift } from './clamp';
 import type { Diagnostic } from './diagnostics';
@@ -13,6 +16,8 @@ export interface ReadmeInput {
   version: string;
   /** The STL the mold was made from, which may be any name at all. */
   model: string;
+  /** MT: the mold type's name, as its tile gives it, which README.txt names at its top. */
+  moldType: string;
   params: Params;
   /** What each auto setting left to its rule came to in this export, by its path, such as base.pocketDepth. */
   resolved: Record<string, number>;
@@ -149,6 +154,7 @@ export function exportReadme(input: ReadmeInput): string {
 
   const title = wrap(`${input.model.replace(/\.stl$/i, '')}: silicone casting mold`);
   out.push(...title, '='.repeat(Math.max(...title.map((line) => line.length))));
+  para(`Mold type: ${input.moldType}.`);
   const copies = input.tiles;
   para(`Made by ${input.app} ${input.version} from ${input.model}. This ZIP holds a two-part plastic mold box, a base and a cover. You print both, join them, and pour silicone into the space between your model and the cover. The cured silicone is your casting mold.`);
   const credit = input.credit;
@@ -391,16 +397,25 @@ export function exportReadme(input: ReadmeInput): string {
   }
 
   out.push(...heading('Estimates'));
-  // CS: "the default" is the schema's, from defaults.json, so a tuned default is still the one named.
-  out.push(...wrap(`The ${mm(t, 2)} silicone thickness${t === PARAM_SCHEMA.silicone.t.default ? ', which is the default,' : ''} and the way the silicone fills the mold from the top are estimates. No published source shows that 3 mm holds up in use, and only a test pour shows how your silicone flows and where air stays. Make a test pour before you rely on this mold.`));
+  // CS: "the default" is the schema's, from defaults.json, so a tuned default is still the one named; MT: the type's.
+  out.push(...wrap(`The ${mm(t, 2)} silicone thickness${t === defaultOf('silicone.t', moldTypeOf(params).id as MoldTypeId) ? ', which is the default,' : ''} and the way the silicone fills the mold from the top are estimates. No published source shows that 3 mm holds up in use, and only a test pour shows how your silicone flows and where air stays. Make a test pour before you rely on this mold.`));
 
   out.push(...heading('Settings'));
-  out.push(...wrap('Every setting this mold was made with, by the names the app gives them. project.json holds the same.'));
+  // MT: the type is named at the top, and a setting the type does not use is left out, as the sidebar hides it. One
+  // the type holds is listed at the type's value, which the mold was made with, and marked; project.json keeps the
+  // user's own value there, for switching back, so the line says so only for a type with locks.
+  const type = moldTypeOf(params);
+  const held = (path: string): boolean => type.locked.some((lock) => lock.path === path);
+  out.push(...wrap(type.locked.length === 0
+    ? 'Every setting this mold was made with, by the names the app gives them. project.json holds the same.'
+    : 'Every setting this mold was made with, by the names the app gives them. project.json holds the same, but for the settings marked "held by the mold type": the mold type sets those, and project.json keeps the values you set, for when you switch to another type.'));
   for (const [group, defs] of Object.entries(PARAM_SCHEMA) as [string, Record<string, ParamDef>][]) {
+    const used = Object.keys(defs).filter((key) => group !== 'mold' && type.applies(`${group}.${key}` as ParamPath));
+    if (used.length === 0) continue;
     out.push('', GROUP_TITLES[group]);
-    for (const [key, def] of Object.entries(defs)) {
+    for (const [key, def] of Object.entries(defs).filter(([key]) => used.includes(key))) {
       const path = `${group}.${key}`;
-      item(`${def.label}: ${settingText(path, def, (params as unknown as Record<string, Record<string, unknown>>)[group][key], input.resolved[path])}`);
+      item(`${def.label}: ${settingText(path, def, (params as unknown as Record<string, Record<string, unknown>>)[group][key], input.resolved[path])}${held(path) ? ', held by the mold type' : ''}`);
     }
   }
   out.push('');

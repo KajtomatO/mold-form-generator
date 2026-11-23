@@ -8,6 +8,7 @@ import { findStoredPlane, PLANE_MATCH_MM, planeGap, planeOf, type StoredPlane } 
 import type { SolidReport } from '../core/mesh/shells';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
+import { effectiveParams } from '../core/mold/types';
 import { crossParameterErrors } from '../core/params/rules';
 import { MANIFOLD_TRIANGLE_LIMIT } from '../core/mesh/simplify';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
@@ -253,7 +254,17 @@ const plain = ({ code, severity, message }: Diagnostic): Diagnostic => ({ code, 
  * a newer request is already waiting, and anything else is dropped.
  */
 export class Pipeline {
+  /** The user's settings, which the project, undo and project files keep. */
   params: Params = defaultParams();
+
+  /**
+   * MT: the settings every stage key, check, export and report reads: the user's with the mold type's locks applied
+   * (effectiveParams), so a value the type holds, such as a hidden grid of 2, builds nothing. The one-piece cover has
+   * no lock, and this is `params` itself.
+   */
+  get run(): Params {
+    return effectiveParams(this.params);
+  }
   readonly budgets: Budgets;
   readonly log: LogEntry[] = [];
   readonly events: PipelineEvent[] = [];
@@ -497,7 +508,7 @@ export class Pipeline {
       return null;
     }
     const others = shown.placement.openings.filter((o) => o.id !== id);
-    const result = dropOpening(shown.space, { kind: opening.kind, x, y }, others, firstPourPeak(shown.placement, id, this.params.silicone.t / 2));
+    const result = dropOpening(shown.space, { kind: opening.kind, x, y }, others, firstPourPeak(shown.placement, id, this.run.silicone.t / 2));
     this.pins = [...this.pins.filter((pin) => pin.id !== id), { id, kind: opening.kind, x: result.x, y: result.y }];
     this.changed();
     return result;
@@ -564,7 +575,7 @@ export class Pipeline {
    */
   modelErrorMm(): number {
     const origin = this.file?.origin;
-    return (origin?.record?.errorMm ?? 0) + (origin?.repair && this.params.base.mode === 'glue' ? origin.repair.record.nearMm : 0);
+    return (origin?.record?.errorMm ?? 0) + (origin?.repair && this.run.base.mode === 'glue' ? origin.repair.record.nearMm : 0);
   }
 
   /**
@@ -573,7 +584,7 @@ export class Pipeline {
    */
   outsideTier(): '' | 'glue' {
     const repair = this.file?.origin?.repair;
-    return repair && this.params.base.mode === 'glue' && (repair.record.nearMm > 0 || repair.outside !== null) ? 'glue' : '';
+    return repair && this.run.base.mode === 'glue' && (repair.record.nearMm > 0 || repair.outside !== null) ? 'glue' : '';
   }
 
   /** RM: the file's parts the repaired copy on screen left out, in its coordinates, while glue mode holds them; else null. */
@@ -598,7 +609,7 @@ export class Pipeline {
     if (!repair) return oriented.diagnostics;
     const { vertexCount, depth } = oriented.oriented.below;
     const below = `${vertexCount} vertices of the repaired copy lie up to ${depth.toFixed(2)} mm below this plane`;
-    const message = this.params.base.mode === 'merged'
+    const message = this.run.base.mode === 'merged'
       ? `${below} and will be trimmed off the copy the base carries.`
       : `${below}, so the mold is made for the copy trimmed there; model_oriented.stl, your own file, is trimmed only where it reaches below the plane too.`;
     return oriented.diagnostics.map((d) => (d.code === 'below-plane' ? { ...d, message } : d));
@@ -612,7 +623,7 @@ export class Pipeline {
     const levels = this.footprint?.value.levels;
     if (!levels?.useUpper) return null;
     const record = this.file?.origin?.repair?.record;
-    const facets = record?.method === 'rebuilt' && this.params.base.mode === 'glue' && levels.useUpper.gap <= (record.cell ?? 0);
+    const facets = record?.method === 'rebuilt' && this.run.base.mode === 'glue' && levels.useUpper.gap <= (record.cell ?? 0);
     return facets ? null : levels.useUpper;
   }
 
@@ -631,7 +642,7 @@ export class Pipeline {
    */
   private fileCut(): boolean {
     const oriented = this.oriented?.value, repair = this.file?.origin?.repair;
-    if (!oriented || !repair || this.params.base.mode === 'merged') return false;
+    if (!oriented || !repair || this.run.base.mode === 'merged') return false;
     if (repair.record.method === 'filled') return oriented.oriented.needsTrim;
     const far = repair.outside;
     if (!far) return false;
@@ -744,7 +755,7 @@ export class Pipeline {
 
   /** The keys of what the screen should show now. */
   keys(): Record<StageId, string> {
-    return stageKeys(this.params, this.inputs());
+    return stageKeys(this.run, this.inputs());
   }
 
   /**
@@ -968,8 +979,8 @@ export class Pipeline {
    * every setting for the fit test, which reads the joint through the real builders.
    */
   exportKeyFor(want: ExportRequest['want']): string {
-    if (want === 'funnel') return stageKeys(this.params, { ...this.inputs(), tier: 'export', cellScale: 1 }).S16;
-    if (want === 'fit-test') return hashString(JSON.stringify(this.params));
+    if (want === 'funnel') return stageKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 }).S16;
+    if (want === 'fit-test') return hashString(JSON.stringify(this.run));
     return this.exportKey();
   }
 
@@ -1003,7 +1014,7 @@ export class Pipeline {
    * input, and the openings it is given, which the preview placed on its own field.
    */
   private exportKey(): string {
-    const keys = stageKeys(this.params, { ...this.inputs(), tier: 'export', cellScale: 1 });
+    const keys = stageKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 });
     const openings = this.placement?.value.placement.openings.map(({ kind, x, y }) => [kind, x, y]) ?? [];
     return hashString(JSON.stringify([keys.S13, keys.S15, keys.S16, openings]));
   }
@@ -1024,11 +1035,11 @@ export class Pipeline {
       ...this.levelNotes(),
       ...this.wallDiagnostics(),
       ...(this.placement?.value.placement.diagnostics ?? []),
-      ...siliconeAdvice(this.params, this.field?.value.rim ?? null),
+      ...siliconeAdvice(this.run, this.field?.value.rim ?? null),
     ];
     const origin = this.file!.origin;
     // RM's review: in merged mode a cast that lacks parts of the file is a warning on screen, so README.txt has it too.
-    const repaired = origin?.repair ? repairedMessage(origin.from.name, origin.repair.record, this.params.base.mode === 'merged') : null;
+    const repaired = origin?.repair ? repairedMessage(origin.from.name, origin.repair.record, this.run.base.mode === 'merged') : null;
     if (repaired?.severity === 'warning') notes.push({ code: 'model-repaired', ...repaired });
     return {
       model: this.file!.name,
@@ -1078,7 +1089,7 @@ export class Pipeline {
               : {}),
           }
         : null;
-    const params = this.params;
+    const params = this.run;
     const meta = mold ? this.exportMeta() : null;
     const file = this.file;
     const origin = file?.origin ?? null;
@@ -1192,7 +1203,7 @@ export class Pipeline {
   private target<T extends Target>(keys: Record<StageId, string>, extra: Omit<T, keyof Target> & Pick<GateTarget, 'builds'>, idParts: unknown[]): T {
     const repair = this.file?.origin?.repair ?? null;
     const source = { bytes: this.file?.bytes ?? null, importInput: this.importInput, parsed: this.parsed?.value ?? null, oriented: this.oriented?.value ?? null, modelErrorMm: this.modelErrorMm(), outside: repair?.outside ?? null, repairNearMm: repair ? repair.record.nearMm : 0 };
-    return { id: hashString(JSON.stringify(idParts)), rev: this.rev, modelKey: this.modelKey(), keys, params: this.params, inputs: this.inputs(), source, ...extra } as T;
+    return { id: hashString(JSON.stringify(idParts)), rev: this.rev, modelKey: this.modelKey(), keys, params: this.run, inputs: this.inputs(), source, ...extra } as T;
   }
 
   private requestField(keys: Record<StageId, string>): void {
@@ -1630,7 +1641,7 @@ export class Pipeline {
   }
 
   private collectDiagnostics(): void {
-    const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.params)];
+    const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.run)];
     if (this.parsed) all.push(...this.parsed.value.diagnostics);
     // A hole's Show marks the middle of its rim; the cavity's warning marks only the holes facing up.
     // RM: a fold's Show marks each place it folds through itself.
@@ -1639,9 +1650,9 @@ export class Pipeline {
     // MM2: the copy the mold is made from, and what model_oriented.stl is.
     const origin = this.file?.origin;
     const trimmed = this.oriented?.value.oriented.needsTrim ?? false;
-    if (origin?.record) all.push({ code: 'model-simplified', severity: 'info', message: simplifiedMessage({ from: origin.from, record: origin.record }, this.params.base.mode === 'merged', trimmed) });
+    if (origin?.record) all.push({ code: 'model-simplified', severity: 'info', message: simplifiedMessage({ from: origin.from, record: origin.record }, this.run.base.mode === 'merged', trimmed) });
     // RM: the repaired copy, marked where it closed a hole or left a part of the file out.
-    if (origin?.repair) all.push({ code: 'model-repaired', ...repairedMessage(origin.from.name, origin.repair.record, this.params.base.mode === 'merged', this.fileCut()), markers: this.fileMarkers(origin.repair.record.marks) });
+    if (origin?.repair) all.push({ code: 'model-repaired', ...repairedMessage(origin.from.name, origin.repair.record, this.run.base.mode === 'merged', this.fileCut()), markers: this.fileMarkers(origin.repair.record.marks) });
     if (this.displayProxy && this.parsed) {
       all.push({ code: 'display-proxy', severity: 'info', message: displayProxyMessage(this.displayProxy.indices.length / 3, this.parsed.value.triangles, origin !== null && origin !== undefined) });
     }
@@ -1735,7 +1746,7 @@ export class Pipeline {
 
   /** The export-tier key of the conditioned field, which is all the wall check reads. */
   private wallKey(): string {
-    return stageKeys(this.params, { ...this.inputs(), tier: 'export', cellScale: 1 }).S6;
+    return stageKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 }).S6;
   }
 
   private cancelWalls(): void {
@@ -1745,7 +1756,7 @@ export class Pipeline {
 
   /** Starts the check once nothing else runs or waits and what shows is current: it is the lowest priority there is. */
   private startWalls(): void {
-    const { nx, ny } = this.params.grid;
+    const { nx, ny } = this.run.grid;
     if (!this.options.checkWalls || !this.file || nx * ny < 2) return;
     const quiet = !this.fieldGate.busy && !this.solidGate.busy && this.debounce === null;
     const mesh = this.modelMesh(), oriented = this.oriented?.value;
@@ -1766,7 +1777,7 @@ export class Pipeline {
         this.walls = { key, value: data.result };
         keep(this.wallTimes, data.result.ms);
       } else if (data.t === 'error' && done()) {
-        this.walls = { key, value: { minWall: null, merged: false, requiredWall: 0, cell: this.params.quality.cellFinal, ms: 0, diagnostics: [{ code: 'wall-check-failed', severity: 'warning', message: `The walls between models could not be checked at the export cell: ${data.message}` }] } };
+        this.walls = { key, value: { minWall: null, merged: false, requiredWall: 0, cell: this.run.quality.cellFinal, ms: 0, diagnostics: [{ code: 'wall-check-failed', severity: 'warning', message: `The walls between models could not be checked at the export cell: ${data.message}` }] } };
       } else return;
       this.collectDiagnostics();
       this.notify();
@@ -1774,7 +1785,7 @@ export class Pipeline {
     worker.onerror = (event) => {
       event.preventDefault?.();
       if (!done()) return;
-      this.walls = { key, value: { minWall: null, merged: false, requiredWall: 0, cell: this.params.quality.cellFinal, ms: 0, diagnostics: [{ code: 'wall-check-failed', severity: 'warning', message: `The walls between models could not be checked at the export cell: ${event.message ?? 'the worker failed'}.` }] } };
+      this.walls = { key, value: { minWall: null, merged: false, requiredWall: 0, cell: this.run.quality.cellFinal, ms: 0, diagnostics: [{ code: 'wall-check-failed', severity: 'warning', message: `The walls between models could not be checked at the export cell: ${event.message ?? 'the worker failed'}.` }] } };
       this.collectDiagnostics();
       this.notify();
     };
@@ -1782,7 +1793,7 @@ export class Pipeline {
     // RM: in glue mode the export's field holds a rebuilt model's left-out parts too.
     const far = this.outsideHeld();
     const outside = far ? { positions: far.positions.slice(), indices: far.indices.slice() } : null;
-    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.params, inputs: { mesh: sent, transform: oriented.oriented.transform, modelErrorMm: this.modelErrorMm(), ...(outside ? { outside } : {}) } };
+    const message: WallsJobMessage = { t: 'walls', id: 1, params: this.run, inputs: { mesh: sent, transform: oriented.oriented.transform, modelErrorMm: this.modelErrorMm(), ...(outside ? { outside } : {}) } };
     worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer, ...(outside ? [outside.positions.buffer, outside.indices.buffer] : [])]);
   }
 }

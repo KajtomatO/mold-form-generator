@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { defineConfig, runnerImport, type Plugin, type UserConfig } from 'vite';
 
 const root = import.meta.dirname;
@@ -78,14 +78,29 @@ export function buildDefines(build: BuildConstants): Record<string, string> {
 /** CS: every setting's default, which a builder may tune (README.md, "Tuning the defaults"). */
 export const DEFAULTS_FILE = 'src/core/params/defaults.json';
 
+/** MT: each mold type's defaults that differ from DEFAULTS_FILE's, as src/core/params/defaults.<type>.json. */
+export const OVERRIDES_PATTERN = /^defaults\.([a-z][a-z0-9-]*)\.json$/;
+
+/** Every type's defaults file beside DEFAULTS_FILE, by path. */
+export function overrideFiles(dir = resolve(root, DEFAULTS_FILE, '..')): string[] {
+  return readdirSync(dir).filter((name) => OVERRIDES_PATTERN.test(name)).sort().map((name) => resolve(dir, name));
+}
+
+/** What the check of the defaults says of the files it was given: the base set's, then each type's by its id. */
+interface DefaultsCheckModule {
+  checkDefaultsText: (text: string) => string[];
+  checkOverridesText: (id: string, text: string) => string[];
+}
+
 /**
  * CS: checks DEFAULTS_FILE before anything is built or served, so a mistake in it stops scripts/serve.sh, the
  * GitHub Pages build (scripts/build-pages.sh) and the test servers with every problem printed, rather than a
  * page that breaks when it opens. A file that is no JSON is said here, as the check's own code reads the file
  * too and would not load; the rest is src/app/defaultsCheck.ts, which test/unit/defaultsFile.test.ts runs.
- * `file` is for that test.
+ * MT: then, once that file is right, each type's defaults file (`overrides`), which holds only what differs.
+ * `file` and `overrides` are for that test.
  */
-export function checkDefaultsFile(file = resolve(root, DEFAULTS_FILE)): Plugin {
+export function checkDefaultsFile(file = resolve(root, DEFAULTS_FILE), overrides: string[] = overrideFiles()): Plugin {
   return {
     name: 'cfg-check-defaults',
     // As the config is read, before any file is built or the dev server listens, and where Vite reports the
@@ -94,26 +109,42 @@ export function checkDefaultsFile(file = resolve(root, DEFAULTS_FILE)): Plugin {
       if (env.isPreview) return;
       // Without the byte-order mark an editor may save at its start, which Vite passes over too (defaultsCheck.ts's withoutBom).
       const text = readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
-      let problems: string[];
-      try {
-        JSON.parse(text);
-        problems = [];
-      } catch (error) {
-        // The same words as defaultsCheck.ts's jsonProblem, which the test holds them to.
-        problems = [`The file is not valid JSON: ${(error as Error).message}. JSON takes no comments, and no comma after a group's last value.`];
-      }
+      let problems = jsonProblems(text);
       if (problems.length === 0) {
-        const { module } = await runnerImport<{ checkDefaultsText: (text: string) => string[] }>(resolve(root, 'src/app/defaultsCheck.ts'));
+        const { module } = await runnerImport<DefaultsCheckModule>(resolve(root, 'src/app/defaultsCheck.ts'));
         problems = module.checkDefaultsText(text);
-        if (problems.length === 0) return;
+        if (problems.length === 0) {
+          for (const path of overrides) {
+            const id = OVERRIDES_PATTERN.exec(basename(path))![1];
+            const typed = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
+            const found = module.checkOverridesText(id, typed);
+            if (found.length > 0) stop(`src/core/params/${basename(path)}`, found);
+          }
+          return;
+        }
       }
-      const said = `${DEFAULTS_FILE} has ${problems.length === 1 ? 'a mistake' : `${problems.length} mistakes`}, so nothing was built:\n${problems.map((problem) => `  - ${problem}`).join('\n')}\nEach setting's range and options are in src/core/params/schema.ts; README.md, "Tuning the defaults", says more.`;
-      // Only the sentences: a stack would point into this file, where nothing is wrong.
-      const error = new Error(said);
-      error.stack = said;
-      throw error;
+      stop(DEFAULTS_FILE, problems);
     },
   };
+}
+
+/** The same words as defaultsCheck.ts's jsonProblem, which the test holds them to, for text that is no JSON. */
+function jsonProblems(text: string): string[] {
+  try {
+    JSON.parse(text);
+    return [];
+  } catch (error) {
+    return [`The file is not valid JSON: ${(error as Error).message}. JSON takes no comments, and no comma after a group's last value.`];
+  }
+}
+
+/** Stops the build with a file's problems, one line each. */
+function stop(file: string, problems: string[]): never {
+  const said = `${file} has ${problems.length === 1 ? 'a mistake' : `${problems.length} mistakes`}, so nothing was built:\n${problems.map((problem) => `  - ${problem}`).join('\n')}\nEach setting's range and options are in src/core/params/schema.ts; README.md, "Tuning the defaults", says more.`;
+  // Only the sentences: a stack would point into this file, where nothing is wrong.
+  const error = new Error(said);
+  error.stack = said;
+  throw error;
 }
 
 /** Beta pages stay out of search results, which should show the stable site only. */

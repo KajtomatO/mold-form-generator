@@ -22,6 +22,8 @@ import { meshBounds, weld, type WeldedMesh } from '../core/mesh/weld';
 import { resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
+import { moldTypeOf, type MoldTypeId } from '../core/mold/types';
+import { MOLD_TYPE_UI } from '../ui/mold/moldTypeUi';
 import { buildBaseBody, buildGlueBase, buildMergedBase, layerDiagnostics, orientedSolid, pocketOutline, triangleContour } from '../core/parts/base';
 import { boltCavityDiagnostics, boltCavityWallAnywhere, type BoltClearance } from '../core/parts/bolts';
 import { buildCoverBody, buildCoverFinal, toolDiagnostics } from '../core/parts/cover';
@@ -173,6 +175,8 @@ export interface ExportReport {
   app: string;
   appVersion: string;
   schemaVersion: number;
+  /** MT: the mold type, by its id, as project.json's params.mold.type has it. */
+  moldType: string;
   model: { file: string; format: 'binary' | 'ascii'; trianglesInFile: number; triangles: number; bodies: number; volumeMm3: number | null; simplified?: SimplifiedRecord; repaired?: ReportedRepair };
   params: Params;
   plane: { choice: PlaneChoice; normal: [number, number, number]; offset: number; areaMm2: number; planeTol: number };
@@ -592,6 +596,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         app: APP_NAME,
         version: BUILD.version,
         model: meta.model,
+        moldType: MOLD_TYPE_UI[moldTypeOf(scaled).id as MoldTypeId].name,
         params: scaled,
         // The margin is the one asked for: a raise of it has a line of its own.
         resolved: {
@@ -664,6 +669,7 @@ function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: 
     app: APP_NAME,
     appVersion: BUILD.version,
     schemaVersion: SCHEMA_VERSION,
+    moldType: params.mold.type,
     model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: m.imported.report.bodies, volumeMm3: m.modelVolume, ...(meta.simplified ? { simplified: meta.simplified.record } : {}), ...(meta.repaired ? { repaired: reportedRepair(meta.repaired.record) } : {}) },
     params,
     plane: { choice: meta.project.plane, normal: meta.plane.normal, offset: meta.plane.offset, areaMm2: meta.plane.area, planeTol: meta.plane.planeTol },

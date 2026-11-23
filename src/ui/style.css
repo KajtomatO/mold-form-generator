@@ -2027,3 +2027,224 @@ li + li > .candidate {
   color: var(--ink-2);
   text-align: center;
 }
+
+/* ----- MT: the mold type switch, pinned at the sidebar's top, and its window (D27) ----- */
+
+.mold-type {
+  flex: none;
+  padding: 12px var(--gutter) 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.sidebar.collapsed > .mold-type {
+  display: none;
+}
+
+.mold-type h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* More types wrap with no change: each tile is at least 96 px, and the tiles there are share the row. */
+.mold-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.mold-tile {
+  min-width: 0;
+  padding: 6px 6px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+}
+
+.mold-tile:hover:not([aria-disabled='true']) {
+  border-color: var(--accent);
+}
+
+.mold-tile[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* A type that cannot be chosen here: dashed and muted, as an off button is, and still focusable for its title. */
+.mold-tile[aria-disabled='true'] {
+  border-style: dashed;
+  color: var(--ink-2);
+  cursor: not-allowed;
+}
+
+.mold-tile .mold-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.mold-tile .name {
+  overflow-wrap: anywhere;
+}
+
+.mold-tile .why {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+/*
+ * Collapsed, the rail beside the hidden sidebar shows the type on screen, just under the tab that shows it again, so
+ * the two controls of the hidden sidebar sit together. Below the tab, not above it: the Diagnostics card with a
+ * warning stands in the view's top right corner and may reach down to 14 px above the middle.
+ */
+.mold-rail {
+  position: absolute;
+  top: calc(50% + 26px + 8px);
+  left: -40px;
+  z-index: 4;
+  width: 34px;
+  height: 34px;
+  padding: 4px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.mold-rail:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+.mold-rail svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Read by screen readers, not shown: the switch window's old defaults and an unavailable tile's reason. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A setting the type holds: off, with the reason under it in the notes' muted panel. */
+.row[data-locked] > label,
+.row[data-locked] > .label {
+  color: var(--ink-2);
+}
+
+.note.locked {
+  border-style: dashed;
+}
+
+.switch-dialog {
+  width: min(640px, calc(100vw - 2 * var(--gutter)));
+  max-height: calc(100vh - 2 * var(--gutter));
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.switch-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.switch-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 2 * var(--gutter) - 34px);
+}
+
+.switch-dialog h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.switch-dialog .lead {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.switch-table-wrap {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.switch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.switch-table th {
+  position: sticky;
+  top: 0;
+  padding: 6px 8px;
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.switch-table td {
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.switch-table .tick {
+  width: 28px;
+}
+
+.switch-table .group {
+  color: var(--ink-2);
+}
+
+.switch-table .locked {
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: 11px;
+}
+
+.switch-table tr[data-locked] td {
+  color: var(--ink-2);
+}
+
+.switch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -1,5 +1,6 @@
 import type { OpeningPin } from '../core/analysis/placement';
-import { isDefault } from '../core/params/defaults';
+import { isDefaultAt } from '../core/params/defaults';
+import { lockOf, moldTypeOf } from '../core/mold/types';
 import { PARAM_SCHEMA, type ParamDef, type Params } from '../core/params/schema';
 import { hashString } from './hash';
 
@@ -142,6 +143,17 @@ export const STAGES: readonly StageDef[] = [
  */
 export const MAIN_ONLY: readonly ParamPath[] = ['print.bedX', 'print.bedY', 'print.bedZ', 'print.infill', 'print.density'];
 
+/**
+ * MT: the mold type and the two-part cover's settings, which no stage of the one-piece cover reads. The type reaches
+ * those stages only through the values its locks give (effectiveParams, which the pipeline hashes the keys from), and
+ * the two-part cover's own stages, which read the rest, come with MP1 to MP5 (docs/PLAN.md, G13.15).
+ */
+export const NO_STAGE: readonly ParamPath[] = [
+  'mold.type',
+  'clamshell.axis', 'clamshell.offset', 'clamshell.ceilingDeg', 'clamshell.seamLand', 'clamshell.pins', 'clamshell.fastener',
+  'clips.clearance', 'clips.rows',
+];
+
 export const STAGE_BY_ID = new Map(STAGES.map((stage) => [stage.id, stage]));
 
 /** Every parameter by its path, in the schema's order, with its group, key and definition, split once. */
@@ -160,15 +172,14 @@ export function paramDef(path: ParamPath): ParamDef {
 }
 
 /**
- * The paths among `paths` whose setting is not at its default (isDefault), in their own order: what the
- * marks, the section resets and Reset in the header show and set back (CS). The sidebar asks on every draw,
- * so the paths are not split again each time.
+ * The paths among `paths` whose setting is not at its default in the type `params` are for (isDefaultAt), in their
+ * own order: what the marks, the section resets and Reset in the header show and set back (CS, MT). A setting the
+ * type does not use, hidden, or holds locked, is left out: it keeps the user's value for switching back, and a
+ * Reset leaves it so. `mold.type` is never changed: Reset keeps the type.
  */
 export function changedPaths(params: Params, paths: readonly ParamPath[] = PARAM_PATHS): ParamPath[] {
-  return paths.filter((path) => {
-    const { group, key, def } = PARAMS_BY_PATH.get(path)!;
-    return !isDefault(def, (params[group] as Record<string, unknown>)[key]);
-  });
+  const type = moldTypeOf(params);
+  return paths.filter((path) => type.applies(path) && !lockOf(path, params) && !isDefaultAt(path, params));
 }
 
 export function paramValue(params: Params, path: ParamPath): unknown {

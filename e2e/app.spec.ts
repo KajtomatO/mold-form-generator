@@ -21,7 +21,10 @@ import { NO_FIREFOX_WEBGL } from './firefox';
 import { inNode, nodeHash } from './nodeRuns';
 
 const FULL = process.env.CFG_FULL === '1';
-const PATHS = Object.entries(PARAM_SCHEMA).flatMap(([group, defs]) => Object.keys(defs as Record<string, ParamDef>).map((key) => `${group}.${key}`));
+// MT: the settings the one-piece cover shows a row for: not the type, which its tiles set, nor the two-part cover's own.
+const PATHS = Object.entries(PARAM_SCHEMA)
+  .filter(([group]) => !['mold', 'clamshell', 'clips'].includes(group))
+  .flatMap(([group, defs]) => Object.keys(defs as Record<string, ParamDef>).map((key) => `${group}.${key}`));
 
 const row = (page: Page, path: string): Locator => page.locator(`[data-param="${path}"]`);
 

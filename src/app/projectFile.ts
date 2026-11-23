@@ -9,6 +9,9 @@ import { REPAIR_CELL_MAX, REPAIR_CELL_MIN } from '../core/mesh/repair';
 import { TARGET_RANGE } from './largeModel';
 import type { ParamPath } from './stages';
 import { isGalleryLicence, type GalleryCredit } from '../gallery/catalogue';
+import { DEFAULT_MOLD_TYPE, isMoldType, MOLD_TYPES, type MoldTypeId } from '../core/mold/types';
+import { defaultOf } from '../core/params/defaults';
+import { MOLD_TYPE_UI } from '../ui/mold/moldTypeUi';
 
 /**
  * Reading project.json: migrating an older version one step at a time, then checking every field.
@@ -118,9 +121,22 @@ function opensWith(path: ParamPath, value: unknown): number {
 
 /**
  * Version 7 (0.3.0) adds the optional `gallery` field, the credit of an example model not ours (GA), which no
- * older file has, so a version 6 file opens as it was. MT extends this same step before anything is released.
+ * older file has, and the mold type with the two-part cover's settings (MT): a version 6 file was a one-piece cover,
+ * so it opens as one, with the `clamshell` and `clips` groups at the values 7 started with, written out here so a
+ * later change of the defaults never changes what an old file opens to.
  */
-const v6ToV7: Migration = (file) => file;
+const v6ToV7: Migration = (file) => {
+  const params = isObject(file.params) ? file.params : {};
+  return {
+    ...file,
+    params: {
+      mold: { type: 'one-piece' },
+      ...params,
+      clamshell: { axis: 'auto', offset: null, ceilingDeg: 20, seamLand: 2, pins: true, fastener: 'bolts' },
+      clips: { clearance: 0.1, rows: null },
+    },
+  };
+};
 
 /** Each older version's step to the one after it. */
 export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6, 6: v6ToV7 };
@@ -184,9 +200,30 @@ function refuse(what: string, detail: string): never {
   throw new Refusal(what, detail);
 }
 
-/** Every parameter of the schema from the file's, with the notes on what had to change. */
-function readParams(raw: unknown, notes: ProjectNote[]): Params {
+/**
+ * MT: the mold type a file's settings are for, read first, as every missing setting takes that type's default. A
+ * format 7 file with none is the one-piece cover. A type or a seam fastener this version does not know is refused
+ * as a newer format is, as the file was saved by a version that has it, and nothing here can stand in for it.
+ */
+function readType(raw: Json, name: string): MoldTypeId {
+  const mold = raw.mold;
+  const type = isObject(mold) ? mold.type : undefined;
+  const where = 'Open it in the version of the app that saved it.';
+  if (type !== undefined && !isMoldType(type)) throw new ProjectError(`${name} was saved with a mold type this version does not know (${shown(type)}). ${where}`, 'In project.json: params.mold.type.');
+  const fastener = isObject(raw.clamshell) ? raw.clamshell.fastener : undefined;
+  if (fastener !== undefined && !(typeof fastener === 'string' && (PARAM_SCHEMA.clamshell.fastener.options as readonly string[]).includes(fastener))) {
+    throw new ProjectError(`${name} was saved with a seam fastener this version does not know (${shown(fastener)}). ${where}`, 'In project.json: params.clamshell.fastener.');
+  }
+  return type ?? DEFAULT_MOLD_TYPE;
+}
+
+/**
+ * Every parameter of the schema from the file's, with the notes on what had to change. MT: a setting the file lacks
+ * takes its type's default, and is named only where the type uses it, as one hidden in the type means nothing there.
+ */
+function readParams(raw: unknown, notes: ProjectNote[], name: string): Params {
   if (!isObject(raw)) refuse('it holds no settings', `"params" must be an object, not ${shown(raw)}.`);
+  const type = readType(raw, name);
   const out: Record<string, Record<string, unknown>> = {};
   const missing: string[] = [];
   const unknown: string[] = [];
@@ -198,16 +235,19 @@ function readParams(raw: unknown, notes: ProjectNote[]): Params {
       const path = `${group}.${key}` as ParamPath;
       const value = given?.[key];
       if (value === undefined) {
-        out[group][key] = def.default;
-        missing.push(def.label);
+        out[group][key] = defaultOf(path, type);
+        if (path !== 'mold.type' && MOLD_TYPES[type].applies(path)) missing.push(def.label);
         continue;
       }
+      // MT: a value brought into range is named even in a setting the file's type hides, unlike one missing: the
+      // file's own value changed, and it is the one a switch to a type that uses it will offer.
       out[group][key] = readParam(path, def, value, notes);
     }
     for (const key of Object.keys(given ?? {})) if (!(key in defs)) unknown.push(`${group}.${key}`);
   }
   for (const group of Object.keys(raw)) if (!(group in PARAM_SCHEMA)) unknown.push(group);
-  if (missing.length > 0) notes.push({ severity: 'warning', message: `Not in the file, so at their defaults: ${missing.join(', ')}.` });
+  const their = type === DEFAULT_MOLD_TYPE ? 'their' : `their ${MOLD_TYPE_UI[type].name}`;
+  if (missing.length > 0) notes.push({ severity: 'warning', message: `Not in the file, so at ${their} defaults: ${missing.join(', ')}.` });
   if (unknown.length > 0) notes.push({ severity: 'warning', message: `Settings this version does not know, left out: ${unknown.join(', ')}.` });
   return out as unknown as Params;
 }
@@ -429,14 +469,14 @@ function readRepaired(raw: unknown, model: string, notes: ProjectNote[]): Repair
  */
 export function validateProject(file: Json, notes: ProjectNote[] = [], name = PROJECT_JSON): ProjectFile {
   try {
-    return readFields(file, notes);
+    return readFields(file, notes, name);
   } catch (error) {
     if (error instanceof Refusal) throw new ProjectError(`${name} cannot be used: ${error.what}. ${OPEN_AGAIN}`, error.detail);
     throw error;
   }
 }
 
-function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
+function readFields(file: Json, notes: ProjectNote[], name: string): ProjectFile {
   if (typeof file.model !== 'string' || file.model === '') refuse('it does not name its STL', '"model" must be the STL\'s file name.');
   const missing = (key: string): boolean => file[key] === undefined;
   const defaulted = [missing('plane') && 'the base face, so candidate 1', missing('pins') && 'moved openings, so none', missing('removed') && 'removed vents, so none'].filter(Boolean);
@@ -467,7 +507,7 @@ function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
     ...(simplified ? { simplified } : {}),
     ...(repaired ? { repaired } : {}),
     ...(gallery ? { gallery } : {}),
-    params: readParams(file.params, notes),
+    params: readParams(file.params, notes, name),
     plane: missing('plane') ? DEFAULT_PLANE : readPlane(file.plane),
     pins: readPins(file.pins ?? []),
     removed: [...removed] as string[],

@@ -28,13 +28,16 @@ export function SectionReset({ paths, title, inline = false }: { paths: readonly
   const changed = changedPaths(store.project.value.params, paths);
   if (changed.length === 0) return null;
   const labels = namedList(changed.map((path) => paramDef(path).label));
+  // MT: a type other than the one-piece cover is named, as its defaults are the ones set.
+  const named = store.typeShown();
+  const type = named ? `${named} ` : '';
   return (
     <button
       type="button"
       class={inline ? 'btn small section-reset-inline' : 'section-reset'}
       data-testid={inline ? 'advanced-reset' : 'section-reset'}
       aria-label={`Reset ${label}`}
-      title={`Reset ${changed.length === 1 ? 'the setting' : `the ${changed.length} settings`} changed in ${title} to ${changed.length === 1 ? 'its default' : 'their defaults'}: ${labels}. Undo takes it back (Ctrl+Z).`}
+      title={`Reset ${changed.length === 1 ? 'the setting' : `the ${changed.length} settings`} changed in ${title} to ${changed.length === 1 ? `its ${type}default` : `their ${type}defaults`}: ${labels}. Undo takes it back (Ctrl+Z).`}
       onClick={(event) => {
         const first = rowControl(event.currentTarget.closest('section, details')?.querySelector('[data-param]') ?? null);
         store.resetParams(paths, `resetting ${label}`);

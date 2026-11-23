@@ -5,10 +5,13 @@ import { useStore } from './context';
 import { namedList } from './format';
 import { Logo, Moon, Redo, ResetArrow, Sun, Undo } from './icons';
 
-/** CS: what Reset in the header says it will do, naming what it sets back and what it keeps (D22). */
-export function resetAllTitle(changed: readonly ParamPath[]): string {
-  if (changed.length === 0) return 'Every setting is at its default.';
-  return `Reset every setting to its default: ${changed.length} changed (${namedList(changed.map((path) => paramDef(path).label))}). The base face, moved openings and removed vents stay. Undo takes it back (Ctrl+Z).`;
+/**
+ * CS: what Reset in the header says it will do, naming what it sets back and what it keeps (D22). MT: in a type other
+ * than the one-piece cover, `type` names it, as Reset sets that type's defaults and keeps the type.
+ */
+export function resetAllTitle(changed: readonly ParamPath[], type: string | null = null): string {
+  if (changed.length === 0) return type ? `Every setting is at its ${type} default.` : 'Every setting is at its default.';
+  return `Reset every setting to ${type ? `the ${type} defaults` : 'its default'}: ${changed.length} changed (${namedList(changed.map((path) => paramDef(path).label))}). The base face, moved openings and removed vents stay. Undo takes it back (Ctrl+Z).`;
 }
 
 export function Header() {
@@ -16,7 +19,7 @@ export function Header() {
   void store.historyTick.value;
   // CS: one step of every setting back to its default, with no question asked, as Undo beside it takes it back.
   const changed = changedPaths(store.project.value.params);
-  const resetTitle = resetAllTitle(changed);
+  const resetTitle = resetAllTitle(changed, store.typeShown());
   const light = store.theme.value === 'light';
   const undo = store.history.undoLabel, redo = store.history.redoLabel;
   // Each button's title names the step it takes back or puts back.

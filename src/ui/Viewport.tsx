@@ -112,9 +112,10 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
   };
 
   useEffect(() => {
-    // Esc during a drag puts the opening back where it was. Pick mode's own Esc is App's.
+    // Esc during a drag puts the opening back where it was. Pick mode's own Esc is App's. MT: while the switch
+    // window is open, Esc only cancels it (D27).
     const keys = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && pointerDrag.current) endDrag(false);
+      if (event.key === 'Escape' && pointerDrag.current && !store.switching.value) endDrag(false);
     };
     window.addEventListener('keydown', keys);
     return () => {

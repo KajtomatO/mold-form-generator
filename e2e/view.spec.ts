@@ -737,7 +737,8 @@ test.describe('section, explode, opening drag and undo on index.html', () => {
     await page.locator('.advanced > summary').click();
     await hooks(page, (h) => h.setParam('bolts.enabled', true));
     const rows = page.locator('[data-param]');
-    const settings = Object.values(defaultParams()).reduce((n, group) => n + Object.keys(group).length, 0);
+    // MT: every setting the one-piece cover shows: not the type, which its tiles set, nor the two-part cover's own.
+    const settings = Object.entries(defaultParams()).filter(([group]) => !['mold', 'clamshell', 'clips'].includes(group)).reduce((n, [, group]) => n + Object.keys(group).length, 0);
     await expect(rows).toHaveCount(settings);
     await expect(page.locator('[data-param]:not([data-param="bolts.enabled"]) .mark.dot')).toHaveCount(settings - 1);
     await expect(page.locator('.row button.mark')).toHaveCount(1);

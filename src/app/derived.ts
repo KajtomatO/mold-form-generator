@@ -51,12 +51,12 @@ export function previewSilicone(pipeline: Pipeline): { ml: number; grams: number
   // trimmed parts once it is in for this plane, and until then, as on every other plane, the import's.
   const trimmed = pipeline.footprint && pipeline.footprint.key === pipeline.oriented?.key ? pipeline.footprint.value.overlap : null;
   const overlap = trimmed ?? pipeline.imported?.value.overlapVolume ?? 0;
-  const raise = pipeline.params.quality.tinTolPreview;
+  const raise = pipeline.run.quality.tinTolPreview;
   const sealedAir = pipeline.reports?.value.air.sealedAir ?? 0;
   const volume = siliconeVolume(field.field, { exteriorVolume: oriented.modelVolume - overlap, tiles: field.mold.offsets.length, sealedAir, raise });
   const bores = pipeline.placement ? boreSilicone(pipeline.placement.value.copies, field.field, field.rim.Zt) : 0;
   const ml = volume.ml + bores / 1000;
-  return { ml, grams: ml * pipeline.params.silicone.density };
+  return { ml, grams: ml * pipeline.run.silicone.density };
 }
 
 /** G6: the pitch shown is always the export plan's, as the parts are placed on it. */
@@ -67,7 +67,7 @@ export function exportPitch(params: Params, bounds: Bounds, modelErrorMm = 0): [
 
 /** What an auto parameter follows right now, or null while that needs a model that is not there yet. */
 export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
-  const params = pipeline.params;
+  const params = pipeline.run;
   const oriented = pipeline.oriented?.value;
   switch (path) {
     case 'base.pocketDepth':
@@ -96,7 +96,7 @@ export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
 
 /** The value a row shows: the parameter's own, or what its auto rule resolves to. */
 export function shownValue(path: ParamPath, pipeline: Pipeline): unknown {
-  const value = paramValue(pipeline.params, path);
+  const value = paramValue(pipeline.run, path);
   return value === null ? autoValue(path, pipeline) : value;
 }
 
@@ -114,6 +114,9 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'funnel-too-flat': 'funnel.topDiameter',
   'funnel-wall': 'funnel.wall',
   'funnel-flange': 'funnel.flangeWidth',
+  // MT: the two-part cover's rules between settings (G13.14).
+  'seam-cap': 'cover.topCap',
+  'seam-land': 'clamshell.seamLand',
   // deriveRim
   'edge-raised': 'grid.edge',
   'corner-clamped': 'base.cornerRadius',
@@ -186,7 +189,7 @@ const RANK = { error: 0, warning: 1, info: 2 } as const;
 export function printabilityOnScreen(pipeline: Pipeline): Diagnostic[] {
   const field = pipeline.field?.value, oriented = pipeline.oriented?.value;
   if (!field || !oriented) return [];
-  return printabilityDiagnostics(pipeline.params, field.rim, { offsets: field.mold.offsets, modelTop: (pipeline.planBounds() ?? oriented.bounds).max[2] });
+  return printabilityDiagnostics(pipeline.run, field.rim, { offsets: field.mold.offsets, modelTop: (pipeline.planBounds() ?? oriented.bounds).max[2] });
 }
 
 /**
@@ -197,7 +200,7 @@ export function allDiagnostics(pipeline: Pipeline): ShownDiagnostic[] {
   const status = pipeline.status();
   const error: ShownDiagnostic[] = status.error ? [{ code: 'pipeline-error', severity: 'error', message: status.error }] : [];
   const plastic = plasticOnScreen(pipeline);
-  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.params, pipeline.field?.value.rim ?? null), ...printabilityOnScreen(pipeline), ...(plastic ? [plasticDiagnostic(plastic, pipeline.params)] : []), ...pipeline.exportNotes()];
+  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.run, pipeline.field?.value.rim ?? null), ...printabilityOnScreen(pipeline), ...(plastic ? [plasticDiagnostic(plastic, pipeline.run)] : []), ...pipeline.exportNotes()];
   return all.sort((a, b) => RANK[a.severity] - RANK[b.severity]);
 }
 
@@ -260,7 +263,7 @@ export function plasticOnScreen(pipeline: Pipeline): PlasticEstimate | null {
   const parts: PartAmount[] = [{ ...meshAmount(cover.value), count: 1 }, { ...meshAmount(base.value), count: 1 }];
   const pours = placement ? placement.value.copies.filter((c) => c.kind === 'pour').length : 0;
   if (funnel?.value && pours > 0) parts.push({ ...meshAmount(funnel.value), count: pours });
-  return plasticEstimate(parts, pipeline.params);
+  return plasticEstimate(parts, pipeline.run);
 }
 
 export interface ClampFigure extends ClampAdvice {
@@ -276,7 +279,7 @@ export function clampFigure(pipeline: Pipeline): ClampFigure | null {
   const reports = pipeline.reports?.value;
   if (!reports) return null;
   const { cover, field } = pipeline;
-  const own = cover && field && cover.mold === field.mold ? plasticEstimate([{ ...meshAmount(cover.value), count: 1 }], pipeline.params) : null;
+  const own = cover && field && cover.mold === field.mold ? plasticEstimate([{ ...meshAmount(cover.value), count: 1 }], pipeline.run) : null;
   return { ...reports.clamp, liftN: reports.lift.forceN, level: reports.lift.level, coverWeightN: own ? (own.printed / 1000) * GRAVITY : null };
 }
 
@@ -285,7 +288,7 @@ export function boltFigure(pipeline: Pipeline): BoltAdvice | null {
   const bolts = pipeline.field?.value.rim.bolts;
   const reports = pipeline.reports?.value;
   if (!bolts || !reports) return null;
-  return boltAdvice(reports.lift.forceN, pipeline.params.print.tapeStrip, bolts);
+  return boltAdvice(reports.lift.forceN, pipeline.run.print.tapeStrip, bolts);
 }
 
 /** The radius an opening shows at the top: its seat's for a pour, its mouth's for a vent. */
@@ -428,7 +431,7 @@ export function dragCheck(pipeline: Pipeline, id: string, x: number, y: number):
   const spot = { kind: opening.kind, x, y };
   const { valid, problems } = checkOpening(shown.space, spot, others);
   // The same call as the pipeline's drop, so what the tip says is what the drop does.
-  const drop = dropOpening(shown.space, spot, others, firstPourPeak(shown.placement, id, pipeline.params.silicone.t / 2));
+  const drop = dropOpening(shown.space, spot, others, firstPourPeak(shown.placement, id, pipeline.run.silicone.t / 2));
   return {
     valid,
     problems,

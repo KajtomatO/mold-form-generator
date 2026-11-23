@@ -11,6 +11,7 @@ import { projectFile, projectJson } from '../../src/app/project';
 import { packProject } from '../../src/app/projectArchive';
 import { BUILD } from '../../src/app/buildInfo';
 import { APP_NAME } from '../../src/app/version';
+import { effectiveParams } from '../../src/core/mold/types';
 import { defaultParams } from '../../src/core/params/defaults';
 import { GROUP_TITLES, PARAM_SCHEMA, SCHEMA_VERSION } from '../../src/core/params/schema';
 import { fitVariants } from '../../src/core/parts/fitTest';
@@ -131,6 +132,7 @@ function input(change: (i: ReadmeInput) => void = () => {}): ReadmeInput {
     app: APP_NAME,
     version: BUILD.version,
     model: '3dbenchy.stl',
+    moldType: 'One-piece cover',
     params: defaultParams(),
     resolved: { 'base.pocketDepth': 0.2, 'base.planeTol': 0.05, 'silicone.printMargin': 0.1, 'silicone.baseLayer': 3, 'vents.persistence': 1.5, 'grid.spacing': 9.77, 'grid.edge': 6.4, 'bolts.length': 12 },
     files: ['cover.stl', 'base.stl', 'funnel.stl', 'model_oriented.stl', 'report.json', 'project.json'],
@@ -209,10 +211,26 @@ describe('README.txt', () => {
     const at = readme.indexOf('SETTINGS');
     expect(at).toBeGreaterThan(readme.indexOf('ESTIMATES'));
     const settings = readme.slice(at);
-    for (const [group, defs] of Object.entries(PARAM_SCHEMA)) {
+    // MT: the type is named at the top, and the settings it does not use, the two-part cover's, are left out.
+    const used = (group: string): boolean => group !== 'mold' && group !== 'clamshell' && group !== 'clips';
+    for (const [group, defs] of Object.entries(PARAM_SCHEMA).filter(([group]) => used(group))) {
       expect(settings, group).toContain(` ${GROUP_TITLES[group]} -`);
       for (const def of Object.values(defs)) expect(settings, def.label).toContain(`- ${def.label}: `);
     }
+    expect(readme.indexOf('Mold type: One-piece cover.')).toBeLessThan(readme.indexOf('Made by '));
+    for (const group of ['Mold type', 'Two-part cover', 'Seam clips']) expect(settings).not.toContain(` ${group} -`);
+    // In the two-part cover they are listed, the clips' among them.
+    const two = exportReadme(input((i) => {
+      i.moldType = 'Two-part cover';
+      i.params.mold.type = 'clamshell';
+      // As the export passes them, with the type's locks applied (effectiveParams).
+      i.params = effectiveParams(i.params);
+    })).replace(/\r\n\s*/g, ' ');
+    expect(two).toContain('Mold type: Two-part cover.');
+    for (const line of [' Two-part cover - Split axis: auto', '- Ceiling slope: 20 deg', '- Seam fasteners: bolts', ' Seam clips - Clip clearance: 0.1 mm']) expect(two).toContain(line);
+    // A setting the type holds is listed at its value, marked, and the line on project.json says it keeps yours.
+    for (const line of ['- Columns: 1, held by the mold type', '- Pry notches: off, held by the mold type', 'project.json holds the same, but for the settings marked "held by the mold type"']) expect(two).toContain(line);
+    expect(settings).not.toContain('held by the mold type');
     for (const line of ['- Silicone thickness: 3 mm', '- Taper clearance per side: 0.1 mm', '- Groove clearance per side: 0.25 mm', '- Mode: glue (Mode A)', '- Pry notches: on', '- Infill: 0.05 (5 percent)', '- Pours per body: 1 ', '- Seat half angle: 30 deg', '- Pocket depth: auto, 0.2 mm', '- Base layer: auto, 3 mm', '- Base layer slope: 2 deg', '- Edge distance: auto, 6.4 mm', '- Preview cell: auto, for the preview only', '- Nuts and bolts: off', '- Bolt size: M3', '- Bolt length: auto, 12 mm', '- Nut clearance per side: 0.15 mm']) {
       expect(settings).toContain(line);
     }
@@ -1131,7 +1149,7 @@ describe('models of parts that overlap, exported in Node', () => {
     // The preview's figure: the solid worker's, for the trimmed parts on this plane.
     expect(p.footprint!.key).toBe(p.oriented!.key);
     expect(p.footprint!.value.overlap).toBeCloseTo(80, 3);
-    const untrimmed = previewSilicone({ field: p.field, oriented: p.oriented, imported: p.imported, params: p.params, reports: p.reports, placement: p.placement, footprint: null } as unknown as Pipeline)!;
+    const untrimmed = previewSilicone({ field: p.field, oriented: p.oriented, imported: p.imported, params: p.params, run: p.run, reports: p.reports, placement: p.placement, footprint: null } as unknown as Pipeline)!;
     // The model it takes off is the larger by the 4 mm3 shared under the floor, so the silicone the less.
     expect(previewSilicone(p)!.ml - untrimmed.ml).toBeCloseTo((80 - imported.overlapVolume) / 1000, 6);
 
@@ -1183,7 +1201,10 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
    * margin. GC: Benchy's README.txt and report.json give the decimation's error proved, 0.037 mm where meshoptimizer
    * said 0.007, and the clearance less it, 3.18 mm where they said 3.21; its STLs and every other hash are
    * 92724e8's. GA: project.json, report.json and so the .moldproj say format 7 (0.3.0) where they said 6, and
-   * nothing else of them changed. Update them only for a change that means to change the export.
+   * nothing else of them changed. MT: project.json and so the .moldproj hold the mold group, one-piece, and the
+   * two-part cover's groups at their defaults; report.json the same params and its moldType; README.txt the line
+   * "Mold type: One-piece cover." under its title. With those taken out, each gives GA's hash again, checked when MT
+   * pinned these; every STL is as it was. Update them only for a change that means to change the export.
    */
   const PINNED: Record<string, Record<string, string>> = {
     'jersey at defaults': {
@@ -1208,10 +1229,10 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       'fit_test/taper-0.40_cover.stl': '12d7a0b01ac9b83e5614ab67a32a347eb690096ee83d0d61002346c224417673',
       'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
       'model_oriented.stl': '6e5fe345fcbe5844e4c51d164324f8a1546e022df41b80d2cd1c1c881680dee9',
-      'README.txt': 'b8dd3c1afba66debf1083a4957f0d791da550422d1c267c4d4d5400d3ce8a3c0',
-      'project.json': '2823c5fc8e6ae83f52dec79de4bf70a53fef6611dbfa80cb6df2255db560b115',
-      'report.json': 'dd76e5e4d2180cb0308af23bf0e1236ff469de6c21de4375b3aa2a93bf450c6c',
-      '.moldproj': 'c9d2dd17d16bd506d4ed5eda1d736f0778a0c7af3b6f388cb245d929c8600c39',
+      'README.txt': '08ab299d79c8e371108742944adb30a5c21a9fddb95eb699bfdabb4842ed6f80',
+      'project.json': '3f729ff7195eb4b6ddfdb215c8e388e5a2c9b65b1ce62404efa17a43f082f0ec',
+      'report.json': 'e05a30a0d2cbda685ded16aafeca07920908a23d84d52e7235be44765bd32095',
+      '.moldproj': '21b6c97467a23e70d03898d4fa7992b51f36d0088248fd627b025349edb7c11d',
     },
     'jersey changed': {
       'base.stl': 'aca5c541ddd45157cb98230795e63bbecb4627d2e124eed8852cbdd6e54a4176',
@@ -1236,14 +1257,14 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       'fit_test/taper-0.40_base.stl': '09b53870488d03786e93ed4468392c0b265c16b619d24650ae3459f58ca8bb85',
       'fit_test/taper-0.40_cover.stl': '57941b9a47f28693353211961ac833ffdb3a2b5e9afbff1bb5e8015f1bb936a5',
       'funnel.stl': 'da48da8a675c463add92d1b03a1cd5eae5d1ff4335a690376d5d3ce6910e6df9',
-      'README.txt': 'ccd50d4554755b9c6cc1bd47a0c478de5643a364c024776606ba19f4f4d17ca4',
-      'project.json': 'd104a16014577cccaed9fb3356a4cb741c5ce8360907d17639c982342a6995da',
-      'report.json': 'c979ffe09e4c0a7a949e334c5dc41c689d04bb58a350667f818c7a192954c91b',
-      '.moldproj': '86a86d246c51afee5aceceeee26f86381445758e5c64b4efa27261e6513a98db',
+      'README.txt': '2ddded3c6ae47df285563d085ea7f2e8415e96c0e0ec9ffcfd4272521da2f473',
+      'project.json': '84861d8afc959fec6bcd9a72a42709598a352cc662a092a7fffed67b59927f35',
+      'report.json': 'e9701449934219dce5395c7e9c8b834f161f57b6934e9ed7ad5e86946aef61ff',
+      '.moldproj': '29d96020d224370d84e257dd1416f85dfd5eedbb4072ceccf201fa14f100bb63',
     },
     'Benchy at defaults': {
-      '.moldproj': '5474a327bdcb1d837d6676a5d20a9526fb65de0ad3c8ad0ab4d94c7b0d6672e8',
-      'README.txt': '32de16fba15d40628fdb8d6cb8eb22e985ba4a67a47903b7f3ed42b89c596165',
+      '.moldproj': 'ef280cbe3f04d6f17330b3cc698d947146de840e580eb93a821a890327933ed1',
+      'README.txt': 'c7604783bf0f869a7a875c5c59a1da34d82cc29d4aa3073bdf7ab50815397408',
       'base.stl': '143eb64a7f369f45681adf8baad516f4e0aec9c07211d045fb7ede8890537deb',
       'cover.stl': 'dcc9adc508455d02e9b77423e9cf4483232e62356e051813597f45c71f2007f6',
       'fit_test/README.txt': 'cc2bedb13778d88c3392de582aa2a1f4dfe72e155c4e7530738c2b03515b2f84',
@@ -1265,8 +1286,8 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       'fit_test/taper-0.40_cover.stl': '12d7a0b01ac9b83e5614ab67a32a347eb690096ee83d0d61002346c224417673',
       'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
       'model_oriented.stl': 'b06bd96e52efc3488426a636930e4e89c98fc590dd4e09635682f9e8840c376d',
-      'project.json': 'b136de0f9de07e12b74fd43d551f9d5c236a941e7bc0606858743f42d84ce305',
-      'report.json': 'e5d810c492c616f66ee4122fd3c359f644336d7f5c5e17fd50084aff36b04994',
+      'project.json': '17858df637818b6b28bef24014c028327676c8d98110e3547772507f0395119c',
+      'report.json': '073a05e0c305480b0963c133f1fb05613f5d7cb0fdbe792c8468f0b757a9347b',
     },
   };
   const CHANGES: Record<string, (p: Params) => void> = {
