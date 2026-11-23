@@ -8,7 +8,7 @@ import { parseStl } from '../../src/core/stl/parse';
 import { box, BOX_TOP, weldedFixture, withoutTriangles } from '../fixtures/synthetic';
 
 function oilBarrel(): WeldedMesh {
-  const bytes = readFileSync(join(import.meta.dirname, '..', '..', 'examples', 'N Scale Oil Barrel.stl'));
+  const bytes = readFileSync(join(import.meta.dirname, '..', '..', 'test-models', 'N Scale Oil Barrel.stl'));
   return weld(parseStl(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length)).positions);
 }
 

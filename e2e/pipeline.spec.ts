@@ -305,7 +305,7 @@ test.describe('the examples a clone of the public repository has', () => {
   // and the harness would serve them, so a test that drops one without skipping would pass here and fail in a clone.
   test('@smoke the servers answer an example not in this checkout with a 404, as a clone\'s would, and one here with its file', async ({ page }) => {
     await openPipeline(page);
-    const status = (file: string): Promise<number> => page.evaluate(async (f) => (await fetch(`/examples/${encodeURIComponent(f)}`)).status, file);
+    const status = (file: string): Promise<number> => page.evaluate(async (f) => (await fetch(`/test-models/${encodeURIComponent(f)}`)).status, file);
     expect(await status(EXAMPLE_FILES.jersey)).toBe(200);
     for (const id of LOCAL_ONLY) expect(await status(EXAMPLE_FILES[id]), id).toBe(hasExample(id) ? 200 : 404);
   });

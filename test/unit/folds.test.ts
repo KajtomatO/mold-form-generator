@@ -16,8 +16,8 @@ beforeAll(async () => {
   api = await loadManifold();
 });
 
-const examplesDir = joinPath(import.meta.dirname, '..', '..', 'examples');
-/** All 15 examples, the two kept only on the maintainer's machine where they are here (examples/SOURCES.md). */
+const examplesDir = joinPath(import.meta.dirname, '..', '..', 'test-models');
+/** All 15 examples, the two kept only on the maintainer's machine where they are here (test-models/SOURCES.md). */
 const EXAMPLES: [string, boolean][] = [
   ['3dbenchy.stl', true],
   ['barricate_type_2_straight.stl', true],

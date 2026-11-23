@@ -14,7 +14,7 @@ import { readPart } from '../fixtures/solidChecks';
 
 const root = join(import.meta.dirname, '..', '..');
 const FULL = process.env.CFG_FULL === '1';
-// Before the changes to examples/ are staged, git's index still holds the files of before; this counts them as staged.
+// Before the changes to test-models/ are staged, git's index still holds the files of before; this counts them as staged.
 const UNSTAGED = process.env.CFG_UNSTAGED === '1';
 const doc = (path: string): string => readFileSync(join(root, path), 'utf8');
 // -z, before any paths, so names with spaces or other characters come back as they are.
@@ -31,7 +31,7 @@ const DEEDS: Record<string, string> = {
 };
 
 /**
- * What is wrong with examples/SOURCES.md's table against the model files git tracks in examples/ (names
+ * What is wrong with test-models/SOURCES.md's table against the model files git tracks in test-models/ (names
  * relative to it): a file with no row or a row with no file, and a row without its Printables page, its
  * author, a licence of the list with its own deed, or whether it was modified. NoDerivatives allows no change.
  */
@@ -55,12 +55,12 @@ function catalogueProblems(sources: string, tracked: string[]): string[] {
     if (!/^(No|Yes|Format only)\b/.test(modified ?? '')) problems.push(`${name}: whether it was modified is not said.`);
     else if (deed?.[1].includes('NoDerivatives') && !modified.startsWith('No')) problems.push(`${name}: NoDerivatives, so it may only be shared unmodified.`);
   }
-  for (const name of tracked) if (!listed.includes(name)) problems.push(`examples/${name} is tracked by git but has no row in examples/SOURCES.md.`);
-  for (const name of listed) if (!tracked.includes(name)) problems.push(`examples/SOURCES.md lists ${name}, which git does not track in examples/.`);
+  for (const name of tracked) if (!listed.includes(name)) problems.push(`test-models/${name} is tracked by git but has no row in test-models/SOURCES.md.`);
+  for (const name of listed) if (!tracked.includes(name)) problems.push(`test-models/SOURCES.md lists ${name}, which git does not track in test-models/.`);
   return problems;
 }
 
-/** What git says of examples/: its index, the files outside it that .gitignore leaves, and the indexed ones .gitignore names. */
+/** What git says of test-models/: its index, the files outside it that .gitignore leaves, and the indexed ones .gitignore names. */
 interface GitExamples {
   cached: string[];
   untracked: string[];
@@ -68,13 +68,13 @@ interface GitExamples {
 }
 
 const gitExamples = (): GitExamples => ({
-  cached: git('ls-files', '--cached', '--', 'examples'),
-  untracked: git('ls-files', '--others', '--exclude-standard', '--', 'examples'),
-  ignoredCached: git('ls-files', '--cached', '--ignored', '--exclude-standard', '--', 'examples'),
+  cached: git('ls-files', '--cached', '--', 'test-models'),
+  untracked: git('ls-files', '--others', '--exclude-standard', '--', 'test-models'),
+  ignoredCached: git('ls-files', '--cached', '--ignored', '--exclude-standard', '--', 'test-models'),
 });
 
 /**
- * The files git tracks in examples/, relative to it: its index, which is what the next commit holds, so a
+ * The files git tracks in test-models/, relative to it: its index, which is what the next commit holds, so a
  * model not yet added counts as unpublished, a file dropped in only to try the app is no concern of the
  * catalogue, and a local-only model still in the index counts as published. With `unstaged`
  * (CFG_UNSTAGED=1), for a tree whose changes are not staged yet, as R2's were not: what staging it as it
@@ -83,7 +83,7 @@ const gitExamples = (): GitExamples => ({
  */
 function trackedInExamples(g: GitExamples, unstaged: boolean, onDisk: (path: string) => boolean): string[] {
   const files = unstaged ? [...g.cached, ...g.untracked].filter((f) => onDisk(f) && !g.ignoredCached.includes(f)) : g.cached;
-  return files.map((f) => f.slice('examples/'.length));
+  return files.map((f) => f.slice('test-models/'.length));
 }
 
 const trackedNow = (): string[] => trackedInExamples(gitExamples(), UNSTAGED, (f) => existsSync(join(root, f)));
@@ -97,10 +97,10 @@ function localOnlyProblems(tracked: string[], gitignore: string, sources: string
   const lines = gitignore.split('\n');
   for (const id of LOCAL_ONLY) {
     const file = EXAMPLE_FILES[id];
-    if (!lines.includes(`/examples/${file}`)) problems.push(`.gitignore has no line /examples/${file}.`);
-    if (tracked.includes(file)) problems.push(`examples/${file} is tracked by git: take it out of the index with git rm --cached.`);
-    if (sources.includes(`| \`${file}\` |`)) problems.push(`examples/SOURCES.md lists ${file} in its table.`);
-    if (!sources.includes(`\`${file}\``)) problems.push(`examples/SOURCES.md does not name ${file}.`);
+    if (!lines.includes(`/test-models/${file}`)) problems.push(`.gitignore has no line /test-models/${file}.`);
+    if (tracked.includes(file)) problems.push(`test-models/${file} is tracked by git: take it out of the index with git rm --cached.`);
+    if (sources.includes(`| \`${file}\` |`)) problems.push(`test-models/SOURCES.md lists ${file} in its table.`);
+    if (!sources.includes(`\`${file}\``)) problems.push(`test-models/SOURCES.md does not name ${file}.`);
   }
   return problems;
 }
@@ -140,43 +140,43 @@ function barredNames(files: { path: string; text: string }[]): string[] {
 }
 
 describe('the example models and where they come from (R37)', () => {
-  it('examples/SOURCES.md lists exactly the model files git tracks in examples/, each with its author, Printables page, licence and deed', () => {
+  it('test-models/SOURCES.md lists exactly the model files git tracks in test-models/, each with its author, Printables page, licence and deed', () => {
     const tracked = trackedNow();
-    expect(tracked, 'examples/SOURCES.md is not in git\'s index: git add it, or before staging run with CFG_UNSTAGED=1').toContain('SOURCES.md');
+    expect(tracked, 'test-models/SOURCES.md is not in git\'s index: git add it, or before staging run with CFG_UNSTAGED=1').toContain('SOURCES.md');
     expect(modelFiles(tracked).length).toBeGreaterThan(10);
-    expect(catalogueProblems(doc('examples/SOURCES.md'), modelFiles(tracked))).toEqual([]);
+    expect(catalogueProblems(doc('test-models/SOURCES.md'), modelFiles(tracked))).toEqual([]);
   });
 
   it('the two local-only models are named in .gitignore, not tracked and not listed', () => {
-    expect(localOnlyProblems(trackedNow(), doc('.gitignore'), doc('examples/SOURCES.md'))).toEqual([]);
+    expect(localOnlyProblems(trackedNow(), doc('.gitignore'), doc('test-models/SOURCES.md'))).toEqual([]);
     // git itself matches each, whether or not the file is here.
-    for (const id of LOCAL_ONLY) expect(spawnSync('git', ['check-ignore', '-q', '--no-index', `examples/${EXAMPLE_FILES[id]}`], { cwd: root }).status, EXAMPLE_FILES[id]).toBe(0);
+    for (const id of LOCAL_ONLY) expect(spawnSync('git', ['check-ignore', '-q', '--no-index', `test-models/${EXAMPLE_FILES[id]}`], { cwd: root }).status, EXAMPLE_FILES[id]).toBe(0);
   });
 
   it('negative controls: git\'s index is what is tracked, and a local-only model in it, in the table, unnamed on the page or missing from .gitignore fails', () => {
     const [vis, barrel] = LOCAL_ONLY.map((id) => EXAMPLE_FILES[id]);
-    const g: GitExamples = { cached: ['examples/a.stl', 'examples/gone.stl', `examples/${vis}`], untracked: ['examples/new.stl'], ignoredCached: [`examples/${vis}`] };
-    const onDisk = (f: string): boolean => f !== 'examples/gone.stl';
+    const g: GitExamples = { cached: ['test-models/a.stl', 'test-models/gone.stl', `test-models/${vis}`], untracked: ['test-models/new.stl'], ignoredCached: [`test-models/${vis}`] };
+    const onDisk = (f: string): boolean => f !== 'test-models/gone.stl';
     // A file on disk only is not tracked: a model not yet added fails the catalogue as a row with no file, and
     // a local-only model the index still holds is published.
     expect(trackedInExamples(g, false, onDisk)).toEqual(['a.stl', 'gone.stl', vis]);
-    expect(catalogueProblems(['| File | Model | Author | Licence | Modified |', '|---|---|---|---|---|', '| `new.stl` | [A](https://www.printables.com/model/1) | Someone | [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/) | No |'].join('\n'), ['a.stl'])).toEqual(['examples/a.stl is tracked by git but has no row in examples/SOURCES.md.', 'examples/SOURCES.md lists new.stl, which git does not track in examples/.']);
+    expect(catalogueProblems(['| File | Model | Author | Licence | Modified |', '|---|---|---|---|---|', '| `new.stl` | [A](https://www.printables.com/model/1) | Someone | [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/) | No |'].join('\n'), ['a.stl'])).toEqual(['test-models/a.stl is tracked by git but has no row in test-models/SOURCES.md.', 'test-models/SOURCES.md lists new.stl, which git does not track in test-models/.']);
     // Before staging: the new file counts, and neither the deleted one nor the one .gitignore names.
     expect(trackedInExamples(g, true, onDisk)).toEqual(['a.stl', 'new.stl']);
-    const gitignore = `/examples/${vis}\n/examples/${barrel}\n`;
+    const gitignore = `/test-models/${vis}\n/test-models/${barrel}\n`;
     const sources = `\`${vis}\` and \`${barrel}\` have no known source.`;
     expect(localOnlyProblems(['a.stl'], gitignore, sources)).toEqual([]);
-    expect(localOnlyProblems(trackedInExamples(g, false, onDisk), gitignore, sources)).toEqual([`examples/${vis} is tracked by git: take it out of the index with git rm --cached.`]);
-    expect(localOnlyProblems([], `/examples/${vis}\n`, sources)).toEqual([`.gitignore has no line /examples/${barrel}.`]);
-    expect(localOnlyProblems([], gitignore, `${sources}\n| \`${barrel}\` | x |`)).toEqual([`examples/SOURCES.md lists ${barrel} in its table.`]);
-    expect(localOnlyProblems([], gitignore, `\`${vis}\``)).toEqual([`examples/SOURCES.md does not name ${barrel}.`]);
+    expect(localOnlyProblems(trackedInExamples(g, false, onDisk), gitignore, sources)).toEqual([`test-models/${vis} is tracked by git: take it out of the index with git rm --cached.`]);
+    expect(localOnlyProblems([], `/test-models/${vis}\n`, sources)).toEqual([`.gitignore has no line /test-models/${barrel}.`]);
+    expect(localOnlyProblems([], gitignore, `${sources}\n| \`${barrel}\` | x |`)).toEqual([`test-models/SOURCES.md lists ${barrel} in its table.`]);
+    expect(localOnlyProblems([], gitignore, `\`${vis}\``)).toEqual([`test-models/SOURCES.md does not name ${barrel}.`]);
   });
 
   it('no file git tracks or would add, no file name, STL header or commit message names the console maker or its characters', () => {
     // What git add -A would publish: the index and every file .gitignore leaves, as they are on disk.
     const paths = git('ls-files', '--cached', '--others', '--exclude-standard').filter((f) => existsSync(join(root, f)));
     expect(paths.length).toBeGreaterThan(200);
-    expect(paths).toContain('examples/SOURCES.md');
+    expect(paths).toContain('test-models/SOURCES.md');
     const files = paths.map((path) => ({ path, text: scannedText(path, readFileSync(join(root, path))) }));
     const messages = execFileSync('git', ['log', '--format=%B'], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
     expect(messages.trim().length).toBeGreaterThan(0);
@@ -187,10 +187,10 @@ describe('the example models and where they come from (R37)', () => {
     const capital = (word: string): string => word[0].toUpperCase() + word.slice(1);
     for (const name of BARRED) {
       expect(barredNames([{ path: 'a.md', text: `one\nthe ${capital(name)}'s two` }]), name).toEqual(['a.md:2']);
-      const file = `examples/${name.toUpperCase()}_v1.stl`;
+      const file = `test-models/${name.toUpperCase()}_v1.stl`;
       expect(barredNames([{ path: file, text: '' }]), name).toEqual([`${file} (its name)`]);
     }
-    expect(barredNames([{ path: 'examples/Switch_stand_v1.stl', text: '' }])).toEqual(['examples/Switch_stand_v1.stl (its name)']);
+    expect(barredNames([{ path: 'test-models/Switch_stand_v1.stl', text: '' }])).toEqual(['test-models/Switch_stand_v1.stl (its name)']);
     expect(barredNames([{ path: 'src/a.ts', text: 'switch (kind) {\n  // a switched-off toggle\n}' }])).toEqual([]);
     expect(barredNames([{ path: 'a.md', text: `a ${BARRED[2]}nette` }])).toEqual([]);
     // A binary STL: its header is read, in which a name fails, and the numbers past it are not.
@@ -208,10 +208,10 @@ describe('the example models and where they come from (R37)', () => {
     expect(scannedText('a.png', new Uint8Array([0, 1, ...new TextEncoder().encode(BARRED[0])]))).toBe('');
   });
 
-  it('README.md and docs/THIRD_PARTY.md point to examples/SOURCES.md, which says the models are not under the MIT licence', () => {
-    expect(doc('README.md')).toContain('examples/SOURCES.md');
-    expect(doc('docs/THIRD_PARTY.md')).toContain('examples/SOURCES.md');
-    const sources = doc('examples/SOURCES.md');
+  it('README.md and docs/THIRD_PARTY.md point to test-models/SOURCES.md, which says the models are not under the MIT licence', () => {
+    expect(doc('README.md')).toContain('test-models/SOURCES.md');
+    expect(doc('docs/THIRD_PARTY.md')).toContain('test-models/SOURCES.md');
+    const sources = doc('test-models/SOURCES.md');
     for (const phrase of ['not covered by Mold Form Generator\'s MIT licence', 'may not be used for commercial purposes', 'shared here unmodified', 'belong to their owners', 'have no known source']) expect(sources).toContain(phrase);
   });
 
@@ -224,8 +224,8 @@ describe('the example models and where they come from (R37)', () => {
     const nd = '[Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International](https://creativecommons.org/licenses/by-nc-nd/4.0/)';
     expect(catalogueProblems(table(row()), ['a.stl'])).toEqual([]);
     expect(catalogueProblems(table(row({ licence: nd })), ['a.stl'])).toEqual([]);
-    expect(catalogueProblems(table(row()), ['a.stl', 'b.stl'])).toEqual(['examples/b.stl is tracked by git but has no row in examples/SOURCES.md.']);
-    expect(catalogueProblems(table(row(), row({ file: '`b.stl`' })), ['a.stl'])).toEqual(['examples/SOURCES.md lists b.stl, which git does not track in examples/.']);
+    expect(catalogueProblems(table(row()), ['a.stl', 'b.stl'])).toEqual(['test-models/b.stl is tracked by git but has no row in test-models/SOURCES.md.']);
+    expect(catalogueProblems(table(row(), row({ file: '`b.stl`' })), ['a.stl'])).toEqual(['test-models/SOURCES.md lists b.stl, which git does not track in test-models/.']);
     expect(catalogueProblems(table(row(), row()), ['a.stl'])).toEqual(['a.stl has two rows.']);
     const noPage = "a.stl: the model's name does not link to its page on Printables by its number alone.";
     expect(catalogueProblems(table(row({ model: 'A' })), ['a.stl'])).toEqual([noPage]);
@@ -258,7 +258,7 @@ describe.runIf(FULL)('the models R2 added, through the app', () => {
   });
 
   it.each(R2_MODELS)('%s: parse, weld, import, base candidates, field, placement, reports and an export ZIP at defaults with the base layer, with no error', async (file) => {
-    const bytes = new Uint8Array(readFileSync(join(root, 'examples', file)));
+    const bytes = new Uint8Array(readFileSync(join(root, 'test-models', file)));
     const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true, reports: true });
     try {
       p.load(bytes, file);

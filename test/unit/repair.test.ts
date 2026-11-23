@@ -43,7 +43,7 @@ const refused = (run: () => unknown): RepairError => {
   throw new Error('not refused');
 };
 function oilBarrel(): WeldedMesh {
-  const bytes = readFileSync(joinPath(import.meta.dirname, '..', '..', 'examples', 'N Scale Oil Barrel.stl'));
+  const bytes = readFileSync(joinPath(import.meta.dirname, '..', '..', 'test-models', 'N Scale Oil Barrel.stl'));
   return weld(parseStl(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length)).positions);
 }
 /** The triangles of `mesh` as unordered corner positions, for comparing two meshes' triangles one by one. */

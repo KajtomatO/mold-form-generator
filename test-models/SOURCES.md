@@ -35,4 +35,4 @@ Two further test models, `VIS-35-skan-skalowany.stl` and `l_medieval_barrel.stl`
 
 ## Adding a model
 
-Add the file to `examples/` and a row to the table above, with the model's Printables page by its number (`https://www.printables.com/model/<number>`), its author, its licence and its deed, and whether it was modified and how. Only models whose source and licence are known, and whose licence allows sharing them, belong here. `test/unit/examples.test.ts` fails when a file git tracks in `examples/` has no row, or a row has no file.
+Add the file to `test-models/` and a row to the table above, with the model's Printables page by its number (`https://www.printables.com/model/<number>`), its author, its licence and its deed, and whether it was modified and how. Only models whose source and licence are known, and whose licence allows sharing them, belong here. `test/unit/examples.test.ts` fails when a file git tracks in `test-models/` has no row, or a row has no file.

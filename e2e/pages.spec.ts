@@ -58,7 +58,7 @@ const git = (cwd: string, args: string[]): string =>
 function buildSite(scratch: string): { out: string; commit: string; date: string } {
   const repo = join(scratch, 'repo');
   const files = execFileSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, encoding: 'utf8' }).split('\0');
-  for (const file of files.filter((f) => f && !f.startsWith('examples/') && existsSync(join(root, f)))) {
+  for (const file of files.filter((f) => f && !f.startsWith('test-models/') && existsSync(join(root, f)))) {
     mkdirSync(dirname(join(repo, file)), { recursive: true });
     copyFileSync(join(root, file), join(repo, file));
   }
@@ -87,7 +87,7 @@ function buildSite(scratch: string): { out: string; commit: string; date: string
 
 /** A static server as GitHub Pages is one: the site under its prefix, a folder to its index.html, a 404 for anything else. */
 function serve(out: string, host: string, log: Site['log']): Promise<Server> {
-  const examples = join(root, 'examples');
+  const examples = join(root, 'test-models');
   const server = createServer((request, response) => {
     const path = decodeURIComponent(new URL(request.url ?? '/', 'http://x').pathname);
     const answer = (status: number, body: Buffer | string = '', type = 'text/plain; charset=utf-8', headers: Record<string, string> = {}): void => {
@@ -99,8 +99,8 @@ function serve(out: string, host: string, log: Site['log']): Promise<Server> {
     };
     // The test hooks fetch the examples from the host's root, so they are answered there, less those not in this checkout.
     let base: string, rest: string;
-    if (path.startsWith('/examples/') && missingExampleFiles().includes(path.slice('/examples/'.length))) return answer(404, 'Not found');
-    if (path.startsWith('/examples/')) [base, rest] = [examples, path.slice('/examples/'.length)];
+    if (path.startsWith('/test-models/') && missingExampleFiles().includes(path.slice('/test-models/'.length))) return answer(404, 'Not found');
+    if (path.startsWith('/test-models/')) [base, rest] = [examples, path.slice('/test-models/'.length)];
     else if (path.startsWith(PREFIX)) [base, rest] = [out, path.slice(PREFIX.length)];
     else if (path === PREFIX.slice(0, -1)) return answer(301, '', undefined, { location: PREFIX });
     else return answer(404, 'Not found');
@@ -162,7 +162,7 @@ async function open(page: Page, site: Site, path: string, query = '?test=1'): Pr
   page.on('request', (r) => {
     const url = new URL(r.url());
     if (url.protocol === 'data:' || url.protocol === 'blob:') return;
-    if (url.origin !== origin || !(url.pathname.startsWith(PREFIX) || url.pathname.startsWith('/examples/'))) watch.foreign.push(url.href);
+    if (url.origin !== origin || !(url.pathname.startsWith(PREFIX) || url.pathname.startsWith('/test-models/'))) watch.foreign.push(url.href);
   });
   await page.goto(`${site.url}${path}${query}`);
   return watch;

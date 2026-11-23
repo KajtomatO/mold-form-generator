@@ -5,7 +5,7 @@ import type { TestHooks } from '../src/app/testHooks';
 import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { firefoxHasDisplay } from './firefox';
 
-const examples = join(import.meta.dirname, '..', 'examples');
+const examples = join(import.meta.dirname, '..', 'test-models');
 
 /** Firefox has WebGL only on a display, which scripts/ci.sh gives it with xvfb-run when it can. */
 export function canDraw(page: Page): boolean {
@@ -25,11 +25,11 @@ export async function openPipeline(page: Page, errors: string[] = [], query = ''
     if (m.type() === 'error') errors.push(m.text());
   });
   // The preview server answers an unknown path with index.html, so a 200 alone does not mean it is served.
-  const probe = await page.request.get('/examples/jersey-barrier.stl');
+  const probe = await page.request.get('/test-models/jersey-barrier.stl');
   const serveExamples = !probe.ok() || (probe.headers()['content-type'] ?? '').includes('html');
   const missing = missingExampleFiles();
   if (serveExamples || missing.length > 0) {
-    await page.route('**/examples/*', async (route) => {
+    await page.route('**/test-models/*', async (route) => {
       const name = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop()!);
       if (missing.includes(name)) await route.fulfill({ status: 404, body: `${name} is not in this checkout` });
       else if (serveExamples) await route.fulfill({ body: await readFile(join(examples, name)), contentType: 'model/stl' });

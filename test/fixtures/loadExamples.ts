@@ -7,7 +7,7 @@ import { meshBounds, weld, type Bounds, type WeldedMesh } from '../../src/core/m
 import { baseOptions, defaultParams } from '../../src/core/params/defaults';
 import { parseStl, type ParsedStl } from '../../src/core/stl/parse';
 
-const examplesDir = join(import.meta.dirname, '..', '..', 'examples');
+const examplesDir = join(import.meta.dirname, '..', '..', 'test-models');
 
 /** The regression set: the models the goldens were measured on, keyed by the ids the goldens use. */
 export const EXAMPLE_FILES = {
@@ -26,7 +26,7 @@ export type ExampleId = keyof typeof EXAMPLE_FILES;
 
 /**
  * R2: these two have no known source, so they are kept only on the maintainer's machine, named in
- * .gitignore, and a clone of the public repository lacks them (examples/SOURCES.md).
+ * .gitignore, and a clone of the public repository lacks them (test-models/SOURCES.md).
  */
 export const LOCAL_ONLY: readonly ExampleId[] = ['vis35', 'barrel'];
 
@@ -54,12 +54,12 @@ export const EXAMPLE_IDS = (Object.keys(EXAMPLE_FILES) as ExampleId[]).filter(ha
 
 /** Why a test that needs these examples skips. */
 function missingNote(ids: ExampleId[]): string {
-  return `not in this checkout: ${ids.map((id) => EXAMPLE_FILES[id]).join(' and ')}, kept only on the maintainer's machine (examples/SOURCES.md)`;
+  return `not in this checkout: ${ids.map((id) => EXAMPLE_FILES[id]).join(' and ')}, kept only on the maintainer's machine (test-models/SOURCES.md)`;
 }
 
 /**
  * Skips the running test, or each test of a group from its beforeEach, when an example it needs is not in
- * this checkout, naming the file and examples/SOURCES.md. Takes Vitest's test context or Playwright's `test`.
+ * this checkout, naming the file and test-models/SOURCES.md. Takes Vitest's test context or Playwright's `test`.
  */
 export function skipWithout(test: { skip(condition: boolean, note?: string): void }, ...ids: ExampleId[]): void {
   const missing = ids.filter((id) => !hasExample(id));

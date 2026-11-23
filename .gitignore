@@ -8,6 +8,6 @@ playwright-report/
 .vite/
 coverage/
 
-# Two test models with no known source: kept on the maintainer's machine only, never published (examples/SOURCES.md).
-/examples/VIS-35-skan-skalowany.stl
-/examples/l_medieval_barrel.stl
+# Two test models with no known source: kept on the maintainer's machine only, never published (test-models/SOURCES.md).
+/test-models/VIS-35-skan-skalowany.stl
+/test-models/l_medieval_barrel.stl

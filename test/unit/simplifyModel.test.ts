@@ -125,7 +125,7 @@ describe('MM2: the simplified copy of a large model (simplifyModel)', () => {
   });
 
   it('war-barricade to 10,000: the sliver the samples could not lock is proved and locked, so the copy keeps to 0.05 mm, keeping more triangles to do so', () => {
-    const bytes = new Uint8Array(readFileSync(join(import.meta.dirname, '..', '..', 'examples', 'war-barricade.stl')));
+    const bytes = new Uint8Array(readFileSync(join(import.meta.dirname, '..', '..', 'test-models', 'war-barricade.stl')));
     const model = weld(parseStl(bytes).positions);
     const copy = simplifyModel(model, MeshoptSimplifier, 10_000, SIMPLIFY_MAX_ERROR_MM);
     expect(copy.mesh.indices.length / 3).toBe(BARRICADE_COPY);

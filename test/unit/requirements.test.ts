@@ -212,7 +212,7 @@ describe('the docs', () => {
     expect(seven).toContain('`docs/WORKFLOW.md` has the full workflow');
     expect(seven).not.toMatch(/will hold/);
     const readme = doc('README.md');
-    expect(missing(readme, ['docs/WORKFLOW.md', 'docs/DEPLOY.md', 'docs/THIRD_PARTY.md', 'docs/REQUIREMENTS.md', 'docs/PLAN.md', 'docs/BENCHMARKS.md', 'MIT licence', '`LICENSE`', '`examples/` are not covered'])).toEqual([]);
+    expect(missing(readme, ['docs/WORKFLOW.md', 'docs/DEPLOY.md', 'docs/THIRD_PARTY.md', 'docs/REQUIREMENTS.md', 'docs/PLAN.md', 'docs/BENCHMARKS.md', 'MIT licence', '`LICENSE`', '`test-models/` are not covered'])).toEqual([]);
     // The owner chose MIT on 2026-11-09: the licence file, package.json and the docs must agree.
     expect(doc('LICENSE')).toMatch(/^MIT License\n\nCopyright \(c\) 2026 Tomasz Targiel\n/);
     expect(JSON.parse(doc('package.json')).license).toBe('MIT');

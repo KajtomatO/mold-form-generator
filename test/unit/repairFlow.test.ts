@@ -31,7 +31,7 @@ import { finnedBox, foldedBox, openTopBox } from '../fixtures/synthetic';
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const files = new ProjectFiles(inProcessProject);
 const pipelines: Pipeline[] = [];
-const examples = join(import.meta.dirname, '..', '..', 'examples');
+const examples = join(import.meta.dirname, '..', '..', 'test-models');
 const OIL = 'N Scale Oil Barrel.stl';
 const oil = new Uint8Array(readFileSync(join(examples, OIL)));
 const stlOf = (mesh: WeldedMesh): Uint8Array => writeBinaryStl(mesh.positions, mesh.indices);

@@ -8,7 +8,7 @@ import { parseStl } from '../../src/core/stl/parse';
 import { HEAVY_BLOCK, heightBlockStl, heightBlockTriangles } from '../fixtures/heavy';
 import { asciiStl, box, toSoup } from '../fixtures/synthetic';
 
-const examplesDir = join(import.meta.dirname, '..', '..', 'examples');
+const examplesDir = join(import.meta.dirname, '..', '..', 'test-models');
 const examples = readdirSync(examplesDir).filter((name) => name.toLowerCase().endsWith('.stl'));
 const head = (bytes: Uint8Array): Uint8Array => bytes.subarray(0, HEAD_BYTES);
 

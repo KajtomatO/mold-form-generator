@@ -161,7 +161,7 @@ describe('MM2: the question before a large model loads', () => {
   it('at the real warning point no example is looked at first: doomedmarine, the largest, is read whole at once', async () => {
     const { store, p } = setup(LARGE_MODEL);
     const { readFileSync } = await import('node:fs');
-    const bytes = new Uint8Array(readFileSync(new URL('../../examples/doomedmarine.stl', import.meta.url)));
+    const bytes = new Uint8Array(readFileSync(new URL('../../test-models/doomedmarine.stl', import.meta.url)));
     expect(bytes.length).toBeLessThan(minBytesToLook(LARGE_MODEL));
     const { file, reads } = counted(bytes, 'doomedmarine.stl');
     await store.openFile(file);

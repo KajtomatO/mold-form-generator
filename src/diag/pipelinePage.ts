@@ -40,7 +40,7 @@ pipeline.subscribe(() => {
 window.addEventListener('resize', () => scene?.resize());
 
 async function fetchModel(name: string): Promise<Uint8Array> {
-  const response = await fetch(`/examples/${encodeURIComponent(name)}`);
+  const response = await fetch(`/test-models/${encodeURIComponent(name)}`);
   if (!response.ok) throw new Error(`Could not fetch ${name}: ${response.status}`);
   return new Uint8Array(await response.arrayBuffer());
 }

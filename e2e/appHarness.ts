@@ -6,7 +6,7 @@ import type { PreviewScene } from '../src/view/scene';
 import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { canDraw, hooks } from './pipelineHarness';
 
-const examples = join(import.meta.dirname, '..', 'examples');
+const examples = join(import.meta.dirname, '..', 'test-models');
 
 /** What a test learns about a page while it runs: errors, and every request that left for another host. */
 export interface PageWatch {
@@ -27,7 +27,7 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
   page.on('console', (m) => {
     if (m.type() === 'error') watch.errors.push(m.text());
   });
-  const probe = await page.request.get('/examples/jersey-barrier.stl');
+  const probe = await page.request.get('/test-models/jersey-barrier.stl');
   const serveExamples = !probe.ok() || (probe.headers()['content-type'] ?? '').includes('html');
   const missing = missingExampleFiles();
   await page.route('**/*', async (route) => {
@@ -37,7 +37,7 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
       await route.abort();
       return;
     }
-    if (url.pathname.startsWith('/examples/')) {
+    if (url.pathname.startsWith('/test-models/')) {
       const name = decodeURIComponent(url.pathname.split('/').pop()!);
       if (missing.includes(name)) {
         await route.fulfill({ status: 404, body: `${name} is not in this checkout` });
@@ -63,7 +63,7 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
  */
 export async function dropExample(page: Page, name: string, options: { on?: string; text?: string } = {}): Promise<boolean> {
   return page.evaluate(async ({ file, on, text }) => {
-    const bytes = text !== undefined ? new TextEncoder().encode(text) : await (await fetch(`/examples/${encodeURIComponent(file)}`)).arrayBuffer();
+    const bytes = text !== undefined ? new TextEncoder().encode(text) : await (await fetch(`/test-models/${encodeURIComponent(file)}`)).arrayBuffer();
     const transfer = new DataTransfer();
     transfer.items.add(new File([bytes], file, { type: 'model/stl' }));
     const target = document.querySelector(on)!;

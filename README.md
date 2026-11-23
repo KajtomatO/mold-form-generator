@@ -100,10 +100,10 @@ Many tests are pinned at the defaults, so after a change they fail on purpose an
 
 ## The example models
 
-`examples/` holds models to try the app with, which its tests use too. They are other people's work, shared on Printables under Creative Commons licences, about half of which allow no commercial use. `examples/SOURCES.md` names each one's author, its page and its licence, and says which were changed.
+`test-models/` holds the models the tests use (until 0.3.0 this folder was `examples/`). They are other people's work, shared on Printables under Creative Commons licences, about half of which allow no commercial use. `test-models/SOURCES.md` names each one's author, its page and its licence, and says which were changed.
 
 ## Licence
 
-The app is released under the MIT licence: see `LICENSE`. The example models in `examples/` are not covered by it: they belong to their authors and keep their own terms, as `examples/SOURCES.md` lists them. The software the app is built with keeps its own licences, which `docs/THIRD_PARTY.md` lists and the app links to as "Third-party licences" at the foot of the Advanced section.
+The app is released under the MIT licence: see `LICENSE`. The example models in `test-models/` are not covered by it: they belong to their authors and keep their own terms, as `test-models/SOURCES.md` lists them. The software the app is built with keeps its own licences, which `docs/THIRD_PARTY.md` lists and the app links to as "Third-party licences" at the foot of the Advanced section.
 
 The app's layout follows the conventions of BumpMesh, as the original requirements asked. BumpMesh is under the AGPL, so it was a layout reference only: nothing was copied from it.
