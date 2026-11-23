@@ -2,9 +2,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { flangeTip, moldExtent, refusalReason } from '../app/derived';
 import { AXIS_INDEX, sectionPlane, type Store } from '../app/store';
 import { FLANGE_GAP, type DropResult, type OpeningKind } from '../core/analysis/validate';
+import { galleryEntry } from '../gallery/catalogue';
 import type { PreviewScene } from '../view/scene';
 import { useStore } from './context';
 import { DiagnosticsCard } from './DiagnosticsCard';
+import { DropHintExamples } from './Gallery';
 import { FileButton, OPEN_LABEL, OPEN_TITLE, openFile } from './files';
 import { fixed, units } from './format';
 import { Cross, Inbox } from './icons';
@@ -139,6 +141,10 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
   const dragged = store.drag.value;
   // A file that did not parse leaves nothing to show parts of, nor anything that will come up to date.
   const parsed = store.pipeline.parsed !== null;
+  // GA: the default model while it is fetched on a page load, said quietly in place of the drop hint, which shows
+  // again if the fetch fails.
+  const pendingId = store.galleryPending.value;
+  const pending = pendingId === null ? null : galleryEntry(pendingId, store.gallery.value);
   const software = softwareSeen ? null : SOFTWARE.exec(store.renderer.value)?.[0] ?? null;
 
   return (
@@ -240,12 +246,19 @@ export function Viewport({ scene, canvas }: { scene: PreviewScene | null; canvas
       }}
     >
       {!scene ? <div class="no-gl">This browser cannot draw the 3D view, as it has no WebGL 2. The settings and checks still work.</div> : null}
-      {!store.pipeline.modelName ? (
+      {!store.pipeline.modelName && pending ? (
+        <div class="drop-hint">
+          <p class="drop-pending" role="status" data-testid="gallery-pending">
+            Opening {pending.title}…
+          </p>
+        </div>
+      ) : !store.pipeline.modelName ? (
         <div class="drop-hint">
           <div>
             <Inbox />
             <p>Drop an STL or a project here</p>
             <FileButton store={store} label={OPEN_LABEL} title={OPEN_TITLE} />
+            <DropHintExamples />
           </div>
         </div>
       ) : null}

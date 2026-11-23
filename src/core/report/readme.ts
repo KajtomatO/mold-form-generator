@@ -67,6 +67,11 @@ export interface ReadmeInput {
     merged: boolean;
     trimmedTo?: number;
   };
+  /**
+   * GA: the model is a gallery model the project does not own (R48): its title, its author and their page, the
+   * model's page and its source, and its licence by its full name with its deed. Only for such a model.
+   */
+  credit?: { title: string; author: string; authorUrl: string; url: string; source: string; licence: string; deed: string };
 }
 
 /** RM: what README.txt says of a repaired copy, as its record has it. */
@@ -146,6 +151,8 @@ export function exportReadme(input: ReadmeInput): string {
   out.push(...title, '='.repeat(Math.max(...title.map((line) => line.length))));
   const copies = input.tiles;
   para(`Made by ${input.app} ${input.version} from ${input.model}. This ZIP holds a two-part plastic mold box, a base and a cover. You print both, join them, and pour silicone into the space between your model and the cover. The cured silicone is your casting mold.`);
+  const credit = input.credit;
+  if (credit) para(`The model is ${credit.title} by ${credit.author} (${credit.authorUrl}), from ${credit.source} (${credit.url}), under the ${credit.licence} licence (${credit.deed}). It is not ${input.app}'s: credit its author when you share it or what you cast from it.`);
 
   out.push(...heading('The files'));
   out.push('', 'cover.stl');

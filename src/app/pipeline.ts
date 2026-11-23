@@ -11,6 +11,7 @@ import { defaultParams, resolveAuto } from '../core/params/defaults';
 import { crossParameterErrors } from '../core/params/rules';
 import { MANIFOLD_TRIANGLE_LIMIT } from '../core/mesh/simplify';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
+import type { GalleryCredit } from '../gallery/catalogue';
 import type { CutOpening } from '../core/parts/openings';
 import type { Diagnostic } from '../core/report/diagnostics';
 import type { ExportInputs, ExportMeta, ExportOutputs, ExportRequest } from '../workers/exportJob';
@@ -262,7 +263,8 @@ export class Pipeline {
    * simplified model (MM2), `bytes` are the copy's, which the mold is made from, while `name` and `sha256` are
    * the maker's own file's, which `origin` keeps, unread, for model_oriented.stl and Save project.
    */
-  private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null; origin: ModelOrigin | null } | null = null;
+  /** GA: `gallery` is the credit of a gallery model not ours, which the export's README.txt and project.json carry (R48). */
+  private file: { id: string; name: string; bytes: Uint8Array; sha256: string | null; origin: ModelOrigin | null; gallery: GalleryCredit | null } | null = null;
   private planeCheck: PlaneCheck | null = null;
   /**
    * M11c: the format and app version of the project on screen, until the import has said whether this model
@@ -411,7 +413,7 @@ export class Pipeline {
     // An export still waiting for the preview was asked for the model this one replaces, so it stops.
     this.exportWait?.();
     // A simplified model's hash is its file's, which the job that made the copy worked out.
-    this.file = { id: `f${++this.loads}`, name, bytes, sha256: origin?.from.sha256 ?? null, origin };
+    this.file = { id: `f${++this.loads}`, name, bytes, sha256: origin?.from.sha256 ?? null, origin, gallery: null };
     this.planeCheck = null;
     this.numbering = null;
     this.plane = DEFAULT_PLANE;
@@ -536,6 +538,18 @@ export class Pipeline {
   /** Keeps a hash worked out off main, if the model it was worked out for is still the one loaded. A copy's is its file's already. */
   noteModelSha256(bytes: Uint8Array, sha256: string): void {
     if (this.file?.bytes === bytes && !this.file.origin) this.file.sha256 = sha256;
+  }
+
+  /** GA: the credit of the model on screen, a gallery model not ours, from the gallery or a saved project (R48); set after its load. */
+  setGallery(credit: GalleryCredit | null): void {
+    if (!this.file || this.file.gallery === credit) return;
+    this.file.gallery = credit;
+    this.notify();
+  }
+
+  /** GA: the credit of the model on screen, or null for any model the project or the maker owns. */
+  gallery(): GalleryCredit | null {
+    return this.file?.gallery ?? null;
   }
 
   /** MM2: what the model on screen was made from, when it is a simplified copy of the maker's file, or null. */
@@ -1027,6 +1041,7 @@ export class Pipeline {
       notes: notes.map(plain),
       ...(origin?.record ? { simplified: { from: origin.from, record: origin.record } } : {}),
       ...(origin?.repair ? { repaired: { from: origin.from, record: origin.repair.record } } : {}),
+      ...(this.file!.gallery ? { gallery: this.file!.gallery } : {}),
     };
   }
 

@@ -73,7 +73,7 @@ export function unreadable(name: string, error: unknown): InlineError {
   return Object.assign(new InlineError('original-unreadable', `${name} could not be read again: it may have been moved, renamed or changed since you opened it. Open it again.`), { details: reason });
 }
 
-/** The STL a source holds: the file itself, or a .moldproj's model.stl. */
+/** The STL a source holds: the file itself, a gallery model's, or a .moldproj's model.stl. */
 export function originalBytes(source: OriginalSource, name: string, readBlob: (blob: Blob) => Uint8Array): Uint8Array {
   let bytes: Uint8Array;
   try {
@@ -81,7 +81,7 @@ export function originalBytes(source: OriginalSource, name: string, readBlob: (b
   } catch (error) {
     throw unreadable(name, error);
   }
-  if (source.kind === 'stl') return bytes;
+  if (source.kind !== 'moldproj') return bytes;
   const { stl } = unpackProject(bytes, name);
   if (!stl) throw new InlineError('original-unreadable', `${name} is damaged: the model saved inside it is missing.`);
   return stl;

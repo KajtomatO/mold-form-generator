@@ -146,6 +146,7 @@ export default defineConfig((): UserConfig => {
           diag: resolve(root, 'diag.html'),
           bench: resolve(root, 'bench.html'),
           pipeline: resolve(root, 'pipeline.html'),
+          media: resolve(root, 'media.html'),
         },
       },
     },

@@ -2,6 +2,7 @@ import type { OpeningPin } from '../core/analysis/placement';
 import type { StoredPlane } from '../core/base/storedPlane';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import type { PlaneChoice } from '../workers/fieldStages';
+import type { GalleryCredit } from '../gallery/catalogue';
 import { BUILD } from './buildInfo';
 import type { RepairedEntry, SimplifiedEntry } from './simplified';
 
@@ -33,20 +34,25 @@ export interface ProjectFile extends Project {
   /**
    * MM2: the mold was made from a simplified copy of `model` (R42), which a .moldproj holds as simplified.stl
    * beside the file itself; `plane`, `pins` and `removed` are the copy's. Only for a simplified model, so the
-   * project.json of any other keeps its bytes, and the format stays 6.
+   * project.json of any other keeps its bytes, and it took no new format (6).
    */
   simplified?: SimplifiedEntry;
   /**
    * RM: the mold was made from a repaired copy of `model` (R43), which a .moldproj holds as repaired.stl beside the
    * file itself; `plane`, `pins` and `removed` are the copy's. Only for a repaired model, so the project.json of any
-   * other keeps its bytes, and the format stays 6. A version that does not know it leaves it out and opens the file.
+   * other keeps its bytes, and it took no new format (6). A version that does not know it leaves it out and opens the file.
    */
   repaired?: RepairedEntry;
+  /**
+   * GA: the credit of a gallery model not ours (R48): its id, title, author, pages and licence, so a saved project
+   * shows it again without looking it up. Only for such a model, so the project.json of any other keeps its bytes.
+   */
+  gallery?: GalleryCredit;
 }
 
 /** The fields in the order project.json lists them, so the file reads from what it is about to what it holds. */
-export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null; simplified?: SimplifiedEntry; repaired?: RepairedEntry }): ProjectFile {
-  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...(identity.simplified ? { simplified: identity.simplified } : {}), ...(identity.repaired ? { repaired: identity.repaired } : {}), ...project };
+export function projectFile(project: Project, model: string, identity: { modelSha256: string | null; basePlane: StoredPlane | null; simplified?: SimplifiedEntry; repaired?: RepairedEntry; gallery?: GalleryCredit | null }): ProjectFile {
+  return { schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model, modelSha256: identity.modelSha256, basePlane: identity.basePlane, ...(identity.simplified ? { simplified: identity.simplified } : {}), ...(identity.repaired ? { repaired: identity.repaired } : {}), ...(identity.gallery ? { gallery: identity.gallery } : {}), ...project };
 }
 
 /** project.json's text, as both a .moldproj and the export ZIP write it. */

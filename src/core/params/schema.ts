@@ -22,10 +22,11 @@ import DEFAULTS from './defaults.json' with { type: 'json' };
  * Version 1 came with M6b's export ZIP; 2 added the STL's hash and the base plane itself (M9); 3 the bolts
  * (M10); 4 changes no field but says that the pins and removed vents number bodies as joined parts (M11c's
  * rule, R1), which the app once told by the app version; 5 the silicone base layer, which a file of an older
- * format opens without; 6 the funnel's flange, which a file of an older format opens without too. An older
- * file is migrated one version at a time, by src/app/projectFile.ts.
+ * format opens without; 6 the funnel's flange, which a file of an older format opens without too; 7 (0.3.0) the optional
+ * `gallery` field, the credit of an example model not ours (GA). An older file is migrated one version at a
+ * time, by src/app/projectFile.ts.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export interface NumberDef {
   kind: 'number';

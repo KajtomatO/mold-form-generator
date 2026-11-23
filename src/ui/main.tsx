@@ -4,6 +4,7 @@ import { ModelSimplifier } from '../app/modelSimplifier';
 import { Pipeline, type PipelineOptions } from '../app/pipeline';
 import { ProjectFiles } from '../app/projectFiles';
 import { Store } from '../app/store';
+import { modelToOpen } from '../gallery/catalogue';
 import { installTestHooks, recordWorkers } from '../app/testHooks';
 import { PreviewScene } from '../view/scene';
 import type { WorkerLike } from '../workers/protocol';
@@ -52,7 +53,12 @@ if (test) {
     if (!response.ok) throw new Error(`Could not fetch ${name}: ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   };
-  installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel, solidWorkers.records);
+  installTestHooks(pipeline, options, scene ?? { worldToScreen: noView, setCamera: noView }, fetchModel, solidWorkers.records, null, store);
   // saveBytes too, so a test can time the very download Save project makes on a file too large to load.
   (window as unknown as { __app: unknown }).__app = { store, scene, saveBytes };
 }
+
+// GA: the default example on a plain load, or the one ?model=<id> names, once the page has drawn, and only with a 3D
+// view (D29). Under ?test=1 the page stays empty unless the URL names a model. A file opened meanwhile wins.
+const example = modelToOpen(location.search, store.gallery.value);
+if (example && scene) void store.openGallery(example, true);

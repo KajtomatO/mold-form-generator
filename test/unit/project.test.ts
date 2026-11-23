@@ -24,6 +24,9 @@ import { inProcessField, inProcessProject, inProcessSolid } from '../fixtures/in
 import { exampleBytes, EXAMPLE_FILES, hasExample, skipWithout } from '../fixtures/loadExamples';
 import { declaredSize, raised, zipDates } from '../fixtures/projectFiles';
 import { asciiStl, box, join as joinMeshes, toSoup } from '../fixtures/synthetic';
+import { THIRD_PARTY, WITH_THIRD_PARTY } from '../fixtures/galleryFixture';
+import { loadGallery } from '../fixtures/loadGallery';
+import { creditOf } from '../../src/gallery/catalogue';
 
 /** A binary STL of these triangles, with `count` in its header in place of the real one. */
 function binaryOf(soup: Float32Array, count: number): Uint8Array {
@@ -184,20 +187,20 @@ describe('pack and unpack', () => {
 });
 
 describe('migration', () => {
-  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 6 with the hash and plane unknown, the bolts off, no base layer and no flange', () => {
+  it('M8\'s version 1 project.json, from a real export ZIP, migrates to version 7 with the hash and plane unknown, the bolts off, no base layer and no flange', () => {
     const read = readProjectJson(fixture('v1-jersey-export.json'));
     const v1 = JSON.parse(fixture('v1-jersey-export.json'));
     expect(v1.schemaVersion).toBe(1);
     expect(read.from).toBe(1);
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBe(7);
     expect(read.file).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, modelSha256: null, basePlane: null, params: { ...v1.params, bolts: V3_BOLTS, silicone: { ...v1.params.silicone, ...V5_LAYER }, funnel: { ...v1.params.funnel, ...V6_FLANGE } } });
     // The pocket's edited flag is its value, 0.4, where an unedited one is null.
     expect(read.file.params.base.pocketDepth).toBe(0.4);
     expect(read.file.params.silicone.printMargin).toBeNull();
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 7.' }, V6_NOTE]);
   });
 
-  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 6 with the bolts off, no base layer, no flange and nothing else changed', () => {
+  it('M9\'s version 2 project.json, from a real export ZIP, migrates to version 7 with the bolts off, no base layer, no flange and nothing else changed', () => {
     const read = readProjectJson(fixture('v2-jersey-export.json'));
     const v2 = JSON.parse(fixture('v2-jersey-export.json'));
     expect(v2).toMatchObject({ schemaVersion: 2, appVersion: '0.2.0' });
@@ -211,7 +214,7 @@ describe('migration', () => {
     // The hash and the plane came with format 2, and stay as saved.
     expect(read.file.modelSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(read.file.basePlane).toEqual(v2.basePlane);
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 2 by an earlier version of the app, and brought up to format 7.' }, V6_NOTE]);
   });
 
   it('a project of format 4 opens without the base layer, and one that holds its settings, as the 1.0.2 test build wrote, keeps them', () => {
@@ -220,7 +223,7 @@ describe('migration', () => {
     const plain = readProjectJson(JSON.stringify(v4));
     expect(plain.from).toBe(4);
     expect(plain.file.params.silicone).toEqual({ ...v2.params.silicone, ...V5_LAYER });
-    expect(plain.notes).toEqual([{ severity: 'info', message: 'Saved in project format 4 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
+    expect(plain.notes).toEqual([{ severity: 'info', message: 'Saved in project format 4 by an earlier version of the app, and brought up to format 7.' }, V6_NOTE]);
     const tested = { ...v4, appVersion: '1.0.2', params: { ...v4.params, silicone: { ...v4.params.silicone, baseLayer: 4.5, baseLayerSlopeDeg: 0 } } };
     expect(readProjectJson(JSON.stringify(tested)).file.params.silicone).toMatchObject({ baseLayer: 4.5, baseLayerSlopeDeg: 0 });
     // Following t, as a new project does, survives as well.
@@ -235,8 +238,8 @@ describe('migration', () => {
     expect(read.from).toBe(5);
     expect(read.file.params.funnel).toEqual({ ...v2.params.funnel, ...V6_FLANGE });
     // Everything else as saved.
-    expect({ ...read.file, params: { ...read.file.params, funnel: v5.params.funnel } }).toEqual({ ...v5, schemaVersion: 6 });
-    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 5 by an earlier version of the app, and brought up to format 6.' }, V6_NOTE]);
+    expect({ ...read.file, params: { ...read.file.params, funnel: v5.params.funnel } }).toEqual({ ...v5, schemaVersion: 7 });
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 5 by an earlier version of the app, and brought up to format 7.' }, V6_NOTE]);
     // With no funnel there is nothing to say of its flange; with a land of 2 mm, a flange of 1.5 still fits the cover.
     const bare = { ...v5, params: { ...v5.params, funnel: { ...v5.params.funnel, generate: false } } };
     expect(readProjectJson(JSON.stringify(bare)).notes).toHaveLength(1);
@@ -299,8 +302,12 @@ describe('migration', () => {
       seen.push(f.schemaVersion as number);
       return MIGRATIONS[5](f, notes);
     };
-    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6 });
-    expect(seen).toEqual([0, 1, 2, 3, 4, 5]);
+    const v6ToV7: Migration = (f, notes) => {
+      seen.push(f.schemaVersion as number);
+      return MIGRATIONS[6](f, notes);
+    };
+    const read = readProjectJson(fixture('v0-synthetic.json'), { 0: v0ToV1, 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6, 6: v6ToV7 });
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(read.file.params.silicone).toMatchObject(V5_LAYER);
     expect(read.file.params.funnel).toMatchObject(V6_FLANGE);
     expect(read.file.params.bolts).toEqual(V3_BOLTS);
@@ -309,7 +316,7 @@ describe('migration', () => {
     expect(read.file.params.grid.nx).toBe(2);
     expect(read.file.params.reports).toEqual(defaultParams().reports);
     expect(read.notes).toEqual([
-      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 6.' },
+      { severity: 'info', message: 'Saved in project format 0 by an earlier version of the app, and brought up to format 7.' },
       V6_NOTE,
       { severity: 'warning', message: 'Not in the file, so as for a new model: moved openings, so none; removed vents, so none.' },
       { severity: 'warning', message: 'Not in the file, so at their defaults: Smallest reported volume, Smallest air pocket depth.' },
@@ -319,10 +326,10 @@ describe('migration', () => {
   });
 
   it('a version newer than the app knows, and a file with no version, say so plainly, naming the file', () => {
-    expect(reason(() => readProjectJson(edited('schemaVersion', 7), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${BUILD.version}), in project format 7; this one reads formats up to 6. Open it in the version of the app that saved it.`);
+    expect(reason(() => readProjectJson(edited('schemaVersion', 8), MIGRATIONS, 'next.moldproj'))).toBe(`next.moldproj was saved by a newer version of the app (app version ${BUILD.version}), in project format 8; this one reads formats up to 7. Open it in the version of the app that saved it.`);
     // A visitor cannot update a web page, and a new format reaches the beta site first, so a file from beta says where to open it.
-    const fromBeta = JSON.stringify({ ...JSON.parse(edited('schemaVersion', 7)), appVersion: '0.2.0-beta+a1b2c3d' });
-    expect(reason(() => readProjectJson(fromBeta, MIGRATIONS, 'next.moldproj'))).toBe("next.moldproj was saved by a newer version of the app (app version 0.2.0-beta+a1b2c3d), in project format 7; this one reads formats up to 6. Open it on the beta site that saved it, at the app's web address with beta/ at the end.");
+    const fromBeta = JSON.stringify({ ...JSON.parse(edited('schemaVersion', 8)), appVersion: '0.2.0-beta+a1b2c3d' });
+    expect(reason(() => readProjectJson(fromBeta, MIGRATIONS, 'next.moldproj'))).toBe("next.moldproj was saved by a newer version of the app (app version 0.2.0-beta+a1b2c3d), in project format 8; this one reads formats up to 7. Open it on the beta site that saved it, at the app's web address with beta/ at the end.");
     expect(reason(() => readProjectJson(edited('schemaVersion', undefined)))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => readProjectJson(edited('schemaVersion', '2')))).toBe(`project.json does not say which project format it is in, so there is no telling how to read it. ${OPEN_AGAIN}`);
     expect(reason(() => migrate([1, 2]))).toBe(`project.json holds no settings this app can read. ${OPEN_AGAIN}`);
@@ -922,7 +929,7 @@ describe('save and open with the real pipeline on jersey', () => {
       severity: 'info',
       message: 'Applied the settings of project.json to jersey-barrier.stl.',
       notes: [
-        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 6.' },
+        { severity: 'info', message: 'Saved in project format 1 by an earlier version of the app, and brought up to format 7.' },
         V6_NOTE,
         { severity: 'info', message: 'project.json does not record its model\'s contents, so it was matched to jersey-barrier.stl by the file name alone.' },
       ],
@@ -1011,8 +1018,8 @@ describe('save and open with the real pipeline on jersey', () => {
     // A format 3 file that names 0.1.0, which never wrote format 3, is reset as any other format 3 one.
     expect((await opened(saved(3, '0.1.0'))).pipeline.project().pins).toEqual([]);
 
-    // What a save writes now is the current format, 6, with this build's version, and it opens with its pins.
-    expect(JSON.parse(projectJson(projectFile(old, 'hat.stl', { modelSha256: null, basePlane: null })))).toMatchObject({ schemaVersion: 6, appVersion: BUILD.version });
+    // What a save writes now is the current format, 7, with this build's version, and it opens with its pins.
+    expect(JSON.parse(projectJson(projectFile(old, 'hat.stl', { modelSha256: null, basePlane: null })))).toMatchObject({ schemaVersion: 7, appVersion: BUILD.version });
 
     // A model of one part numbers its body the same in every version, so a 1.0.0 project of it keeps them.
     const jerseyPins: Project = { ...old, pins: [{ id: 'b0:pour:0', kind: 'pour', x: 3, y: 0 }], removed: [] };
@@ -1313,5 +1320,221 @@ describe('RM: the record of a repaired copy in project.json', () => {
     expect(out.simplified).toBeTruthy();
     expect(out.repaired).toBeUndefined();
     expect(notes.map((n) => n.message)).toEqual([dropped]);
+  });
+});
+
+describe('GA: format 7 and a gallery model\'s credit (R48)', () => {
+  const credit = creditOf(THIRD_PARTY)!;
+  const pipelines: Pipeline[] = [];
+  afterEach(() => {
+    pipelines.splice(0).forEach((p) => p.dispose());
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const projectFiles = new ProjectFiles(inProcessProject);
+  const store = (): Store => {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    const s = new Store(p, () => 0, projectFiles);
+    s.gallery.value = WITH_THIRD_PARTY;
+    // The cube's file, as the fixture's model is, from public/gallery/ and not over the network.
+    s.galleryFetch = async (entry) => new Blob([loadGallery(entry.id, WITH_THIRD_PARTY).slice()]);
+    return s;
+  };
+  function captureSaves(): { name: string; bytes: Promise<Uint8Array> }[] {
+    const saved: { name: string; bytes: Promise<Uint8Array> }[] = [];
+    let blob: Blob | null = null;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((b) => {
+      blob = b as Blob;
+      return 'blob:test/1';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const anchor = { href: '', download: '', style: {}, click: () => saved.push({ name: anchor.download, bytes: blob!.arrayBuffer().then((b) => new Uint8Array(b)) }), remove: () => {} };
+    vi.stubGlobal('document', { createElement: () => anchor, body: { append: () => {} } });
+    return saved;
+  }
+
+  it('the format 6 sphere, saved at c7daedc, opens as it was, with no gallery field and only the note that it was brought up', () => {
+    const v6 = JSON.parse(fixture('v6-sphere.json'));
+    expect(v6.schemaVersion).toBe(6);
+    expect('gallery' in v6).toBe(false);
+    const read = readProjectJson(fixture('v6-sphere.json'));
+    expect(read.from).toBe(6);
+    expect(read.file).toEqual({ ...v6, schemaVersion: 7 });
+    expect(read.file.gallery).toBeUndefined();
+    expect(read.notes).toEqual([{ severity: 'info', message: 'Saved in project format 6 by an earlier version of the app, and brought up to format 7.' }]);
+    expect(read.file.modelSha256).toBe(nodeSha(loadGallery('sphere')));
+  });
+
+  it('a credit is written after the copies\' records and before the project, and read back as it was', () => {
+    const f = projectFile({ params: defaultParams(), plane: DEFAULT_PLANE, pins: [], removed: [] }, 'cube.stl', { modelSha256: null, basePlane: null, gallery: credit });
+    expect(Object.keys(f)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'gallery', 'params', 'plane', 'pins', 'removed']);
+    const read = readProjectJson(projectJson(f));
+    expect(read.file.gallery).toEqual(credit);
+    expect(projectJson(read.file)).toBe(projectJson(f));
+    expect(read.notes).toEqual([]);
+    // None for a model not from the gallery, and no field at all.
+    expect('gallery' in projectFile({ params: defaultParams(), plane: DEFAULT_PLANE, pins: [], removed: [] }, 'x.stl', { modelSha256: null, basePlane: null, gallery: null })).toBe(false);
+  });
+
+  it.each<[string, unknown]>([
+    ['not an object', 'Test Block by A. Tester'],
+    ['no author', { ...credit, author: '' }],
+    ['a page that is not https', { ...credit, url: 'http://www.printables.com/model/1' }],
+    ['an author\'s page that is no address', { ...credit, authorUrl: 'javascript:alert(1)' }],
+    ['a licence the gallery does not take', { ...credit, licence: 'CC-BY-NC-4.0' }],
+    ['a title too long', { ...credit, title: 'x'.repeat(201) }],
+  ])('drops a gallery field with %s, with the warning for fields not understood, and opens the rest', (_, gallery) => {
+    const f = { ...projectFile({ params: defaultParams(), plane: DEFAULT_PLANE, pins: [], removed: [] }, 'cube.stl', { modelSha256: null, basePlane: null }), gallery };
+    const read = readProjectJson(JSON.stringify(f));
+    expect(read.file.gallery).toBeUndefined();
+    expect(read.notes).toEqual([{ severity: 'warning', message: 'Fields this version does not know, left out: gallery.' }]);
+  });
+
+  it('a model not ours opened from the gallery shows its credit, which Save project keeps, and the project opens again with it; Export ZIP carries it in README.txt and project.json', async () => {
+    const saves = captureSaves();
+    const s = store();
+    await s.openGallery(THIRD_PARTY.id);
+    await s.pipeline.idle();
+    expect(s.pipeline.modelName).toBe('cube.stl');
+    expect(s.galleryModel.value).toBe(THIRD_PARTY.id);
+    expect(s.pipeline.gallery()).toEqual(credit);
+    expect(s.unsaved()).toBe(false);
+    expect(s.history.depth).toEqual({ undo: 0, redo: 0 });
+
+    const outputs = await s.pipeline.exportParts(() => {}, undefined, { want: 'zip', fitTest: false });
+    const readme = text(outputs.files['README.txt']).replace(/\r\n\s*/g, ' ');
+    expect(readme).toContain('The model is Test Block by A. Tester (https://www.printables.com/@ATester_1), from Printables (https://www.printables.com/model/1), under the Creative Commons Attribution 4.0 International licence (https://creativecommons.org/licenses/by/4.0/).');
+    expect(JSON.parse(text(outputs.files['project.json'])).gallery).toEqual(credit);
+
+    await s.saveProject();
+    const zip = await saves[0].bytes;
+    expect(saves[0].name).toBe('cube.moldproj');
+    expect(JSON.parse(text(unzipSync(zip)[PROJECT_ENTRY])).gallery).toEqual(credit);
+
+    // Another page, whose gallery has no such model, opens the project and shows the credit from the file alone.
+    const t = store();
+    t.gallery.value = [];
+    await t.openFile(new File([zip.slice()], 'cube.moldproj'));
+    await t.pipeline.idle();
+    expect(t.pipeline.modelName).toBe('cube.stl');
+    expect(t.pipeline.gallery()).toEqual(credit);
+    // A project opened from a file is the maker's own, not a gallery model: it asks before it is replaced.
+    expect(t.galleryModel.value).toBeNull();
+    // A new model takes the credit away.
+    t.load(loadGallery('sphere'), 'sphere.stl');
+    expect(t.pipeline.gallery()).toBeNull();
+  });
+
+  it('our own models show no credit, and a gallery model is replaced with no question, even with a setting changed, while leaving still asks', async () => {
+    const s = store();
+    await s.openGallery('sphere');
+    await s.pipeline.idle();
+    expect(s.pipeline.modelName).toBe('sphere.stl');
+    expect(s.pipeline.gallery()).toBeNull();
+    s.setParam('silicone.t', 4);
+    expect(s.unsaved()).toBe(true);
+    await s.openFile(new File([exampleBytes('jersey').slice()], EXAMPLE_FILES.jersey));
+    expect(s.replacing.value).toBeNull();
+    expect(s.pipeline.modelName).toBe(EXAMPLE_FILES.jersey);
+    expect(s.galleryModel.value).toBeNull();
+    // The maker's own model, changed, asks before a gallery model replaces it.
+    s.setParam('silicone.t', 5);
+    expect(s.unsaved()).toBe(true);
+    await s.openGallery('cone');
+    expect(s.replacing.value).toEqual({ name: 'cone.stl', model: EXAMPLE_FILES.jersey });
+    await s.answerReplace('discard');
+    expect(s.pipeline.modelName).toBe('cone.stl');
+  });
+
+  it('the default model opens only while nothing else was asked for: a file opened during its fetch wins, and a failed fetch leaves the page empty', async () => {
+    const s = store();
+    let release: (() => void) | null = null;
+    s.galleryFetch = (entry) => new Promise((resolve) => (release = () => resolve(new Blob([loadGallery(entry.id).slice()]))));
+    const initial = s.openGallery('sphere', true);
+    await s.openFile(new File([exampleBytes('jersey').slice()], EXAMPLE_FILES.jersey));
+    release!();
+    await initial;
+    expect(s.pipeline.modelName).toBe(EXAMPLE_FILES.jersey);
+    // After a file, the default does not even start.
+    let asked = 0;
+    s.galleryFetch = async () => {
+      asked++;
+      return new Blob([]);
+    };
+    await s.openGallery('sphere', true);
+    expect(asked).toBe(0);
+    // A failed fetch of the default says so in the console only.
+    const empty = store();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    empty.galleryFetch = async () => {
+      throw new Error('Could not fetch gallery/sphere.stl: 404 Not Found');
+    };
+    await empty.openGallery('sphere', true);
+    expect(empty.pipeline.modelName).toBeNull();
+    expect(empty.fileNotice.value).toBeNull();
+    expect(empty.fileBusy.value).toBeNull();
+    expect(warn).toHaveBeenCalledWith('Could not fetch gallery/sphere.stl: 404 Not Found');
+    // A card's failed fetch says so under the file row.
+    await empty.openGallery('cube');
+    expect(empty.fileNotice.value).toMatchObject({ severity: 'error', message: 'The example Cube could not be fetched. Check the connection and try again.' });
+  });
+
+  it('a file opened while a card\'s model is fetched takes the busy line away, even one that is not opened, so Simplify and Repair are not held back', async () => {
+    const s = store();
+    let release: (() => void) | null = null;
+    s.galleryFetch = (entry) => new Promise((resolve) => (release = () => resolve(new Blob([loadGallery(entry.id).slice()]))));
+    const card = s.openGallery('cube');
+    expect(s.fileBusy.value).toBe('Fetching Cube…');
+    await s.openFile(new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0])], 'photo.png'));
+    expect(s.fileNotice.value).toMatchObject({ severity: 'error', message: expect.stringContaining('photo.png is not an STL or a project file') });
+    release!();
+    await card;
+    expect(s.fileBusy.value).toBeNull();
+    expect(s.pipeline.modelName).toBeNull();
+    // A second click on the same card keeps its own line while the first click's fetch ends.
+    const releases: (() => void)[] = [];
+    s.galleryFetch = (entry) => new Promise((resolve) => releases.push(() => resolve(new Blob([loadGallery(entry.id).slice()]))));
+    const first = s.openGallery('cube'), second = s.openGallery('cube');
+    releases[0]();
+    await first;
+    expect(s.fileBusy.value).toBe('Fetching Cube…');
+    releases[1]();
+    await second;
+    expect(s.fileBusy.value).toBeNull();
+    expect(s.pipeline.modelName).toBe('cube.stl');
+  });
+
+  it('the default model gives way to a model loaded by other means during its fetch, and says it is pending only meanwhile', async () => {
+    const s = store();
+    let release: (() => void) | null = null;
+    s.galleryFetch = (entry) => new Promise((resolve) => (release = () => resolve(new Blob([loadGallery(entry.id).slice()]))));
+    const initial = s.openGallery('sphere', true);
+    expect(s.galleryPending.value).toBe('sphere');
+    expect(s.fileBusy.value).toBeNull();
+    // The test hooks' load goes to the pipeline and does not take a ticket.
+    s.pipeline.load(loadGallery('cone'), 'cone.stl');
+    release!();
+    await initial;
+    expect(s.galleryPending.value).toBeNull();
+    expect(s.pipeline.modelName).toBe('cone.stl');
+  });
+
+  it('a gallery model saved as a project is the maker\'s own: changed after the save, it asks before another file replaces it', async () => {
+    captureSaves();
+    const s = store();
+    await s.openGallery(THIRD_PARTY.id);
+    await s.pipeline.idle();
+    s.setParam('silicone.t', 4);
+    await s.saveProject();
+    expect(s.galleryModel.value).toBeNull();
+    // The credit stays with the model.
+    expect(s.pipeline.gallery()).toEqual(credit);
+    s.setParam('silicone.t', 5);
+    expect(s.unsaved()).toBe(true);
+    await s.openFile(new File([exampleBytes('jersey').slice()], EXAMPLE_FILES.jersey));
+    expect(s.replacing.value).toEqual({ name: EXAMPLE_FILES.jersey, model: 'cube.stl' });
+    await s.answerReplace('cancel');
+    expect(s.pipeline.modelName).toBe('cube.stl');
   });
 });

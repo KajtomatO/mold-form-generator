@@ -25,6 +25,8 @@ import { autoRepairCell, cellFacts, repairCellLimit, repairCellProblem, type Cel
 import { SCHEMA_VERSION } from '../core/params/schema';
 import { BUILD } from './buildInfo';
 import type { SavedBy } from './version';
+import { creditOf, GALLERY, galleryEntry, type GalleryCredit, type GalleryEntry } from '../gallery/catalogue';
+import { fetchGalleryModel } from '../gallery/open';
 
 export type Theme = 'dark' | 'light';
 
@@ -318,6 +320,18 @@ export class Store {
   private cellFor: { bytes: Uint8Array; facts: CellFacts } | null = null;
   /** MM2: the warning point, which the test hooks lower so a small model reaches it. */
   largeLimits: LargeLimits = LARGE_MODEL;
+  /** GA: the example gallery's models, which the test hooks add a third-party fixture to (R47). */
+  readonly gallery = signal<readonly GalleryEntry[]>(GALLERY);
+  /** GA: the id of the gallery model on screen, as opened from the gallery, which never asks before it is replaced (D29). */
+  readonly galleryModel = signal<string | null>(null);
+  /** GA: the default model's id while it is fetched on a page load, which the empty view says in place of its drop hint. */
+  readonly galleryPending = signal<string | null>(null);
+  /** GA: the open whose fetch the busy line says, so a fetch overtaken clears only its own line. */
+  private fetchBusy = 0;
+  /** GA: the Model section's Examples panel, open or not. */
+  readonly examplesOpen = signal(false);
+  /** GA: how a gallery model's STL is fetched, which Node tests replace. */
+  galleryFetch: (entry: GalleryEntry) => Promise<Blob> = fetchGalleryModel;
   /**
    * MM2: the maker's file the model on screen came from, kept unread: Simplify… and Save project of a copy read
    * it in their workers. Null for a load by bytes, which then gives a Blob of the bytes when one is needed.
@@ -448,6 +462,56 @@ export class Store {
     this.pipeline.load(bytes, name);
     this.source = source;
     this.saved = this.pipeline.project();
+    // GA: a gallery model shows its credit if it is not ours, and is replaced with no question.
+    const entry = source?.kind === 'gallery' && source.id !== undefined ? galleryEntry(source.id, this.gallery.value) : null;
+    if (entry) {
+      this.pipeline.setGallery(creditOf(entry));
+      this.galleryModel.value = entry.id;
+    }
+  }
+
+  /**
+   * GA: opens a gallery model (R47): its STL fetched relative to the page, then opened as any chosen file, through
+   * openFile, so the large-model check, the notices, the cleared history, Repair mesh and MM2 all hold. A file opened
+   * while it is fetched wins. `initial` is the default model of a page load (D29): it opens only while nothing else
+   * has been asked for, and a failed fetch leaves the empty page, saying so only in the console.
+   */
+  async openGallery(id: string, initial = false): Promise<void> {
+    const entry = galleryEntry(id, this.gallery.value);
+    if (!entry) {
+      console.warn(`The gallery has no model "${id}".`);
+      return;
+    }
+    if (initial && (this.opens !== 0 || this.pipeline.modelName !== null)) return;
+    const ticket = ++this.opens;
+    const busy = initial ? null : `Fetching ${entry.title}…`;
+    if (busy) {
+      this.fileNotice.value = null;
+      this.fileBusy.value = busy;
+      this.fetchBusy = ticket;
+    } else this.galleryPending.value = entry.id;
+    // A newer open says its own busy line or none: this fetch's line goes only while it is still the one shown.
+    const superseded = (): boolean => {
+      if (ticket === this.opens && !(initial && this.pipeline.modelName !== null)) return false;
+      if (busy && this.fetchBusy === ticket && this.fileBusy.value === busy) this.fileBusy.value = null;
+      return true;
+    };
+    let blob: Blob;
+    try {
+      blob = await this.galleryFetch(entry);
+    } catch (error) {
+      if (superseded()) return;
+      this.fileBusy.value = null;
+      if (initial) console.warn(error instanceof Error ? error.message : String(error));
+      else this.fileNotice.value = { severity: 'error', message: `The example ${entry.title} could not be fetched. Check the connection and try again.`, notes: [], details: error instanceof Error ? error.message : String(error) };
+      return;
+    } finally {
+      if (initial) this.galleryPending.value = null;
+    }
+    // A model loaded by other means meanwhile, as the test hooks' load, wins over the default too.
+    if (superseded()) return;
+    this.fileBusy.value = null;
+    await this.openFile(new File([blob as Blob], entry.file), entry);
   }
 
   /** What every new model resets: how the user was looking at the last one, and its history. */
@@ -464,6 +528,7 @@ export class Store {
     // The grid's facts were the last model's, and kept its STL alive outside the meter (RM's review).
     this.cellFor = null;
     this.source = null;
+    this.galleryModel.value = null;
     this.fileSteps = Infinity;
     this.projectName.value = null;
     this.fileNotice.value = null;
@@ -487,8 +552,10 @@ export class Store {
    * holds; an export ZIP or a lone project.json brings its settings to the model on screen. A project
    * file that cannot be used says why under the file row, and the model on screen stays as it was.
    */
-  async openFile(file: File): Promise<void> {
+  async openFile(file: File, gallery: GalleryEntry | null = null): Promise<void> {
     const ticket = ++this.opens;
+    // GA: a gallery model's source names it, so it loads with its credit.
+    const stlSource: OriginalSource = gallery ? { kind: 'gallery', blob: file, id: gallery.id } : { kind: 'stl', blob: file };
     // A newer file supersedes one still waiting for an answer, and a copy being made of another, or a repair.
     this.dropReplacing();
     this.dropLarge();
@@ -501,7 +568,7 @@ export class Store {
       if (fileKindOfHead(file.name, head, file.size) === 'stl') {
         const estimate = estimateTriangles(head, file.size);
         if (isLarge(estimate.triangles, file.size, this.largeLimits)) {
-          this.askLarge({ kind: 'stl', name: file.name, model: file.name, size: file.size, ...estimate, target: defaultTarget(estimate.triangles) }, { file, source: { kind: 'stl', blob: file } });
+          this.askLarge({ kind: 'stl', name: file.name, model: file.name, size: file.size, ...estimate, target: defaultTarget(estimate.triangles) }, { file, source: stlSource });
           return;
         }
       }
@@ -509,7 +576,7 @@ export class Store {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (ticket !== this.opens) return;
     const kind = fileKind(file.name, bytes);
-    if (kind === 'stl') await this.openStl(bytes, file.name, ticket, { kind: 'stl', blob: file });
+    if (kind === 'stl') await this.openStl(bytes, file.name, ticket, stlSource);
     else if (kind === 'other') this.fileNotice.value = { severity: 'error', message: `${file.name} is not an STL or a project file, so it was not opened. ${OPEN_INSTEAD}`, notes: [] };
     else await this.openProject(bytes, file.name, kind, ticket, file);
   }
@@ -594,7 +661,10 @@ export class Store {
       const carried = prompt.kind === 'loaded' ? this.carried() : waiting.opened ? carriedFrom(waiting.opened) : null;
       const origin: ModelOrigin = { original: waiting.source, from: prepared.from, record: prepared.record, repair: null };
       const projectName = prompt.kind === 'moldproj' ? prompt.name : prompt.kind === 'loaded' ? this.projectName.value : null;
-      const run = (): void => this.loadPrepared(prepared.stl, origin, carried, projectName, prompt.kind === 'loaded', 'simplified');
+      // GA: a gallery model simplified on opening keeps its credit and id from the entry it was fetched for (R48).
+      const entry = waiting.source.kind === 'gallery' && waiting.source.id !== undefined ? galleryEntry(waiting.source.id, this.gallery.value) : null;
+      const credit = entry ? creditOf(entry) : (waiting.opened?.file.gallery ?? null);
+      const run = (): void => this.loadPrepared(prepared.stl, origin, carried, projectName, prompt.kind === 'loaded', 'simplified', credit, entry?.id ?? null);
       if (prompt.kind === 'loaded') run();
       else this.replaceOrAsk(prompt.model, run, prepared.stl);
     } catch (error) {
@@ -619,8 +689,10 @@ export class Store {
    * Simplify… (`again`) keeps what counts as saved, as the project is the one on screen; a file opened afresh has
    * nothing to lose yet. RM: a repaired copy loads the same way, its plane found again as the repaired one's.
    */
-  private loadPrepared(stl: Uint8Array, origin: ModelOrigin, carried: Carried | null, projectName: string | null, again: boolean, reason: 'simplified' | 'repaired'): void {
+  private loadPrepared(stl: Uint8Array, origin: ModelOrigin, carried: Carried | null, projectName: string | null, again: boolean, reason: 'simplified' | 'repaired', credit: GalleryCredit | null = null, galleryId: string | null = null): void {
     const keepSaved = this.saved;
+    // GA: a copy of a gallery model keeps its credit, and its id, so it is replaced with no question too.
+    const keepGallery = again ? { credit: this.pipeline.gallery(), id: this.galleryModel.value } : { credit, id: galleryId };
     this.beforeLoad();
     if (carried) this.pipeline.loadProject(stl, origin.from.name, carried.project, carried.stored, origin.from.sha256, carried.savedBy, origin, reason);
     else this.pipeline.load(stl, origin.from.name, origin);
@@ -628,6 +700,8 @@ export class Store {
     this.saved = again ? keepSaved : this.pipeline.project();
     this.fileSteps = carried ? this.history.nextSeq : Infinity;
     this.projectName.value = projectName;
+    this.pipeline.setGallery(keepGallery.credit);
+    this.galleryModel.value = keepGallery.id;
   }
 
   /**
@@ -771,7 +845,7 @@ export class Store {
       const raw = new Uint8Array(await origin.original.blob.arrayBuffer());
       if (ticket !== this.opens) return;
       let bytes: Uint8Array, sha: string | null;
-      if (origin.original.kind === 'stl') {
+      if (origin.original.kind !== 'moldproj') {
         const checked = raw.length < READ_IN_WORKER_BYTES ? { bytes: raw, ...readStl(raw, name, true) } : await this.files.check(raw, name, true);
         bytes = checked.bytes;
         sha = checked.sha256;
@@ -782,9 +856,11 @@ export class Store {
       }
       if (ticket !== this.opens) return;
       // The project as it stands once the file is read, with any edit made meanwhile (MM2's review).
-      const carried = this.carried(), keepSaved = this.saved;
+      const carried = this.carried(), keepSaved = this.saved, credit = this.pipeline.gallery(), id = this.galleryModel.value;
       this.beforeLoad();
       this.pipeline.loadProject(bytes, name, carried.project, carried.stored, sha, carried.savedBy, null, origin.repair ? 'repaired' : 'simplified');
+      this.pipeline.setGallery(credit);
+      this.galleryModel.value = id;
       this.source = origin.original;
       this.saved = keepSaved;
       this.fileSteps = this.history.nextSeq;
@@ -844,10 +920,12 @@ export class Store {
   /**
    * A file that replaces the model on screen, an STL or a .moldproj, goes ahead at once unless the model
    * has changes no file holds, which a new model would take with it, history and all; then the Model
-   * section asks first. Settings alone never ask, as they are one step undo takes back.
+   * section asks first. Settings alone never ask, as they are one step undo takes back. GA: nor does a gallery model
+   * opened from the gallery, as nothing of the maker's is lost (D29), until Save project makes it the maker's own; leaving
+   * the page still asks.
    */
   private replaceOrAsk(name: string, run: () => void, held: unknown): void {
-    if (!this.unsaved()) {
+    if (!this.unsaved() || this.galleryModel.value !== null) {
       run();
       return;
     }
@@ -936,6 +1014,8 @@ export class Store {
         ? (({ from, ...record }) => ({ original: source, from: { name: file.model, bytes: fixed.bytes, sha256: opened.stlSha256!, ...from }, record: null, repair: { record, outside: fixed.outside } }))(fixed.entry)
         : null;
     this.pipeline.loadProject(opened.stl!, file.model, projectOf(file), file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion }, origin);
+    // GA: a project saved from a gallery model not ours shows its credit again, from the file alone.
+    this.pipeline.setGallery(file.gallery ?? null);
     this.source = source;
     this.saved = this.pipeline.project();
     // The history is empty, so every step from here stands on the file's choice until the user picks.
@@ -1017,6 +1097,7 @@ export class Store {
         ...(origin?.record ? { simplified: simplifiedEntry({ from: origin.from, record: origin.record }) } : {}),
         // RM: a repaired copy's project keeps the maker's file as model.stl and the copy beside it as repaired.stl.
         ...(origin?.repair ? { repaired: repairedEntry(origin.from, origin.repair.record) } : {}),
+        gallery: this.pipeline.gallery(),
       });
       const { zip, sha256 } = await this.files.pack(file, bytes, origin?.original ?? null);
       // A type of its own, so no browser renames the file after the ZIP inside.
@@ -1024,6 +1105,8 @@ export class Store {
       this.pipeline.noteModelSha256(bytes, sha256);
       if (this.pipeline.stlBytes !== bytes) return;
       this.saved = project;
+      // GA: a gallery model saved is the maker's project now, which asks before it is replaced as any does (D29).
+      this.galleryModel.value = null;
       this.fileNotice.value = { severity: 'info', message: `Saved ${name}.`, notes: [], saved: name };
     } catch (error) {
       // MM2: a maker's file moved or changed since it was opened says so, as trying again would not help.

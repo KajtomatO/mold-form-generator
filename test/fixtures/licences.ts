@@ -4,6 +4,23 @@ import { join } from 'node:path';
 import type { Plugin } from 'vite';
 import { APACHE_2_0_HEADER, BSD_3_CLAUSE_PHYSX, BSL_1_0, LLVM_EXCEPTION, MIT_TERMS, QUICKHULL_PUBLIC_DOMAIN, SUNPRO, UNLICENSE, ZLIB_DSET } from './licenceTexts';
 
+/**
+ * Each licence a published model may carry, by its full name, with its deed: all allow sharing. The test models'
+ * catalogue (test/unit/examples.test.ts) takes any of them; the gallery's (test/unit/gallery.test.ts) only those
+ * that allow any use, which ANY_USE lists.
+ */
+export const DEEDS: Record<string, string> = {
+  'CC0 1.0 Universal': 'https://creativecommons.org/publicdomain/zero/1.0/',
+  'Creative Commons Attribution 4.0 International': 'https://creativecommons.org/licenses/by/4.0/',
+  'Creative Commons Attribution-ShareAlike 4.0 International': 'https://creativecommons.org/licenses/by-sa/4.0/',
+  'Creative Commons Attribution-NonCommercial 4.0 International': 'https://creativecommons.org/licenses/by-nc/4.0/',
+  'Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International': 'https://creativecommons.org/licenses/by-nc-sa/4.0/',
+  'Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International': 'https://creativecommons.org/licenses/by-nc-nd/4.0/',
+};
+
+/** GA: the licences in DEEDS that allow any use, commercial use and changes included, as a gallery model needs (D29). */
+export const ANY_USE: readonly string[] = Object.keys(DEEDS).filter((name) => !name.includes('NonCommercial') && !name.includes('NoDerivatives'));
+
 /** One entry of `npm ls --all --long --json`, as far as the scan reads it. A missing optional package is `{}`. */
 export interface NpmNode {
   name?: string;

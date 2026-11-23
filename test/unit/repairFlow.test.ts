@@ -388,7 +388,7 @@ describe('RM: the .moldproj of a repaired model (decision A)', () => {
     expect(sha(inside[REPAIRED_ENTRY])).toBe(record.sha256);
     const json = JSON.parse(strFromU8(inside[PROJECT_ENTRY])) as ProjectFile;
     expect(Object.keys(json)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'repaired', 'params', 'plane', 'pins', 'removed']);
-    expect(json.schemaVersion).toBe(6);
+    expect(json.schemaVersion).toBe(7);
     const { from, ...rest } = json.repaired!;
     expect(from).toEqual({ format: 'binary', trianglesInFile: 14, triangles: 14 });
     expect(rest).toEqual(record);

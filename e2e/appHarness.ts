@@ -21,6 +21,19 @@ export interface PageWatch {
  * and on every server it answers an example not in this checkout with a 404, as a clone's server would.
  */
 export async function openApp(page: Page, query = ''): Promise<PageWatch> {
+  const watch = await watchPage(page);
+  await page.goto(`/?test=1${query}`);
+  await expect(page).toHaveTitle('Mold Form Generator');
+  await page.waitForFunction(() => '__pipeline' in window && '__app' in window);
+  return watch;
+}
+
+/**
+ * GA: what openApp does before it opens the page: the errors watched, and every request routed, as above. A test
+ * of a page without ?test=1, such as the default model's plain load, opens it itself after this. `hold` answers a
+ * path only once the promise it gives settles, to keep a fetch on its way.
+ */
+export async function watchPage(page: Page, hold: (path: string) => Promise<void> | null = () => null): Promise<PageWatch> {
   const watch: PageWatch = { errors: [], foreign: [] };
   const host = new URL(test.info().project.use.baseURL!).hostname;
   page.on('pageerror', (e) => watch.errors.push(String(e)));
@@ -48,11 +61,9 @@ export async function openApp(page: Page, query = ''): Promise<PageWatch> {
         return;
       }
     }
+    await hold(url.pathname);
     await route.continue();
   });
-  await page.goto(`/?test=1${query}`);
-  await expect(page).toHaveTitle('Mold Form Generator');
-  await page.waitForFunction(() => '__pipeline' in window && '__app' in window);
   return watch;
 }
 

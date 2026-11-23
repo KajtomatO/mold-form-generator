@@ -12,6 +12,7 @@ import { setParamValue as setPath, type ParamPath } from './stages';
 import type { Project, WallStatus } from './pipeline';
 import type { ExportReport, ExportRequest } from '../workers/exportJob';
 import type { GeometryReports } from '../core/analysis/reports';
+import type { GalleryEntry } from '../gallery/catalogue';
 
 export interface ExportSummary {
   files: Record<string, { bytes: number; hash: string; meshHash: string }>;
@@ -75,6 +76,16 @@ export interface TestHooks {
   /** S9 on screen, with whether it is for the state on screen, and how long S8 and S9 took. */
   reports(): { current: boolean; value: GeometryReports } | null;
   reportTimes(): Pipeline['reportTimes'];
+  /**
+   * GA: adds a model to the example gallery, as test/fixtures/galleryFixture.ts gives a third-party one, so its card
+   * and its credit can be tested before the gallery holds such a model. Only on the app's page.
+   */
+  addGalleryEntry(entry: GalleryEntry): void;
+}
+
+/** GA: the store's gallery, which addGalleryEntry adds to. */
+export interface GalleryHolder {
+  gallery: { value: readonly GalleryEntry[] };
 }
 
 /** One worker as a test sees it from outside the pipeline, which only a real terminate() can end. */
@@ -112,7 +123,7 @@ export function recordWorkers(spawn: () => WorkerLike): { spawn: () => WorkerLik
   };
 }
 
-export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>, solidWorkers: WorkerRecord[] = [], allWorkers: (() => WorkerRecord[]) | null = null): TestHooks {
+export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, view: { worldToScreen: TestHooks['worldToScreen']; setCamera: TestHooks['setCamera'] }, fetchModel: (name: string) => Promise<Uint8Array>, solidWorkers: WorkerRecord[] = [], allWorkers: (() => WorkerRecord[]) | null = null, gallery: GalleryHolder | null = null): TestHooks {
   const hooks: TestHooks = {
     async load(name) {
       pipeline.load(await fetchModel(name), name);
@@ -194,6 +205,10 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
     },
     reports: () => (pipeline.reports ? { current: pipeline.reports.key === pipeline.keys().S9, value: pipeline.reports.value } : null),
     reportTimes: () => pipeline.reportTimes,
+    addGalleryEntry(entry) {
+      if (!gallery) throw new Error('This page has no gallery.');
+      gallery.gallery.value = [...gallery.gallery.value.filter((e) => e.id !== entry.id), entry];
+    },
   };
   (window as unknown as { __pipeline: TestHooks }).__pipeline = hooks;
   return hooks;

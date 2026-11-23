@@ -11,6 +11,7 @@ import type { TestHooks } from '../src/app/testHooks';
 import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { app, canDraw, checkLayout, dropAndWait, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
+import { GALLERY } from '../src/gallery/catalogue';
 
 /**
  * R1: the GitHub Pages layout, as scripts/build-pages.sh makes it and as the site serves it, under
@@ -24,7 +25,7 @@ const SHOTS = process.env.CFG_SHOTS === '1';
 const SHOTS_DIR = process.env.CFG_SHOTS_DIR ?? join(import.meta.dirname, '..', 'test-results', 'shots');
 const root = join(import.meta.dirname, '..');
 const PREFIX = '/mold-form-generator/';
-const PAGES = ['index.html', 'diag.html', 'bench.html', 'pipeline.html'];
+const PAGES = ['index.html', 'diag.html', 'bench.html', 'pipeline.html', 'media.html'];
 const SNAPSHOT_DATE = '2026-01-02T03:04:05+01:00';
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version: string };
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
@@ -37,7 +38,22 @@ const TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
   '.json': 'application/json',
   '.stl': 'model/stl',
+  '.webp': 'image/webp',
+  '.md': 'text/markdown; charset=utf-8',
 };
+
+/**
+ * GA: every gallery model, its thumbnail and SOURCES.md answer 200 under a site's prefix, with the bytes in
+ * public/gallery/, as the app fetches them relative to the page.
+ */
+async function checkGallery(page: Page, base: string): Promise<void> {
+  const files = [...GALLERY.flatMap((e) => [e.file, `thumbs/${e.thumbnail}`]), 'SOURCES.md'];
+  for (const file of files) {
+    const response = await page.request.get(`${base}gallery/${file}`);
+    expect(response.status(), file).toBe(200);
+    expect(Buffer.from(await response.body()).equals(readFileSync(join(root, 'public', 'gallery', file))), file).toBe(true);
+  }
+}
 
 interface Site {
   /** The stable site's address, ending in /mold-form-generator/. */
@@ -276,7 +292,8 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     const title = await page.getByTestId('app-version').getAttribute('title');
     // The date is the commit's, so the same release built again says the same.
     expect(title).toBe(`Mold Form Generator ${pkg.version}\nThe released version, built from the code of ${site.date} (commit ${site.commit}).`);
-    expect(await robots(page, site.url)).toEqual([[], [], [], []]);
+    expect(await robots(page, site.url)).toEqual([[], [], [], [], []]);
+    await checkGallery(page, site.url);
 
     // A model previews, which loads field.worker, solid.worker and the WebAssembly from the sub-path.
     await dropAndWait(page, 'jersey-barrier.stl');
@@ -298,7 +315,7 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     await page.getByTestId('save-project').click();
     const saved = await download;
     expect(saved.suggestedFilename()).toBe('jersey-barrier.moldproj');
-    expect(JSON.parse(text(unzipSync(new Uint8Array(readFileSync(await saved.path())))['project.json']))).toMatchObject({ schemaVersion: 6, appVersion: pkg.version });
+    expect(JSON.parse(text(unzipSync(new Uint8Array(readFileSync(await saved.path())))['project.json']))).toMatchObject({ schemaVersion: 7, appVersion: pkg.version });
     expect(watch.errors).toEqual([]);
     expect(watch.foreign).toEqual([]);
 
@@ -319,7 +336,8 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     await expect(page.getByTestId('app-version')).toHaveText(`v${version}`);
     const title = `Mold Form Generator ${version}\nBeta: the newest changes, not released yet, so they may have mistakes. Built from the code of ${site.date} (commit ${site.commit}).`;
     for (const id of ['app-version', 'beta-chip']) expect(await page.getByTestId(id).getAttribute('title'), id).toBe(title);
-    expect(await robots(page, beta)).toEqual([['noindex'], ['noindex'], ['noindex'], ['noindex']]);
+    expect(await robots(page, beta)).toEqual([['noindex'], ['noindex'], ['noindex'], ['noindex'], ['noindex']]);
+    await checkGallery(page, beta);
     expect(await page.locator('meta[name="robots"]').getAttribute('content')).toBe('noindex');
     // With a model open the header holds the most it ever does, in both themes: the brand in its order, the
     // version in the muted ink, the chip in the warning colours, still 48 px and nothing clipped.
@@ -370,7 +388,7 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     const saved = await download;
     expect(saved.suggestedFilename()).toBe('jersey-barrier-mold.zip');
     const files = unzipSync(new Uint8Array(readFileSync(await saved.path())));
-    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 6, appVersion: version });
+    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 7, appVersion: version });
     expect(JSON.parse(text(files['report.json']))).toMatchObject({ app: 'Mold Form Generator', appVersion: version });
     // README.txt is wrapped at 76 columns, so its lines are joined first.
     expect(text(files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain(`Made by Mold Form Generator ${version} from jersey-barrier.stl.`);
@@ -378,6 +396,24 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     expect(watch.errors).toEqual([]);
     expect(watch.foreign).toEqual([]);
     expect(site.log.filter((entry) => entry.path.startsWith(PREFIX) && entry.status >= 400)).toEqual([]);
+  });
+
+  test('a plain load of each site opens the sphere from its own gallery/, the beta\'s not the release\'s', async ({ page }) => {
+    test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+    for (const path of ['', 'beta/']) {
+      const stls: string[] = [];
+      const seen = (r: Request): void => {
+        const at = new URL(r.url()).pathname;
+        if (at.endsWith('.stl')) stls.push(at);
+      };
+      page.on('request', seen);
+      const watch = await open(page, site, path, '');
+      await expect(page.getByTestId('file-name')).toHaveText('sphere.stl, 2,022 triangles', { timeout: 60_000 });
+      page.off('request', seen);
+      expect(stls, path).toEqual([`${PREFIX}${path}gallery/sphere.stl`]);
+      expect(watch.errors.filter((e) => !/WebGL|webgl/.test(e))).toEqual([]);
+      expect(watch.foreign).toEqual([]);
+    }
   });
 
   test('review shots of the header on the release and on beta, with a model open', async ({ page, browserName }) => {

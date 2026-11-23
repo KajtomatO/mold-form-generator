@@ -32,6 +32,14 @@ export const FLANGE_OUTLINE_COLOUR = 0x475569;
 export const FLANGE_CASING_COLOUR = 0xe2e8f0;
 
 /** Drawn after the solid parts, outermost last, so each see-through layer blends over what it encloses. */
+/** The view's lights, which the gallery's thumbnails are drawn under too, so they look as the model does on screen. */
+export function addViewLights(scene: THREE.Scene): void {
+  scene.add(new THREE.HemisphereLight(0xe6ebf0, 0x303a45, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+  sun.position.set(0.6, -1, 1.4);
+  scene.add(sun);
+}
+
 export const LAYER_ORDER: Record<LayerName, number> = { model: 0, base: 0, funnel: 0, silicone: 1, cover: 2 };
 
 /**

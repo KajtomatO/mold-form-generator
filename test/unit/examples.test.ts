@@ -8,6 +8,7 @@ import { Pipeline } from '../../src/app/pipeline';
 import { parseStl } from '../../src/core/stl/parse';
 import type { ExportReport } from '../../src/workers/exportJob';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
+import { DEEDS } from '../fixtures/licences';
 import { EXAMPLE_FILES, LOCAL_ONLY } from '../fixtures/loadExamples';
 import { tableRows } from '../fixtures/requirementMap';
 import { readPart } from '../fixtures/solidChecks';
@@ -19,16 +20,6 @@ const UNSTAGED = process.env.CFG_UNSTAGED === '1';
 const doc = (path: string): string => readFileSync(join(root, path), 'utf8');
 // -z, before any paths, so names with spaces or other characters come back as they are.
 const git = (command: string, ...args: string[]): string[] => execFileSync('git', [command, '-z', ...args], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
-
-/** Each licence a published example may carry, by its full name, with its deed: all allow sharing. */
-const DEEDS: Record<string, string> = {
-  'CC0 1.0 Universal': 'https://creativecommons.org/publicdomain/zero/1.0/',
-  'Creative Commons Attribution 4.0 International': 'https://creativecommons.org/licenses/by/4.0/',
-  'Creative Commons Attribution-ShareAlike 4.0 International': 'https://creativecommons.org/licenses/by-sa/4.0/',
-  'Creative Commons Attribution-NonCommercial 4.0 International': 'https://creativecommons.org/licenses/by-nc/4.0/',
-  'Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International': 'https://creativecommons.org/licenses/by-nc-sa/4.0/',
-  'Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International': 'https://creativecommons.org/licenses/by-nc-nd/4.0/',
-};
 
 /**
  * What is wrong with test-models/SOURCES.md's table against the model files git tracks in test-models/ (names

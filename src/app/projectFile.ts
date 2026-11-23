@@ -8,6 +8,7 @@ import type { RepairedEntry, SimplifiedEntry } from './simplified';
 import { REPAIR_CELL_MAX, REPAIR_CELL_MIN } from '../core/mesh/repair';
 import { TARGET_RANGE } from './largeModel';
 import type { ParamPath } from './stages';
+import { isGalleryLicence, type GalleryCredit } from '../gallery/catalogue';
 
 /**
  * Reading project.json: migrating an older version one step at a time, then checking every field.
@@ -115,8 +116,14 @@ function opensWith(path: ParamPath, value: unknown): number {
   return Math.min(def.max ?? Infinity, Math.max(def.min ?? 0, value));
 }
 
+/**
+ * Version 7 (0.3.0) adds the optional `gallery` field, the credit of an example model not ours (GA), which no
+ * older file has, so a version 6 file opens as it was. MT extends this same step before anything is released.
+ */
+const v6ToV7: Migration = (file) => file;
+
 /** Each older version's step to the one after it. */
-export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6 };
+export const MIGRATIONS: Readonly<Record<number, Migration>> = { 1: v1ToV2, 2: v2ToV3, 3: v3ToV4, 4: v4ToV5, 5: v5ToV6, 6: v6ToV7 };
 
 export interface Migrated {
   file: Json;
@@ -281,7 +288,30 @@ function readPins(raw: unknown): OpeningPin[] {
   });
 }
 
-const KNOWN = new Set(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'simplified', 'repaired', 'params', 'plane', 'pins', 'removed']);
+const KNOWN = new Set(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'simplified', 'repaired', 'gallery', 'params', 'plane', 'pins', 'removed']);
+
+/** Text of at most this many characters, as a credit's fields take. */
+const CREDIT_TEXT = 200;
+
+/**
+ * GA: the credit of a gallery model not ours (R48), checked: an id, a title and an author as short text, the two
+ * pages as https addresses, and a licence of those the gallery takes. One that fails is left out, with the
+ * warning for fields not understood, as the model itself still makes a mold. Built field by field in the order
+ * the app writes it, so a project saved again keeps its bytes.
+ */
+function readGallery(raw: unknown): GalleryCredit | null {
+  const text = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= CREDIT_TEXT;
+  const page = (value: unknown): value is string => {
+    if (!text(value)) return false;
+    try {
+      return new URL(value).protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+  if (!isObject(raw) || !text(raw.id) || !text(raw.title) || !text(raw.author) || !page(raw.authorUrl) || !page(raw.url) || !isGalleryLicence(raw.licence)) return null;
+  return { id: raw.id, title: raw.title, author: raw.author, authorUrl: raw.authorUrl, url: raw.url, licence: raw.licence };
+}
 
 /** Said when a project's record of its simplified copy cannot be used: the file then opens as it is. */
 export function simplifiedDropped(model: string): string {
@@ -420,7 +450,8 @@ function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
   if (sha !== null && !(typeof sha === 'string' && /^[0-9a-f]{64}$/.test(sha))) refuse("its record of the model's contents is not valid", '"modelSha256" must be 64 hex digits or null.');
   const removed = file.removed ?? [];
   if (!Array.isArray(removed) || !removed.every((id) => typeof id === 'string')) refuse('its removed vents are not a list of vents', '"removed" must be a list of vent ids.');
-  const extra = Object.keys(file).filter((key) => !KNOWN.has(key));
+  const gallery = file.gallery === undefined ? null : readGallery(file.gallery);
+  const extra = Object.keys(file).filter((key) => !KNOWN.has(key) || (key === 'gallery' && gallery === null));
   if (extra.length > 0) notes.push({ severity: 'warning', message: `Fields this version does not know, left out: ${extra.join(', ')}.` });
   const simplified = readSimplified(file.simplified, file.model, notes);
   // RM: a model is a simplified copy or a repaired one, never both: with both, the repaired record is left out.
@@ -435,6 +466,7 @@ function readFields(file: Json, notes: ProjectNote[]): ProjectFile {
     basePlane: readBasePlane(file.basePlane ?? null),
     ...(simplified ? { simplified } : {}),
     ...(repaired ? { repaired } : {}),
+    ...(gallery ? { gallery } : {}),
     params: readParams(file.params, notes),
     plane: missing('plane') ? DEFAULT_PLANE : readPlane(file.plane),
     pins: readPins(file.pins ?? []),

@@ -22,6 +22,8 @@ import type { WorkerLike } from '../../src/workers/protocol';
 import type { ExportReport } from '../../src/workers/exportJob';
 import { inProcessField, inProcessProject, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES, loadManifold } from '../fixtures/loadExamples';
+import { THIRD_PARTY } from '../fixtures/galleryFixture';
+import { creditOf } from '../../src/gallery/catalogue';
 
 const text = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
@@ -269,6 +271,21 @@ describe('MM2: the question before a large model loads', () => {
     // A copy is no model to simplify again.
     expect(store.canSimplify()).toBe(false);
   });
+
+  it('GA: a large gallery model not ours, simplified as it opens, keeps its credit and is still a gallery model (R48)', async () => {
+    const { store, p } = setup();
+    // The fixture's model not ours, as a file past the lowered point: the catalogue's own all stay under it.
+    const entry = { ...THIRD_PARTY, id: 'fixture-large', file: JERSEY };
+    store.gallery.value = [entry];
+    store.galleryFetch = async () => new Blob([jersey.slice()]);
+    await store.openGallery(entry.id);
+    expect(store.large.value).toMatchObject({ kind: 'stl', name: JERSEY });
+    await store.answerLarge('simplify', 900);
+    await p.idle();
+    expect(p.modelOrigin()!.record).not.toBeNull();
+    expect(p.gallery()).toEqual(creditOf(entry));
+    expect(store.galleryModel.value).toBe(entry.id);
+  });
 });
 
 describe('MM2 review: what the copy carries, and what ends it', () => {
@@ -434,7 +451,7 @@ describe('MM2 review: what the copy carries, and what ends it', () => {
 });
 
 describe('MM2: the .moldproj of a simplified model', () => {
-  it('keeps the file as model.stl and the copy as simplified.stl in format 6; reopened, the copy loads with no question and its export writes the file itself', async () => {
+  it('keeps the file as model.stl and the copy as simplified.stl in format 7; reopened, the copy loads with no question and its export writes the file itself', async () => {
     const saves = captureSaves();
     const { store, p } = setup();
     await store.openFile(new File([jersey as BlobPart], JERSEY));
@@ -451,7 +468,7 @@ describe('MM2: the .moldproj of a simplified model', () => {
     expect(sha(inside[SIMPLIFIED_ENTRY])).toBe(origin.record!.sha256);
     const json = JSON.parse(text(inside[PROJECT_ENTRY])) as ProjectFile;
     expect(json.schemaVersion).toBe(SCHEMA_VERSION);
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBe(7);
     expect(json.modelSha256).toBe(sha(jersey));
     expect(json.simplified).toEqual(simplifiedEntry({ from: origin.from, record: origin.record! }));
 

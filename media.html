@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Mold Form Generator: media</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #101418; color: #e6ebf0; font: 14px/1.5 system-ui, sans-serif; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      p { max-width: 640px; color: #93a1b0; }
+      #out { display: flex; flex-wrap: wrap; gap: 12px; }
+      #out img { background: repeating-conic-gradient(#1f262e 0 25%, #171c22 0 50%) 0 0 / 16px 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Media</h1>
+    <p>Draws the gallery's thumbnails, which <code>npm run media -- thumbs</code> saves into <code>public/gallery/thumbs/</code>.</p>
+    <div id="out"></div>
+    <script type="module" src="/src/diag/mediaPage.ts"></script>
+  </body>
+</html>

@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Field } from '../core/field/grid';
 import { boxCorners, depthPlanes, orthoPlanes } from './depthPlanes';
 import { HeightPreview, type HeightMode } from './heightPreview';
-import { applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
+import { addViewLights, applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
 import { boxMesh, DiagnosticMarkers, FlangeOutlines, OpeningMarkers, placeBox, type BoxSpan, type FlangeOutline, type MarkerSpec, type OpeningMarker } from './overlays';
 import { Picker } from './picking';
 import { SectionCaps, SectionHandle, type CapPart, type CapSource, type Counting } from './section';
@@ -155,10 +155,7 @@ export class PreviewScene {
     this.scene.background = new THREE.Color(DARK_BACKGROUND);
     this.camera.up.set(0, 0, 1);
     this.ortho.up.set(0, 0, 1);
-    this.scene.add(new THREE.HemisphereLight(0xe6ebf0, 0x303a45, 1.6));
-    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
-    sun.position.set(0.6, -1, 1.4);
-    this.scene.add(sun);
+    addViewLights(this.scene);
 
     this.heights = new HeightPreview(this.renderer, options.cpuHeights);
     this.renderer.localClippingEnabled = true;

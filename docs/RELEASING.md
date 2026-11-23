@@ -187,7 +187,7 @@ The source repository is public, as you decided on 2026-11-11, and so are the ex
 
 To add an example model, put the file in `test-models/`, give it a row in `test-models/SOURCES.md` and `git add` both: the model's name linked to its Printables page by the model's number alone (`https://www.printables.com/model/<number>`), its author as Printables names them, its licence by its full name linked to the licence's deed, and whether it was changed and how. Add only a model whose source and licence you know and whose licence allows sharing it; a NoDerivatives model must stay unchanged. `test/unit/examples.test.ts`, in the quick suite, fails when a file git tracks in `test-models/` has no row, when a row names a file git does not track, or when a row lacks any of these. As you asked on 2026-11-11, no file, file name, address or commit message may name the console maker or its characters, so give such a model a plain name of your own and its file a neutral name; the same test reads every file and commit message for those names.
 
-The site itself never contains the example models: `scripts/build-pages.sh` builds the app's pages and nothing from `test-models/`.
+The site holds the gallery, `gallery/` (the models of `public/gallery/`, their thumbnails and `SOURCES.md`), but never a test model: `scripts/build-pages.sh` builds the app's pages and nothing from `test-models/`. The gallery takes only models under CC0, CC BY or another licence that allows any use, each with a row in `public/gallery/SOURCES.md` and an entry in `src/gallery/catalogue.ts`, which `test/unit/gallery.test.ts` holds to each other; its thumbnails are made with `npm run media -- thumbs`.
 
 ## No tests on GitHub yet
 

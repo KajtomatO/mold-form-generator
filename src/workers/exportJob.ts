@@ -34,6 +34,7 @@ import { boltAdvice, type BoltAdvice } from '../core/report/clamp';
 import type { Diagnostic } from '../core/report/diagnostics';
 import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartAmount, type PlasticEstimate } from '../core/report/printability';
 import { exportReadme } from '../core/report/readme';
+import { GALLERY_LICENCES, sourceName, type GalleryCredit } from '../gallery/catalogue';
 import { withArena, type Arena } from '../core/solid/arena';
 import { buildToolMesh, toolSolid } from '../core/solid/tool';
 import { parseStl } from '../core/stl/parse';
@@ -124,6 +125,8 @@ export interface ExportMeta {
   simplified?: { from: OriginalFacts; record: SimplifiedRecord };
   /** RM: a repaired model's file and copy, which report.json, README.txt and project.json name. Only when repaired. */
   repaired?: { from: OriginalFacts; record: RepairRecord };
+  /** GA: a gallery model not ours, whose credit README.txt and project.json carry (R48). Only for such a model. */
+  gallery?: GalleryCredit;
 }
 
 /** The funnel and the fit test need no model, so they come with no inputs and no meta. */
@@ -618,12 +621,13 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
         parts: { count: imported.report.shells.filter((shell) => shell.kind !== 'void').length, bodies: imported.report.bodies },
         ...(meta.simplified ? { simplified: { ...meta.simplified, merged: scaled.base.mode === 'merged', ...(originalModel && inputs.needsTrim ? { trimmedTo: originalModel.triangles } : {}) } } : {}),
         ...(meta.repaired ? { repaired: { from: { name: meta.repaired.from.name, triangles: meta.repaired.from.triangles }, record: meta.repaired.record, merged: scaled.base.mode === 'merged', ...(originalModel?.trimmed ? { trimmedTo: originalModel.triangles } : {}) } } : {}),
+        ...(meta.gallery ? { credit: readmeCredit(meta.gallery) } : {}),
       });
       const text = new TextEncoder();
       files['README.txt'] = text.encode(readme);
       files['report.json'] = text.encode(`${JSON.stringify(report, null, 2)}\n`);
       const modelSha256 = meta.modelSha256 ?? (inputs.stl ? sha256(inputs.stl) : null);
-      files['project.json'] = text.encode(projectJson(projectFile(meta.project, meta.model, { modelSha256, basePlane: meta.basePlane, ...(meta.simplified ? { simplified: simplifiedEntry(meta.simplified) } : {}), ...(meta.repaired ? { repaired: repairedEntry(meta.repaired.from, meta.repaired.record) } : {}) })));
+      files['project.json'] = text.encode(projectJson(projectFile(meta.project, meta.model, { modelSha256, basePlane: meta.basePlane, ...(meta.simplified ? { simplified: simplifiedEntry(meta.simplified) } : {}), ...(meta.repaired ? { repaired: repairedEntry(meta.repaired.from, meta.repaired.record) } : {}), gallery: meta.gallery ?? null })));
       return { want, files, zip: zip(files), clearance, rim: built.rim, diagnostics, report, modelSha256 };
     });
   });
@@ -645,6 +649,12 @@ interface Measured {
   volumes: Record<string, number | null>;
   diagnostics: Diagnostic[];
   timings: Record<string, number>;
+}
+
+/** GA: a gallery model's credit as README.txt says it, its licence by its full name and deed. */
+function readmeCredit(credit: GalleryCredit): NonNullable<Parameters<typeof exportReadme>[0]['credit']> {
+  const licence = GALLERY_LICENCES[credit.licence];
+  return { title: credit.title, author: credit.author, authorUrl: credit.authorUrl, url: credit.url, source: sourceName(credit.url), licence: licence.name, deed: licence.deed };
 }
 
 function buildReport(params: Params, inputs: ExportInputs, meta: ExportMeta, m: Measured): ExportReport {

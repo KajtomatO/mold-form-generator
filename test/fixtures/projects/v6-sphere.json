@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 6,
+  "appVersion": "0.3.0-local+c7daedc",
+  "model": "sphere.stl",
+  "modelSha256": "32f3a21797966d1bc1b9404df6a715e6f32c4baa0a5fa20502996799e1f6593a",
+  "basePlane": {
+    "normal": [
+      0,
+      0,
+      -1
+    ],
+    "offset": 0,
+    "upper": false
+  },
+  "params": {
+    "base": {
+      "mode": "glue",
+      "thickness": 4,
+      "pocketDepth": null,
+      "pocketEnlarge": 0.2,
+      "planeTol": null,
+      "minIsland": 5,
+      "cornerRadius": 3,
+      "bedReliefHeight": 0.4,
+      "bedReliefRun": 0.3
+    },
+    "silicone": {
+      "t": 3,
+      "wallDraftDeg": 1,
+      "closeWidth": 1.2,
+      "baseLayer": null,
+      "baseLayerSlopeDeg": 2,
+      "density": 1.1,
+      "printMargin": null
+    },
+    "cover": {
+      "wall": 3,
+      "topCap": 5,
+      "topChamfer": 0.4
+    },
+    "joint": {
+      "taperDeg": 15,
+      "taperClearance": 0.1,
+      "landInner": 2,
+      "landOuter": 2,
+      "ridgeWidth": 1.6,
+      "ridgeHeight": 1.2,
+      "ridgeDraftDeg": 10,
+      "grooveClearance": 0.25,
+      "grooveExtraDepth": 0.3,
+      "baseProud": 0.2,
+      "pryNotches": true,
+      "pryWidth": 12,
+      "pryHeight": 1.2
+    },
+    "bolts": {
+      "enabled": false,
+      "size": "M3",
+      "length": null,
+      "holeClearance": 0.2,
+      "nutClearance": 0.15,
+      "minWall": 1.2
+    },
+    "pour": {
+      "perModel": 1,
+      "diameter": 10,
+      "minLand": 1.5
+    },
+    "vents": {
+      "enabled": true,
+      "diameter": 2.5,
+      "persistence": null
+    },
+    "seat": {
+      "enabled": true,
+      "depth": 3,
+      "halfAngleDeg": 30
+    },
+    "funnel": {
+      "generate": true,
+      "topDiameter": 40,
+      "height": 30,
+      "neckHeight": 10,
+      "wall": 1.2,
+      "tipWall": 0.86,
+      "seatClearance": 0.1,
+      "flangeWidth": 2,
+      "flangeThickness": 1.2
+    },
+    "grid": {
+      "nx": 1,
+      "ny": 1,
+      "spacing": null,
+      "edge": null
+    },
+    "print": {
+      "layerHeight": 0.2,
+      "nozzle": 0.4,
+      "bedX": 220,
+      "bedY": 220,
+      "bedZ": 250,
+      "infill": 0.05,
+      "density": 1.24,
+      "tapeStrip": 10
+    },
+    "quality": {
+      "cellFinal": 0.125,
+      "cellPreview": null,
+      "analysisCell": 0.25,
+      "tinTolFinal": 0.05,
+      "tinTolPreview": 0.1
+    },
+    "reports": {
+      "minVolumeMl": 0.05,
+      "undersidePersistence": 0.3
+    }
+  },
+  "plane": {
+    "rank": 0,
+    "upper": false
+  },
+  "pins": [],
+  "removed": []
+}

@@ -12,6 +12,7 @@ import { formatCount, formatNormal, formatNumber, originLabel, units } from '../
 import { Cross } from '../icons';
 import { ParamRow } from '../ParamRow';
 import { Section } from './Section';
+import { CreditLine, EXAMPLES_BUTTON_ID, ExamplesPanel } from '../Gallery';
 
 /**
  * Load, then confirm the base (G2.4): the ranked planes with the top one chosen, a face picked on the
@@ -54,6 +55,10 @@ export function ModelSection() {
   // What a file dropped on the view led to shows here, which may be scrolled away or folded up: an error,
   // a warning or a question opens the sidebar, and each scrolls into sight, as nothing else on screen changes.
   const attention = useRef<HTMLDivElement>(null);
+  // GA: the Examples button, which the panel gives focus back to.
+  const examplesButton = useRef<HTMLButtonElement>(null);
+  const examplesOpen = store.examplesOpen.value;
+  const credit = pipeline.gallery();
   useEffect(() => {
     if (!busy && !notice && !replacing && !large && !simplifying && !repairing) return;
     if (replacing || large || (notice && notice.severity !== 'info')) store.sidebarCollapsed.value = false;
@@ -75,7 +80,21 @@ export function ModelSection() {
         <button type="button" class="btn" data-testid="save-project" disabled={!canSave || saving} title={saveTitle} onClick={() => void store.saveProject()}>
           {saving ? 'Saving…' : 'Save project'}
         </button>
+        <button
+          ref={examplesButton}
+          id={EXAMPLES_BUTTON_ID}
+          type="button"
+          class="btn"
+          data-testid="examples"
+          aria-expanded={examplesOpen}
+          aria-controls="examples-panel"
+          title="Example models to try the app on"
+          onClick={() => (store.examplesOpen.value = !examplesOpen)}
+        >
+          Examples
+        </button>
       </div>
+      {examplesOpen ? <ExamplesPanel back={() => examplesButton.current} /> : null}
       <p class="file-name">
         {project ? (
           <span class="project">
@@ -91,6 +110,7 @@ export function ModelSection() {
         <span class="name" data-testid="file-name">
           {pipeline.modelName ? `${pipeline.modelName}${parsed ? `, ${formatCount(parsed.triangles)} triangles${originLabel(origin)}` : ''}` : 'Or drop an STL or a project on the view.'}
         </span>
+        {credit ? <CreditLine credit={credit} testId="model-credit" /> : null}
       </p>
       {store.canSimplify() && !large ? (
         <div class="simplify-row">

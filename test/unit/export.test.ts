@@ -87,7 +87,7 @@ describe('names and versions', () => {
     const file = projectFile(project, 'x.stl', { modelSha256: 'ab'.repeat(32), basePlane });
     expect(file).toEqual({ schemaVersion: SCHEMA_VERSION, appVersion: BUILD.version, model: 'x.stl', modelSha256: 'ab'.repeat(32), basePlane, ...project });
     expect(Object.keys(file)).toEqual(['schemaVersion', 'appVersion', 'model', 'modelSha256', 'basePlane', 'params', 'plane', 'pins', 'removed']);
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBe(7);
   });
 
   it('each request counts its own steps, and only the ZIP packs README, report and project', () => {
@@ -506,7 +506,7 @@ describe('the export of jersey in Node', () => {
     expect(report).toMatchObject({ app: 'Mold Form Generator', appVersion: BUILD.version, schemaVersion: SCHEMA_VERSION, model: { file: EXAMPLE_FILES.jersey, triangles: model.rawTriangleCount }, plane: { choice: { rank: 0, upper: false }, normal: [0, 0, -1] } });
     // README.txt is wrapped at 76 columns, so its lines are joined first.
     expect(text(files['README.txt']).replace(/\r\n\s*/g, ' ')).toContain(`Made by Mold Form Generator ${BUILD.version} from ${EXAMPLE_FILES.jersey}.`);
-    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 6, appVersion: BUILD.version });
+    expect(JSON.parse(text(files['project.json']))).toMatchObject({ schemaVersion: 7, appVersion: BUILD.version });
     // STL headers name the app and carry no version, so every build gives the same bytes for the same mold.
     for (const [name, bytes] of Object.entries(files).filter(([f]) => f.endsWith('.stl'))) expect(text(bytes.subarray(0, 80)).replace(/\0+$/, ''), name).toBe('binary STL, mold-form-generator');
     expect(report.params).toEqual(p.params);
@@ -1182,7 +1182,8 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
    * simplified model's keys and sentences appear only when a model was simplified, and a margin widened by 0 is the
    * margin. GC: Benchy's README.txt and report.json give the decimation's error proved, 0.037 mm where meshoptimizer
    * said 0.007, and the clearance less it, 3.18 mm where they said 3.21; its STLs and every other hash are
-   * 92724e8's. Update them only for a change that means to change the export.
+   * 92724e8's. GA: project.json, report.json and so the .moldproj say format 7 (0.3.0) where they said 6, and
+   * nothing else of them changed. Update them only for a change that means to change the export.
    */
   const PINNED: Record<string, Record<string, string>> = {
     'jersey at defaults': {
@@ -1208,9 +1209,9 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
       'model_oriented.stl': '6e5fe345fcbe5844e4c51d164324f8a1546e022df41b80d2cd1c1c881680dee9',
       'README.txt': 'b8dd3c1afba66debf1083a4957f0d791da550422d1c267c4d4d5400d3ce8a3c0',
-      'project.json': '515dbd0eb1ee591ac20383e59f1b83d77effe9e067bb507663feb285332358c4',
-      'report.json': 'affbcf47c9037662599895a14237b41ffa963789e5e565b22eaaeb5e6641c662',
-      '.moldproj': '56554ba1eb58957a757be8bb580d265bc103081fa0afd6466b01e30e7ce6a9ee',
+      'project.json': '2823c5fc8e6ae83f52dec79de4bf70a53fef6611dbfa80cb6df2255db560b115',
+      'report.json': 'dd76e5e4d2180cb0308af23bf0e1236ff469de6c21de4375b3aa2a93bf450c6c',
+      '.moldproj': 'c9d2dd17d16bd506d4ed5eda1d736f0778a0c7af3b6f388cb245d929c8600c39',
     },
     'jersey changed': {
       'base.stl': 'aca5c541ddd45157cb98230795e63bbecb4627d2e124eed8852cbdd6e54a4176',
@@ -1236,12 +1237,12 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       'fit_test/taper-0.40_cover.stl': '57941b9a47f28693353211961ac833ffdb3a2b5e9afbff1bb5e8015f1bb936a5',
       'funnel.stl': 'da48da8a675c463add92d1b03a1cd5eae5d1ff4335a690376d5d3ce6910e6df9',
       'README.txt': 'ccd50d4554755b9c6cc1bd47a0c478de5643a364c024776606ba19f4f4d17ca4',
-      'project.json': '8552acc6963d907ae1fb8b2b4716604b57179bd74745598fddfe494375673d27',
-      'report.json': 'b90264ae8914720bcebc785de34fd2de2e5e5c5180428280c230d13ec67cdfda',
-      '.moldproj': '0f6f2440b34022952a85eb2bf71934cadab68b18849808ab103edc4e8147c471',
+      'project.json': 'd104a16014577cccaed9fb3356a4cb741c5ce8360907d17639c982342a6995da',
+      'report.json': 'c979ffe09e4c0a7a949e334c5dc41c689d04bb58a350667f818c7a192954c91b',
+      '.moldproj': '86a86d246c51afee5aceceeee26f86381445758e5c64b4efa27261e6513a98db',
     },
     'Benchy at defaults': {
-      '.moldproj': '7558fe63c70cb7e4c4e9a4303b2704a64c6441c404a99a4e55ea6c4072aed4b4',
+      '.moldproj': '5474a327bdcb1d837d6676a5d20a9526fb65de0ad3c8ad0ab4d94c7b0d6672e8',
       'README.txt': '32de16fba15d40628fdb8d6cb8eb22e985ba4a67a47903b7f3ed42b89c596165',
       'base.stl': '143eb64a7f369f45681adf8baad516f4e0aec9c07211d045fb7ede8890537deb',
       'cover.stl': 'dcc9adc508455d02e9b77423e9cf4483232e62356e051813597f45c71f2007f6',
@@ -1264,8 +1265,8 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       'fit_test/taper-0.40_cover.stl': '12d7a0b01ac9b83e5614ab67a32a347eb690096ee83d0d61002346c224417673',
       'funnel.stl': '99116400b983371813638c8f6fd55dfd8979a251248b6d1be09b441dbcb282a0',
       'model_oriented.stl': 'b06bd96e52efc3488426a636930e4e89c98fc590dd4e09635682f9e8840c376d',
-      'project.json': '63ff6b3649aacc864384dc98d1a6f2ae2b3071d0f8671dd8764120b8f9141d53',
-      'report.json': 'aff136df8dc489a1e7c711ef5b9ad9224f8ba96c6a0d782ef33ed691686b764b',
+      'project.json': 'b136de0f9de07e12b74fd43d551f9d5c236a941e7bc0606858743f42d84ce305',
+      'report.json': 'e5d810c492c616f66ee4122fd3c359f644336d7f5c5e17fd50084aff36b04994',
     },
   };
   const CHANGES: Record<string, (p: Params) => void> = {

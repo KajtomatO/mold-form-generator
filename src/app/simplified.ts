@@ -12,11 +12,14 @@ import type { WeldedMesh } from '../core/mesh/weld';
 /**
  * The maker's own file a model was made from, kept unread on main: the File as chosen or dropped, which is on
  * disk, or for a load by bytes (the test hooks) a Blob of them. Workers read it with FileReaderSync, so main
- * never holds its bytes. A .moldproj's model is its model.stl.
+ * never holds its bytes. A .moldproj's model is its model.stl. GA: a gallery model's is its STL as fetched, with
+ * its id in the gallery.
  */
 export interface OriginalSource {
-  kind: 'stl' | 'moldproj';
+  kind: 'stl' | 'moldproj' | 'gallery';
   blob: Blob;
+  /** GA: the gallery model's id, for kind 'gallery'. */
+  id?: string;
 }
 
 /** The original as parsed: its name, size, hash and counts, with collapsed triangles dropped from `triangles`. */
