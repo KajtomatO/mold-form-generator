@@ -196,6 +196,9 @@ Units are mm unless noted. Every value is editable; rarely used ones sit in a co
 | Print | `layerHeight` (0.2); `nozzle` (0.4); bed X, Y, Z (220, 220, 250); infill (0.05; 0.35 until the user's note of 2026-11-12, `docs/REQUIREMENTS.md` section 2 and D19); density (1.24); tape strip N (10) |
 | Quality | `cellFinal` (0.125, 0.05 to 0.5); `cellPreview` (auto `max(0.5, L/1024)`); `analysisCell` (0.25); `tinTolFinal` (0.05); `tinTolPreview` (0.1) |
 | Reports | `minVolumeMl` (0.05); underside persistence (0.3) |
+| Mold (0.3.0, MT) | `type` one-piece or clamshell (one-piece); not reset, not in the switch window; per-type defaults in `defaults.<type>.json` (G13.14) |
+| Clamshell (0.3.0, G13.14) | `axis` (auto, x, y); `offset` (auto); `ceilingDeg` β (20, 0 to 60; 30 in the design, 20 by the user's answer of 2026-11-22); `seamLand` (2, 0.8 to landInner); `pins` (on); `fastener` bolts, clips or none (bolts, G13.10; clips by the user's answer of 2026-11-23); `silicone.baseLayer` 0 by default in this type (a default, not a lock); grid 1 x 1, corner bolts and pry notches locked off in this type; `cover.wall` stays a setting (3) |
+| Clips (0.3.0, G13.10.19) | `clearance` per side (0.10, 0 to 0.5, step 0.05; set by the clip coupon); `rows` (auto, 1 to 8: bottom, top, a second bottom row, then middle rows no more than 100 mm apart); shown only with Seam fasteners Clips |
 
 Hard cross-parameter rules, each giving an inline error and covered by a fuzz test:
 - `ds <= topCap - 1`
@@ -321,6 +324,606 @@ Mode B fills the barrel's void via `union(decompose())`, and this is reported. M
 FL superseded "no flat ledge" (the user's first pour, 2026-11-12: the funnel stood only on its spigot, a 30 degree cone about 2.8 mm deep and 13 mm across under a cup 40 mm wide and 30 mm tall, with 0.1 mm of clearance, so it rocked, tipped and lifted off). A **flange** now rings the spigot's root: its underside lies flat at the cover's top, from the spigot out to the seat's radius at the top plus `flangeWidth` (2 mm since VN, D21; 4 at FL), so the funnel stands square on the top and the spigot only centres it. Its edge rises square for `flangeThickness` (1.2 mm), then a 45 degree chamfer runs in to the neck, so the print pose keeps every wall within 45 degrees and the underside prints as the funnel's last layers, flat. Over the last 2 layers under the flange the spigot runs straight up instead of widening with the cone (the **relief**): the cover prints top down, so the seat's mouth is in its first layers, which print a little narrow, and the cone there would hold the flange off the top. The relief is a height, so its gain across is that height times tan of the half angle: it runs higher where 2 layers leave under 0.2 mm across at the foot of the cover's first layer (a seat under about 25 degrees, or thinner layers: 0.76 mm at 10 degrees), so a first layer squashed 0.2 mm into the mouth still clears the spigot, and lower where the seat cannot spare it, so 0.5 mm of cone always centres the funnel (0.3 mm in a 1 mm seat, where 2 layers would have blocked the export). Where the relief would leave the spigot's wall thinner than the thinner of `tipWall` and `wall`, the bore widens more slowly, into the flange. `flangeWidth` 0 is the funnel of before FL, byte for byte.
 
 **Fit-test piece:** uses the real cover and base builders with a 20 x 20 x 6 box tool, about 40 mm square, with a pour bore, seat and vent, so it also works as a leak test. Variants first step cT with cG held generous, then step cG, at 0.1 mm per step, marked by edge notches. The README explains how to read the result.
+
+### G13. Two-part cover (mold type `clamshell`, 0.3.0)
+
+Designed on 2026-11-22 for 0.3.0 (`docs/REQUIREMENTS.md`, sections 2 and 8; R45, D28), with the user's answers of 2026-11-22 and 2026-11-23: a clamshell (the user's "Clamshell cover"), a default ceiling slope of 20 degrees where the design had 30, the halves held by M3 seam bolts in printed lugs rather than clamps (the user's "Printed clips/bolts"; and, by the answer of 2026-11-23, printed clips too, both in 0.3.0), and no pause for leak coupons before the rest is built. Built in the runs MP1 to MP6 below. The draft was reviewed by three critics; the review moved the seam groove's legs into the base groove, padded the roof's lattice, dropped the V notch on the top face, built the base ridge as two bars only, replaced cone keys by pins and gave the base groove a teardrop. A judge then chose seam bolts over printed clips for holding the halves; the user asked for both in 0.3.0, so bolts are the default and clips a second choice (G13.10). The one-piece cover of G7 to G12 is the type `one-piece`, and its STLs are unchanged, byte for byte.
+
+#### G13.0 Scope and invariants
+
+**What is split.**
+- One vertical plane P = {a = xs} cuts the printed cover into two halves. a is x or y, and b is the other horizontal axis.
+- `cover-neg` lies on the a < xs side and pulls off along −a. `cover-pos` lies on the a ≥ xs side and pulls off along +a.
+- The base stays one piece. It is G10's base with one change in this type: the ridge is built only as two straight bars running along a, for a ∈ [D.a0, D.a1]. The two ring segments parallel to P, and the corners, keep the cover's groove but hold no ridge (G13.7).
+- The silicone stays one piece. Once the halves are off, the glove is in the one-piece situation, and only the demold verdict's cuts are made.
+
+**Limits.**
+- A 1 x 1 grid and one model. `grid.nx` and `grid.ny` are locked at 1, so `compositeTiles`, the shifts and `replicateOpenings` are no-ops.
+- The type is not offered past G1.8's limit (2 million triangles) unless the model has been simplified on opening (G1.9): the one-piece cover's 3 million triangle soak already peaks within 9 MiB of the 2,861 MiB bar.
+
+**Guarantees.**
+- **G4:** proved for each half, and measured by `minGap` for each half.
+- **Demold and assembly:** each half is a height field along its pull. It slides on and off along ±a with the base and the model in place, the seam bolts or clips out. This is proved (G13.4), and tested by translate-and-intersect, base included.
+- **Air:** every plastic ceiling drains toward P at tan β or steeper, and every cavity high point on P is vented (G13.5).
+- **Printing:** every half prints with no supports in its pose (G13.12), the nut slots' ceilings the only bridges, listed as M10's are; the clip ears have none (G13.10.18).
+- **Sealing:** every path from the liquid to the outside crosses the base groove (K4), the seam groove (K5) or the funnel flange's seal. K4 and K5 are one connected Vaseline void, and the flange seal is the one-piece's own seal at the seat (G13.9).
+- **One-piece output:** the `one-piece` type's STLs stay byte-identical, checked against `test/fixtures/m9-parts.json` and every golden. The text files that change, and why, are listed in the 0.3.0 rules (project.json's format 7 fields, and the mold type at the top of README.txt and report.json).
+
+**Ids.** `mold.type: 'one-piece' | 'clamshell'`, written into format 7 project files and final. The names a user reads are "One-piece cover" and "Two-part cover", the design's choice (the builder's, not asked of the user, whose word for the type was "Clamshell cover").
+
+#### G13.1 Frames
+
+All frames have v = z, and h ≥ 0 over the whole model, so `raster.ts` drops no source.
+
+| pull | (u, v, h) | rotation rows | translation | det |
+|---|---|---|---|---|
+| +x | (y, z, x − xmin) | [[0,1,0],[0,0,1],[1,0,0]] | (0,0,−xmin) | +1 |
+| −x | (−y, z, xmax − x) | [[0,−1,0],[0,0,1],[−1,0,0]] | (0,0,xmax) | +1 |
+| +y | (−x, z, y − ymin) | [[−1,0,0],[0,0,1],[0,1,0]] | (0,0,−ymin) | +1 |
+| −y | (x, z, ymax − y) | [[1,0,0],[0,0,1],[0,−1,0]] | (0,0,ymax) | +1 |
+
+Before turning, the oriented model is cut at z = 0 with `clipBelow` (`src/core/mesh/clip.ts`), because z becomes a lattice axis.
+
+#### G13.2 Side fields (stages S3x, S4x, S6x, keyed by pull)
+
+1. **Lattice.** `planField` on the turned bounds, with nx = ny = 1. Pad below v = 0 by max(rEff + `MARGIN_CELLS`·cell, Tb + 2), and above to Hmax_clam (G13.6) plus 2 cells: coarse fields take the largest Hmax_clam over the candidate range of xs, fine fields the chosen xs. At 0.125 mm the padding adds up to 70% more rows on VIS-35 pulled along y.
+2. **Chain.** `rasterize`, then `dilate(rEff)`, then `conditionField` (draft, then closing), unchanged. G(u,v) is the farthest reach, in h, of the cavity in row (u,v).
+3. **Roof** (`applyRoof(field, β, hStop)`). Sweep v upward: G(u,v) := max(G(u,v), G(u,v−1) − cell·cot β), only where G(u,v−1) > hStop. Coarse fields use hStop = 0; fine fields use hStop = h_s, the seam in this frame, as rows past it add no cavity to this half. β = `clamshell.ceilingDeg`, **20 degrees by default** (the user's answer of 2026-11-22; the design had 30). β = 0 means no roof. The top lattice row of every roofed field is ≤ hStop, which a test holds.
+4. **Base layer rows**, only when `silicone.baseLayer` > 0 (0 by default in this type): for each row with z ≤ the layer's top, raise G to the layer's farthest reach on this side. This runs after the roof and is exempt from it, as BL keeps its own air argument.
+5. **Prism rows.** For v < 0 down to −(Tb + 1): G(u,v) := max(G(u,v), G(u,0)). Raster and dilation already give G(u,0) ≥ G(u,v<0), as the model lies at z ≥ 0, so this is the straight prism into the rebate, and it only raises G.
+6. **Far-side flatten** (fine fields only, after steps 3 to 5). A node whose 8 neighbours and itself all have G ≤ h_s is set to h_s − 1 − liftMax. Those rows hold no cavity on this side, so the half is unchanged and G4 untouched, but the TIN collapses there. `buildToolMesh` asserts lift ≤ liftMax (0.5).
+7. **Seam exclusion** (in `buildToolMesh`, a new option `seam: { hs, eps }`, eps = max(tinTol, 0.05)), after the lift has settled: every node whose final height lies in (h_s − eps, h_s + eps] is raised to h_s + eps. Raising keeps G4; it leaves a silicone sliver of at least eps where the dilated model just crosses P, and no tool face lies in or near the trim plane.
+8. **Coarse and fine fields.** With the axis or the offset on auto, all four pulls are built at 1 mm for G13.3. The chosen pair is then built at the preview cell, and at cellFinal for export. The volume at the xs chosen from coarse fields, rebuilt from fine fields, is within 2% of a sweep over fine fields on every example, which a test holds.
+
+Every step from 2 to 7 raises G, except step 6, which changes only rows proved to lie outside this half.
+
+#### G13.3 Choosing the parting plane (stage S6c)
+
+**Scoring.** The fields do not depend on xs (only the roof's stop rule does, and it never changes a counted row), so every candidate is scored from the same coarse fields:
+
+V(a, xs) = Σ max(0, reach₊ − xs)·cell² + Σ max(0, xs − reach₋)·cell² + raise·(cavity rows)·cell² − V_model
+
+with reach₊ = a_min + G₊ and reach₋ = a_max − G₋, over rows with v ≥ 0. The reaches are sorted once with prefix sums, so each xs costs O(log n).
+
+**Candidates.** a ∈ {x, y} × xs ∈ [0.2, 0.8] of the extent, in 1 mm steps, then 0.25 mm steps round the best.
+
+**Bed filter** (analytic and cell-independent):
+- Zt(xs) comes from G13.6's Hmax_clam at O(1) per xs: max_v(v.z + c·|v.a − xs|) = max(M₊ − c·xs, M₋ + c·xs), with M± = max_v(v.z ± c·v.a) and c = tan β + tan α.
+- Each half's pose footprint is (O.b extent + 2p) × (Zt + Tb − proud), where 2p is the seam bolts' lugs (G13.10.8, 19.0 mm at M3), 2·`EAR_LENGTH` = 20 mm with Seam fasteners Clips (G13.10.18), and 0 with None; its height is |O.a − xs|.
+- Keep the candidates that fit `print.bedX`, `print.bedY` (either way round) and `print.bedZ`.
+- If none fits: take the least silicone, keep the bed warning, and say on the card the largest β at which some split fits. β is never lowered automatically, as air safety is not traded silently. Where the lugs or the clip ears alone break the fit, the card names the fastener that fits ("fits with Seam fasteners: None (clamps)", or Bolts where the ears' 20 mm miss and the lugs' 19 fit); the fastener is never switched silently.
+
+**Ties.** Within 1%, prefer the higher seam-section top, then the lower Zt, then x.
+
+**Typed values.** `clamshell.axis` x or y skips the axis choice. `clamshell.offset` (mm from the centre of the extent) skips the position choice; it is clamped to the extent less 1 mm on each side and snapped to cellFinal.
+
+Measured in the design (0.5 mm, β 30, before the default became 20; MP1 measures again at 20): Goddess x 62.9 ml at 50%, y 62.0 ml at 69%, and y wins with the lower Zt (116.0 against 119.5). VIS-35 y at 50% is 421.8 ml against 329.9 at 69%, so the sweep matters.
+
+#### G13.4 The cavity, demolding and G4
+
+**Cavity.** C₊ = {xs ≤ a ≤ reach₊(b,z)} and C₋ = {reach₋(b,z) ≤ a < xs}; C = (C₊ ∪ C₋) ∩ {z ≥ 0}, plus the prism and the openings. Every non-empty row of a half's cavity is an interval that starts at P. The seam section S(b,z) is the set of rows non-empty on either side.
+
+**Pull condition.** H₊ pulls along +a without touching the silicone if, for every (b,z), C ∩ {a ≥ xs} is empty or an interval [xs, g].
+- Proof: a plastic point p ∈ H₊ has p.a > reach₊; moved by +d·eₐ it still has p.a > reach₊, so it never enters C₊, and it never enters C₋, which lies at a < xs.
+- Openings on P are half-cylinders and half-cones whose rows also start at xs. The tongue, groove and pins are extrusions along a. The seam bolts' lugs and the clip ears each move with their own half (G13.10.8, G13.10.18).
+- **Base:** in this type the base holds ridge only as bars running along a, so the half's straight groove segments slide along them; the ring segments parallel to P and the corners hold no ridge. The rebate's end walls lie beside the plate, and the far wall moves away from it. So the pull holds with the base in place.
+- **Assembly** is the same motion reversed, at δ = 0, with no lift.
+
+**G4 for each half.** A point p of the dilated model with z ≥ 0 and p.a ≥ xs has reach₊(p.b, p.z) ≥ p.a: G3's proof in the turned frame, and steps 3 to 5 and 7 only raise G. So p ∈ C₊, and the − side is symmetric; step 6 touches only rows whose whole neighbourhood has G ≤ h_s, which hold no point of the dilated model at a ≥ xs. Export measures `minGap(model, cover-neg)` and `minGap(model, cover-pos)` with GC's proved error and keeps min(gap − error). If that is under t, rEff is raised by the deficit plus 0.05 and the mold rebuilt once, **keeping the first build's axis, xs and bed outcome**. The heap budget counts both half pairs held by MM1's rule.
+
+**The top-down H is not used to cap the cavity.** The only pull-safe cap is the seam-monotone hull, and a roof is still needed over it. Measured with padding at 0.5 mm: Goddess x at β 0 57.7 → 57.5 ml; at β 45, x 68.7 → 68.6; VIS-35 x at β 0 137.6 → 135.9, y at β 0 159.9 → 146.1 (−9%), y at β 45 457.1 → 442.1. Not worth a second field pipeline in 0.3.0 (deferred). The one-piece H is built only at the preview cell, for the comparison and the card. **H_top**, the clamshell's own top-down map, is derived from G± by a running maximum down each b-column; it feeds placement, the funnel check, lift and the view's markers.
+
+#### G13.5 Air and openings on the seam (stage S7c)
+
+**Claim.** Air in the cavity can always keep rising until it reaches a leaf of S or a model underside. Model undersides are S8's intervals, unchanged.
+
+**Proof.** A plastic ceiling of H₊ lies on a = reach₊(b,z) where reach₊ falls with z. The roof bounds that fall to cot β per unit height, so the ceiling rises by at least tan β per unit moved toward P, and the row between the ceiling and xs is cavity, so air reaches a = xs. On P the cavity at (b,z) is exactly S(b,z), so a point on P is a local maximum in z exactly where it tops its run of S in that column. Air on P therefore ends at a leaf of S, or at the top of a lower run (a "hidden leaf") below more of S.
+
+**Merge tree on S** (`src/core/analysis/seam.ts`, new, about 120 lines): union-find over the cells of S, swept in descending z with 4-neighbours in (b,z). Leaves get a height, a persistence and a saddle, as in `peaks.ts`; the persistence filter (`vents.persistence`, t/2) is unchanged.
+
+**Placement on the seam line** (`placement.ts`, a 1D mode):
+- **Pour:** at the highest significant leaf.
+- **Room (hard):** each opening needs seat radius + seamLand + gw + 0.8 of room inside O, clear of the pins, the pry chamfers, the seam bolts' lugs and the clip ears. O is never widened for the band, so there is no S10 → S7 → S10 cycle.
+- **Vents:** one at every other significant leaf. The vent nearest the pour uses the existing `flangeReach`/`ventLand` closest-circle radius, intersected with P; FL's hard rule and its drag refusal apply unchanged on the line.
+- **zb:** G11's rule on the leaf's own column run, read from G±.
+- **Hidden leaf:** a straight vent bore on P, from zb up through the cavity above to Zt, its b chosen inside the leaf's top run so that its line clears the model in S8's columns; otherwise S8's underside-air warning names the spot. README.txt: cut these vent rods at demold, as they tie two regions of the glove together.
+- **1D plateau:** a stretch within 0.2 mm of the leaf, under 2 degrees and at least 10 mm long, gets its opening at the middle and today's plateau warning.
+- **Pins:** still stored as (x, y) in format 7. In this type an opening sits at (xs, pin.b), and a drag changes only pin.b. Switching back to one-piece restores the stored position.
+- **Cutters:** `openingCutters` is unchanged, centred on P and cut from both halves. `funnel.stl` is unchanged.
+
+#### G13.6 Bounds (stage S10c, analytic and cell-independent as G8 requires)
+
+Let zJ = rh + gx + seamLand + 0.5 (4.0 at defaults), and w(v) = (|v.a − xs| + rEff)·tan α. zJ includes seamLand because the band's leg zone (z ≤ rh + gx) must hold the seamLand offset of every cavity row below zJ.
+
+- **D_side** (the cavity at z ≤ zJ): vertices count if v.z ≤ zJ + rEff + w(v); across the pull v.b ± (rEff + w(v)) + 0.5; along the pull v.a ± rEff + 0.5, clamped to include xs.
+- **D** = per side max(D_G8, D_side). The base is this type's own anyway (the ridge bars), so D growing is reported, not avoided. **D3** is the same terms with no z filter.
+- **Hmax_clam** = max over v of (v.z + |v.a − xs|·tan β + rEff/cos β + w(v)) + (raise + cell)·max(1, tan β); with β = 0, rEff replaces rEff/cos β. Tested against the built tool meshes' top, not the field.
+- **Zt** = max(Hmax_clam + topCap, rh + gx + cap).
+- **O** is G8's formula with the user's `cover.wall`, which stays a setting in this type (3 by default, as in the one-piece). The band above the joint needs O.b ≥ D3.b + seamLand + gw + 0.8 on both sides, gw = rw + 2cG = 2.1; where that fails, the wall is raised (O only, the base unchanged), with "wall raised from X to Y for the seam seal". D3.a stays inside O.a less the wall, which is asserted.
+- `maskOverrun` runs on both fields' rows at z ≤ zJ.
+
+#### G13.7 The halves (stages S11c, S12c, S13c, per half; S14c the base)
+
+1. **Tools.** For each chosen pull, `toolSolid(buildToolMesh(G, { seam }))`, turned back with `orientSolid(inverse)`.
+2. **Shared block.** `common = (block ∪ (lugs ∩ slab(O.a0 ≤ a ≤ O.a1))) − rebate − groove`: G9's, with the seam bolts' lugs (G13.10.3), and these changes:
+   - (a) The outer box stays square, as `blockSolid` already builds it (radius 0).
+   - (b) **Groove teardrop:** wherever the groove's wall faces down in the half's print pose by more than 45 degrees (the inner-land wall of the segments parallel to P, and part of the corner arcs), that wall becomes a 45 degree face rising from the land edge toward the groove roof. Those stretches hold no ridge, so the fit is unaffected.
+   - (c) `joint.pryNotches` and the corner bolts (`bolts.enabled`) are locked off (G13.14). The halves slide off the base, so no base prying is needed.
+3. **Halves.**
+   - pos = trimByPlane(common, +a, xs) − tool₊ − seamGroove − pinSockets − relief − seamBoltCuts₊
+   - neg = trimByPlane(common, −a, xs) − tool₋ + seamTongue + pins − relief − seamBoltCuts₋
+   - With Seam fasteners Clips there are no lugs, relief or bolt cuts; each half is instead (half ∪ ears) − sockets after step 4, as the ears and sockets lie wholly outside O (G13.10.16).
+4. **Openings.** halfFinal = half − openingCutters, the cutters cropped to each half's box.
+5. **Pry chamfers.** A 45 degree chamfer of 1.0 mm leg on each half's seam edge, on the two end faces (perpendicular to P), from Zt down 12 mm (`PRY_RUN`). Together they make a V for a screwdriver. There is no V on the top face.
+6. **Silicone mesh** (tests and the 1% volume check only): (tool₊ ∩ {a ≥ xs} ∪ tool₋ ∩ {a < xs}) ∩ {z ≥ 0} − model.
+7. **Base** (S14c): G10's base, with the ridge built as two straight bars on the ring segments running along a, for a ∈ [D.a0, D.a1]. These are the segments that cross P, so the ridge still crosses the seam unbroken. S15 and S16 are unchanged.
+
+#### G13.8 The seam seal: a tongue loop joined to the base groove
+
+Rejected: a flat seam with pins only (no labyrinth and no reservoir); a lap step (it overhangs in the pose and halves the land); the draft's loop through the rebate wall (it bypassed K4).
+
+**Construction** (in P, in (b,z), with Manifold's `CrossSection`):
+1. **R_sil** = closing₃ₘₘ(S) ∪ bore strips. S is traced from the fine fields with `mesh/marching.ts` at analysisCell and simplified to 0.1 mm. Bore strips: |b − b₀| ≤ seat radius, from zb to Zt + 1.
+2. **Inner edge:** E_in = offset(R_sil, seamLand) ∪ J, with round joins and holes filled, J = [D.b0 − e1, D.b1 + e1] × [−1, rh + gx]. seamLand ≤ `joint.landInner`, so with zJ as in G13.6, E_in lies at b ≤ D + e1 for z ≤ rh + gx.
+3. **Band** = offset(E_in, gw) − E_in, clipped to z ≥ rh + gx and to the half's seam face. gw = 2.1 = e4 − e1, so at z = rh + gx each leg lands exactly on the base groove ring's footprint [D+e1, D+e4]. The loop runs from one leg up round the cavity's shadow, beside each bore, out through the top face, and down to the other leg.
+4. **Profile:** the base joint's own (rw 1.6, rh 1.2, ridge draft 10 degrees, cG 0.25, gx 0.3), so the user's groove fit test calibrates it.
+   - **Groove (in pos):** the band extruded from xs to xs + rh + gx. At z = rh + gx it opens into the base groove below it (also cut by P), so K5 and K4 are one void.
+   - **Tongue (on neg):** the band offset inward by cG, extruded along +a in 6 layer steps, each offset inward by step·tan 10 degrees. It stops at z ≥ rh + gx + cG, so it never enters the base groove or meets the ridge; a 0.25 mm void joins its tip to the base groove, so one Vaseline fill spans both.
+5. **Fit rules:** Zt − (top of S) ≥ seamLand + gw + 0.8 = 4.9, so topCap ≥ 5 in this type (the default); the band keeps 0.8 from O, or the wall rises (G13.6); there is no wall rule at the joint, as the legs lie inside B.
+6. **Top exits:** beside a pour the band surfaces at b₀ ± (seat r + seamLand) = b₀ ± 8.7 to ± 10.8 mm, so it starts at the flange's edge (`flangeReach` 8.7). The K1 line from the seat to the band lies wholly under the flange.
+7. **Pins:** two Ø4 cylindrical pins, 3 mm tall, with a 0.6 mm 45 degree lead-in, on neg's face at the top corners outside the band. Sockets in pos have 0.2 mm radial clearance and are 0.5 mm deeper, so the seam faces touch first. Registration is ±0.2, which the split funnel seat takes, as its Vaseline-sealed flange takes ±0.25. If the pins do not fit, they are dropped with an info line, and the tongue registers to ±0.25.
+
+**Sealing principle.** The halves are pressed together by the seam bolts or the seam clips (G13.10). K4 and K5 are one Vaseline-filled labyrinth, and leakage follows the cube of the gap. The head at the foot is about 1.6 to 1.9 kPa for VIS-35 (Zf includes the 30 mm funnel).
+
+**Print quality.** The seam face is each half's last, top layer over 5% infill. README.txt: at least 1.2 mm of top layers (6 at 0.2 mm), a brim or mouse ears on large halves, and check each seam face on a flat surface before use.
+
+#### G13.9 Leak paths, and why the guarantee holds
+
+The cracks: K1 the seam; K2 the shelf contact at z = 0; K3 the taper gap; K4 the base groove void; K5 the seam groove void; F the funnel flange's contact.
+- **K1, inside E_in:** liquid moving outward in b meets K4 at b = D + e1 (z ≤ rh + gx) or K5 above it. Both are the same void.
+- **K1∩K2, the line z = 0:** from the cavity, across s1 (D to D + e1), into K4: the one-piece's own path, with a possible duct from rounded printed edges, which README.txt's bead fills.
+- **K1 outside the band** (b > D + e4, or beyond the band higher up), K3 and the outer land are reached only after crossing K4 or K5. They are the dry side, where every seam bolt cut and clip socket lies (G13.10.8, G13.10.16).
+- **At the top:** inside the loop, K1 surfaces on the top face only between the band's exits, all under the flange, so that path crosses F, the one-piece's own seat seal, at a head of Zf − Zt ≈ 30 mm (0.3 kPa). README.txt: a Vaseline ring under the flange across the seam line. Vents are open at the top, at a head of about 0.
+
+**The hardest points**, which README.txt names for the leak test: the seam's two bottom corners (the duct along K1∩K2 and the taper wedge), and the top under the funnel.
+
+**Taper wedge.** In the one-piece the rebate is a closed ring. Here the base tape's pull, about 10 to 20 N, times 1/tan 15° ≈ 3.7, pushes the halves apart at the bottom. The lowest seam bolt pair, or the clips' bottom row with its second row stacked on it, sits flush with the cover's bottom edge, over the rebate wall, and is counted for it (G13.10.7, G13.10.17). README.txt: after taping the base, check that the seam is closed at the bottom edge; if it is not, the taper clearance is too small for this type. The +0.05 mm on cT for this type that the review offered is declined, as it would break the user's fit-test calibration.
+
+**Side push per half:** F_side = ρg Σ over that side's cavity rows of (Zf − z)·cell², also reported for the worst case where a film fills the seam face out to the band (the same sum over E_in). Measured at β 30: Goddess (y) 4.6/4.9 N, VIS-35 x 14.4 N or y 10.6 N, wolf (x) 15.0 N, sphere 1.3 N, Benchy (y) 1.7 N; lower at β 20, whose halves are smaller. **Net lift per half:** Goddess ≤ 1.0 N (one-piece 1.6), VIS-35 x −0.3, y 3.1 (one-piece 4.3), wolf x ≤ 5.7 N (one-piece 11.0). **Base tape:** `clampAdvice` is unchanged, with the halves' summed lift and at least one strip per half each way.
+
+#### G13.10 Holding the halves
+
+##### G13.10.0 Choice
+
+- **The two halves are held by seam bolts:** M3 countersunk screws (ISO 10642 / DIN 7991), each running along a through a pair of printed **lugs** on the end faces, into an ISO 4032 hex nut held captive in a slot of the pos lug.
+- **New setting `clamshell.fastener`:** `bolts | clips | none`.
+  - `bolts` (the default) builds the lugs (G13.10.1 to G13.10.15).
+  - `clips` builds dovetail **ears** on the end faces instead, held by printed tapered bowtie **keys** (`clips.stl`), with no hardware (G13.10.16 to G13.10.20).
+  - `none` builds neither, and the halves are held by clamps or tape belts (G13.10.9).
+- **The user's hardware** (the answer of 2026-11-23): M3 countersunk screws of 10 mm or more, M3 hex nuts and a 2 mm hex key, so the default needs nothing new.
+
+**Why bolts are the default** (both were designed; a judge chose bolts and deferred clips; the user then asked for both in 0.3.0, "Bolts and clips now", 2026-11-23):
+- A screw's preload is set and stays. A tapered printed key's depends on how hard it was tapped home and on print error of about ±0.15 per side, and relaxes as the plastic creeps over the cure; the draft's bottom row was rated 80 N against a frictionless wedge of 74.6 N.
+- It reuses M10: the cuts, membrane, quantization, length rules, `BOLT_HOLD_N` and the user's bolt fit-test calibration all carry over.
+- **Clips are built in 0.3.0** (run MP3b), by the user's answer, as the no-hardware choice: a female 40 degree dovetail socket in a pair of ears, and a 4 degree tapered bowtie key that slides in along −b. Each of the judge's criticisms is answered in the clips' design: the ears are relieved one layer as the lugs are, the bottom row gets a second row stacked on it, the keys are printed solid standing on their heads, and home marks on each key show how far it went (G13.10.17). One idea went the other way, from the clips to the bolts: the lug relief (G13.10.1).
+
+**Rejected layouts:** bolts through the wall inside O (at the joint there are only 6.12 mm between the band leg and O where a head needs 9.5, higher up the room depends on the model, and the head would need a deep access bore); lugs on the top face (they would collide with the flange's keep-out and the vents, and the top has the lowest head, about 0.3 kPa, sealed by K5 and the flange); socket-head screws in a counterbore (the flat seat would be a ceiling in neg's pose).
+
+##### G13.10.1 Frame and terms
+
+- **Pull frame.** Lug geometry is built in each half's pull frame (G13.1), translated so that h = 0 on P: (u, v, h) with v = z, h = a − xs for pos and h = xs − a for neg. The solids are turned back with `orientSolid(inverse)`, det +1.
+- **End faces:** O's faces at b = O.b0 and b = O.b1. w is the outward distance from an end face.
+- **Half depth:** H₋ = xs − O.a0 and H₊ = O.a1 − xs. In the print poses z′ = H − h.
+- **Heads and nuts:** heads always in neg and nuts always in pos, so README.txt gives one instruction.
+- **Relief:** r = `print.layerHeight` (0.2). Each lug's seam face lies at h = r, one layer back from P, so the two lugs of a pair never touch and leave a 2r = 0.4 mm gap. The screw's whole preload then reaches the half's seam face through the lug's root, at the end wall, where the tongue loop's legs and bottom corners are, and a printed lug face can never hold the seam open: the principle of the pin sockets being deeper than the pins. Without it, lug faces coplanar with the seam and right under the screw would take most of the preload lug to lug rather than on the sealing band.
+
+##### G13.10.2 Sizes (from M10's `boltNeeds` and `FASTENERS`, same names)
+
+| symbol | formula | M2.5 | **M3** | M4 |
+|---|---|---|---|---|
+| rh (hole) | d/2 + holeClearance | 1.45 | **1.70** | 2.20 |
+| rk (countersink, access bore) | dk/2 + holeClearance | 2.95 | **3.56** | 4.68 |
+| sinkDepth | rk − rh (45°) | 1.50 | **1.86** | 2.48 |
+| s (slot width = bridge span) | nutFlats + 2·nutClearance | 5.30 | **5.80** | 7.30 |
+| apex (hex pocket past the axis) | s/√3 | 3.06 | **3.35** | 4.21 |
+| slotHeight | nutHeight + 2·nutClearance + layer | 2.50 | **2.90** | 3.70 |
+| e (axis to the lug's sides in w) | max(rk, apex) + minWall | 4.26 | **4.76** | 5.88 |
+| p (projection past O, along w) | 2e | 8.52 | **9.52** | 11.76 |
+| c (axis from the end face) | e | 4.26 | **4.76** | 5.88 |
+| hL (lug height along z) | max(2e, `LUG_HEIGHT` 14) | 14 | **14** | 14 |
+| f_min (P to the slot's seam-side face) | r + 2·minWall | 2.6 | **2.6** | 2.6 |
+| Tn,min (P to the head's face, least) | r + sinkDepth + max(`OVER_SINK_MM`, `OVER_SINK_LAYERS`·layer) | 2.70 | **3.06** | 3.68 |
+| auto length | `standardLength`(Tn,min + f_min + layer + nutHeight + `threadPast`) | 10 | **10** | 12 |
+| bed growth across b | 2p | 17.0 | **19.0** | 23.5 |
+| hex key | | 1.5 | **2** | 2.5 |
+
+- **e** leaves at least `minWall` (1.2 mm, 3 perimeters at a 0.4 mm nozzle) on every side of every cut: bore to O's face c − rk = 1.2; bore to the lug's tip 1.2; slot to the end face and to the lug's tip e − s/2 = 1.86 (M3).
+- **Every lug is all perimeters at 5% infill:** every part of it lies within about 2 perimeter widths of a cut, so it prints as perimeters, not infill (README.txt still asks the user to check the slicer's preview).
+- **f_min:** one minWall is the top skin over the bridge's sag, one the nut's bearing plate, both measured from the relieved face.
+- **hL 14** keeps about 73 mm² of interlayer section across the slot's level (M3): about 700 N at a conservative 10 MPa for printed PLA across layers, against the 50 N each bolt is counted at. A lug of 2e = 9.52 mm keeps about 43 mm², about 430 N, which a hand-snug M3 (500 to 800 N) can break. hL costs no bed width, which grows only with p.
+- With the relief, the auto length rises for M2.5 from 8 to 10; M3 stays 10 and M4 12.
+
+##### G13.10.3 Lug solid
+
+**Shape.** Per lug pair, in mold coordinates, the prism over z ∈ [z_k − hL/2, z_k + hL/2] of a trapezoid in (a, w) with corners (xs − Tn − p − ε, −ε), (xs − Tn, p), (xs + Tp, p), (xs + Tp + p + ε, −ε). ε = 1 mm overlaps into the 3 mm wall. The slanted sides are the **gussets**, at exactly 45 degrees.
+
+**How the halves are built:** `common` takes the lugs before the trim (G13.7 step 2), cut to the slab O.a0 ≤ a ≤ O.a1: a gusset that would pass a back face is clipped there, and that lug then stands on the bed. Then each half loses a **relief slab** |a − xs| < r, restricted to w > 0 (outside O only), so its own seam face is untouched; the cuts go into each half's existing batch difference (G13.7 step 3).
+
+**Flat thicknesses:** Tp = f + slotHeight + minWall (M3: 6.7 to 6.9), which gives the slot a closed far wall; Tn = L − f − nutHeight − threadPast, so the neg lug takes up the rounding to a standard length.
+
+##### G13.10.4 The cuts (in the half's pull frame, axis at u = U_end ± c, v = z_k)
+
+**neg (head side):**
+1. **Hole**, radius rh, from h = r − PAST to Tn − sinkDepth.
+2. **Countersink cone** from rh to rk over [Tn − sinkDepth, Tn]: a 45 degree cone open below in the pose, as in M10's base.
+3. **Access bore**, radius rk, from Tn to H₋ + PAST. It lies at w ≥ minWall and never cuts the body; it opens only the gusset, so a short 2 mm L-key reaches the head along −a.
+
+**pos (nut side):**
+1. **Slot position:** f = H₊ − layer·floor((H₊ − f_min)/layer + 1e-9), so the slot's face is a whole number of layers from the back face, with f ∈ [f_min, f_min + layer): `placeBolts`' rule.
+2. **Hole**, radius rh, from h = r − PAST to f − layer, leaving a **one-layer membrane**.
+3. **Slot:** `slotOutline` with its exit at local +v (the lug's **top face, +z**) and slotRun = hL/2 + PAST, over h ∈ [f, f + slotHeight]. A nut dropped in with the mold upright seats on the pocket's apex by gravity, within 0.17 mm of the axis (M10).
+4. **Hole on**, radius rh, from f + slotHeight − OVERLAP to H₊ + PAST, open beyond, so the screw can never bottom out.
+
+**Code reuse.** In `src/core/parts/bolts.ts`, which already exports `boltNeeds`, `placeBolts`, `slotOutline`, `coverBoltCutters`, `boltBridges` and others, the four module-private helpers `column`, `SEGMENTS`, `PAST` and `OVERLAP` become exported. `column(arena, x, y, z0, z1, r0, r1)` builds only along z, so the lug cuts are built in the (u, v, h) pull frame with h as Manifold's z, where `column` applies, and turned back with `orientSolid(inverse)`. No behaviour changes, so the m9 hashes hold.
+
+##### G13.10.5 Screw length
+
+- **Auto length:** the G13.10.2 value, safe wherever f lands within its layer.
+- **With L in use** (auto, or the user's `bolts.length`, shared with the corner bolts): Tn = L − f − nutHeight − threadPast, so a flush head passes the nut by exactly 2 threads. M3 at the defaults: L = 10, f ∈ [2.6, 2.8), Tn ∈ (3.8, 4.0], leaving 1.74 to 1.94 mm of plate over the countersink.
+- **Warnings:** `seam-bolt-short` if Tn < Tn,min, naming the shortest length that fits; `seam-bolt-long` if Tn > H₋ − minWall, naming the longest that fits (`longestLength`).
+- A box of M3 x 12 corner-bolt screws serves this type too (Tn ≈ 5.8).
+
+##### G13.10.6 How many and where
+
+Both end faces get the same z_k.
+- **Lowest centre:** z_bot = coverBottom + hL/2 = −Tb + proud + 7 (3.2 at the defaults). The lug's bottom is flush with the cover's bottom edge, over the rebate wall; it takes the taper wedge (G13.9) and presses the seam's bottom corners, where the band legs meet the base groove, its axis about 11 mm in b from the leg.
+- **Highest centre:** z_top = Zt − `PRY_RUN` (12) − `LUG_GAP` (1) − hL/2, which keeps the pry chamfers clear.
+
+**Count per end face:**
+- Error **`seam-bolt-no-room`** (S10c) if z_top < z_bot, which is Zt < 23.2 at Tb 4. Remedy: Seam fasteners None.
+- **n = 1** if z_top − z_bot < hL + `LUG_CLEAR` (8), which is Zt < 45.2, with the info line **`seam-bolt-single`**. `LUG_CLEAR` is the room above a lug's slot for dropping a nut in (6.35 across corners); with less, the lug above would block it.
+- **Otherwise** n = max(2, ⌈(z_top − z_bot)/`SEAL_SPACING_MM`⌉ + 1), evenly spaced from z_bot to z_top.
+- **Force guard:** n is then raised until 2n·`BOLT_HOLD_N` ≥ holdN_seam. No example reaches this.
+
+| model (Zt at β 30) | centre span | per end | screws |
+|---|---|---|---|
+| sphere 52.0 (the help model) | 28.8 | 2 | 4 |
+| Benchy y 58.5 | 35.3 | 2 | 4 |
+| Goddess y 116.0 | 92.8 | 2 | 4 |
+| VIS-35 x 143.1 | 119.9 | 3 | 6 |
+| wolf x 171.6 | 148.4 | 3 | 6 |
+| VIS-35 y at β 20, about 188 | about 165 | 3 | 6 |
+
+These counts hold at the default β 20: Zt only falls as β falls, and every one-piece Zt (the β → 0 bound) is above 45.2. MP1 measures them at β 20 and the goldens hold them.
+
+**Why ≤ 100 mm between lugs is enough:** the end wall of a half bends in its own plane, as a plate as deep as the half, so the seam stays closed between lugs; the base tape strips along a tie the bottom across b.
+
+##### G13.10.7 Forces
+
+- **holdN_seam** = max(2·max over the halves of (F_side, film worst case), `MIN_HOLD_N`): at most 30 N on the examples (wolf F_side 15.0 N at β 30). The bolts count 4 to 6 x 50 = 200 to 300 N, a margin of 6.7 times or more; the interlayer estimate is about 700 N per lug, about 14 times the 50 N counted.
+- **Taper wedge:** wedgeN = clampAdvice.holdN / tan τ (wolf 42.5 N at τ 15 degrees); the bottom pair is counted at 100 N. Info line **`seam-bolt-wedge`** if wedgeN > 100 N. README.txt's check that the seam is closed at the bottom edge stays.
+- **Top span** (O.b's extent across the top) has no fastener, with bolts or with clips: the user chose README advice over lugs on the top face (the answer of 2026-11-23, "README: one clamp"). A half is a box as deep as itself, so a span of about 228 mm opens by about 0.01 mm under the side push, where K5's cG is 0.25. If the span is over `SEAL_SPACING_MM` (a wide half): info line **`seam-top-span`**, and README.txt advises **one clamp across the back faces, at the middle of the seam, 10 mm under the top**, pressing through a board on each face (VIS-35 x has it; Goddess, about 90, does not). The same line and the same advice come with Seam fasteners Bolts and Clips; with None the clamps of G13.10.9 already cover it. If MP6's pour weeps there, the advice becomes a requirement.
+- **Creep:** PLA under a snug preload relaxes a little over hours, so README.txt asks for the screws to be snugged again after the leak test, just before the pour.
+
+##### G13.10.8 Interplay
+
+- **Seal (G13.8, G13.9):** every lug and cut lies at w ≥ minWall outside O, and the band keeps 0.8 from O, so every bolt cut is on the dry side and the voxel guarantee is unchanged. The relief's gap is outside O.
+- **Pins:** untouched; the screws register nothing.
+- **Pry chamfers:** kept clear by z_top. Prying comes after the screws are out.
+- **Slide (G13.4):** each lug moves with its own half, at |b| > O.b, on its own side of P and above the table, so the pull proof holds for half ∪ lugs with the screws out. A screw left in blocks the slide (a positive control).
+- **Base tape:** strips along a do not meet the lugs. Strips along b go more than Tn + p in front of P (M3: 14 mm) and more than Tp + p behind it (17 mm); report.json gives the zone. On a half shallower than that the strip runs over the lug's 45 degree slope; the slot opens on the lug's top face, not on the slope.
+- **Openings, funnel, merged mode, casting:** the openings are unaffected; the funnel is seated after the screws are in; to cast, bolt the halves round the glove, and the nuts are held by their screws when the mold is turned over.
+- **Bed (G13.3):** the pose footprint is (O.b extent + 2p) x (Zt + Tb − proud), analytic and O(1) per candidate. VIS-35 x on the user's 250 x 210 bed: about 247 x 147 mm (the 147 at β 30; MP1 gives the β 20 figure), so it fits with about 3 mm to spare at M3 (MP1 measures it again); at M4 it is 251.5 and misses. When the lugs alone break the fit, the card says "fits with Seam fasteners: None (clamps)".
+- **View:** the lugs are part of each half's mesh. The screws are not drawn, as in M10.
+
+##### G13.10.9 Seam fasteners None
+
+The reviewed hold, kept for those with no screws: two clamps across the back faces, each pressing through a board (a flat board or ruler on each face, so the 5% infill skin is not crushed), the lower over the rebate wall at the bottom and the other 10 mm under the top; and tape belts as the computed fallback, round all four walls, pulled tight and overlapped by at least 50 mm: belts = max(2, ⌈holdN / (2·`print.tapeStrip`)⌉), raised until no two are more than `SEAL_SPACING_MM` (100) apart, the lowest's lower edge at the cover's bottom edge (Goddess 2, VIS-35 3). The belt figure is computed only for this value.
+
+##### G13.10.10 Printing (adds to G13.12)
+
+The bolt axis is vertical in both poses; the lugs' ±z faces and tip faces are vertical walls.
+
+| feature | audit |
+|---|---|
+| relieved lug face (one layer under the seam face, face up) | pass |
+| gusset, exactly 45 degrees | pass |
+| countersink cone, 48-gon, open below | pass |
+| access bore, holes, slot walls | pass |
+| slot's seam-side face: a bridge s wide (5.8 at M3), with a one-layer membrane over the hole | listed |
+
+`allowed` = the top chamfer's faces ∪ `seamBoltBridges(layout)`; the test asserts steep area = allowed area in every pose. There are no bridges in neg. `bolt-bridge` (`BRIDGE_LIMIT` 10) fires only for M4 at a nut clearance of 1.5 or more.
+
+##### G13.10.11 Assembly and demold (G13.11's steps 6 and 7 and demold step 2)
+
+- **6a.** Drop a nut into each slot on the top of the [back] half's lugs, flats against the slot's sides, bottom lug first.
+- **6b.** Put a screw through each [front] lug from its outer side, through the hole and the membrane, and turn it into the nut, the bottom pair first and working up, alternating ends. Stop at snug: when the seam is closed, give at most a quarter turn more. Harder can crack a lug.
+- **6c.** Open the base tape strips' ends (laid in step 3) and press them up the walls, then check that the seam is closed at the bottom edge.
+- After the leak test, snug every screw again before the pour.
+- **7.** Seat the funnel only after the screws are in.
+- **Top clamp** (with `seam-top-span`, bolts or clips): one clamp across the back faces, at the middle of the seam, 10 mm under the top, with a board on each face. README.txt: "These halves are wide: put one clamp across the two back faces at the middle of the seam, 10 mm under the top, with a flat board or ruler under each jaw."
+- **Demold, step 2:** fold the base tape down, then unscrew the seam bolts. The nuts drop out when the [back] half is turned over, so keep them.
+
+[front] and [back] are filled by README.txt from G13.13's map of neg and pos to file names: [front] is the neg half's file (heads), [back] the pos half's (nuts).
+
+##### G13.10.12 Fit-test coupon
+
+With clamshell and bolts, the fit-test ZIP adds `fit_test/seam_bolt_coupon_neg.stl` and `fit_test/seam_bolt_coupon_pos.stl`; M10's `bolt_coupon_*` files are not produced in this type. Each is a wall stub (w ∈ [−wall, 0], v ∈ [−(hL/2 + 2), hL/2 + 2], h ∈ [0, Hc]) ∪ `lugSolid` − relief − `seamBoltCuts`, Hc = T + p + 1 rounded up to whole layers, saved in the halves' pose, each half's f quantized from its own back face. fit_test/README.txt adds: assemble the two coupons on a flat table; the lug faces must keep a visible gap while the stub faces close; snug the screw, then a quarter turn, and no lug may crack. The one-piece fit test stays byte-identical.
+
+##### G13.10.13 Parameters, locks and rules
+
+- **New:** `clamshell.fastener`, `bolts` (default) | `clips` | `none`, and the group `clips` (G13.10.19). `v6ToV7` writes `bolts` and the `clips` group at its defaults; an unknown value in a project file is refused, as unknown types are.
+- **Shared, read by this type with bolts although `bolts.enabled` is locked off:** `bolts.size` (M3), `bolts.length` (auto), `bolts.holeClearance` (0.2), `bolts.nutClearance` (0.15), `bolts.minWall` (1.2): the same hardware and the same fit-test calibration. The switch window lists them when the user changed them.
+- **Constants (not settings):** `LUG_HEIGHT` 14, relief 1 layer, `LUG_GAP` 1, `LUG_CLEAR` 8, `PRY_RUN` 12, ε 1, f_min = layer + 2·minWall, `SEAL_SPACING_MM` 100, `BOLT_HOLD_N` 50.
+- **Lock reason** for `bolts.enabled`: "the halves print on their backs, so corner bolts would lie sideways; this type bolts the seam (Seam fasteners)".
+- **UI:** a "Seam fasteners" row in the Two-part block; with bolts, the Bolts rows show under "Seam bolts", with no enabled toggle, the Length label reading "Auto, 10 mm"; help topic `seam-bolts`, a pictogram of a lug pair, screw and nut, in the help registry (HB).
+- **Rules:** `seam-bolt-no-room` (error); `seam-bolt-short` and `seam-bolt-long` (warnings); `bolt-bridge` (shared); `seam-bolt-single`, `seam-bolt-wedge` and `seam-top-span` (info; `seam-top-span` also with clips). The clips' rules are G13.10.19's.
+
+##### G13.10.14 Report and README
+
+- **report.json `seamBolts`** (null with `none`): size, length, count, perEnd; spots (end, z, axis); e, p, c, hL, relief, Tn, Tp, f₋/f₊, s, slotHeight, sinkDepth; holdN_seam, boltsHoldN, wedgeN, bottomHoldN; topSpan, topClamp, lugZone, bedGrowth, lengthFits.
+- **Card and Cover & joint:** "6 M3 x 10 mm seam bolts, 3 on each end: they hold 300 N against the 29 N the seam needs."
+- **README.txt:** Hardware "N x M3 x 10 mm countersunk screws (ISO 10642 or DIN 7991), N M3 hex nuts (ISO 4032), a 2 mm hex key."; Print: 45 degree undersides, countersinks open below, the only bridges the nut slots' ceilings (5.8 mm, with a membrane), and check that the lugs print filled; Assembly and demold: G13.10.11's lines.
+
+##### G13.10.15 Code
+
+- `src/core/parts/seamBolts.ts` (new, about 250 lines): `seamBoltNeeds`, `placeSeamBolts`, `lugSolid`, `lugRelief`, `seamBoltCuts`, `seamBoltBridges`, `seamBoltDiagnostics`, `lugBedGrowth`.
+- `bolts.ts`: the four exports (no behaviour change). `parts/cover.ts`: the lug union before the trim, relief and cuts in each half's batch. `field/side.ts` (S6c): + 2p. `report/clamp.ts`: `seamBoltAdvice`, `clampAdvice` unchanged. Also `report/readme.ts`, `report/overhang.ts`, `fitTest.ts` (`buildSeamBoltCoupon`), the params and the rules.
+- **Stages:** S6c reads `clamshell.fastener`, `bolts.size`, `holeClearance`, `nutClearance` and `minWall`; S12c also `bolts.length` and `print.layerHeight`. The silicone's stages are untouched.
+- **Cost:** negligible; plastic about 2 cm³ per lug pair at M3.
+
+**Risks:** overtightening (hL 14, and "snug, then a quarter turn" in README.txt and on the coupon); a slicer leaving a lug hollow (the preview check in README.txt); the top span relying on the halves' stiffness; on a 220 mm bed the lugs (+19 mm) turning a fitting split into a miss (the card offers None); the wedge figure being an upper bound on an estimate.
+
+##### G13.10.16 Seam fasteners Clips: the ears, sockets and keys
+
+Built in 0.3.0 by the user's answer of 2026-11-23 ("Bolts and clips now"), from the clip design the judge weighed against the bolts, hardened against the judge's criticisms (G13.10.17). Figures at the defaults (nozzle 0.4, layer 0.2, Tb 4, proud 0.2).
+
+**Why this shape.** Each half prints on its back, seam face up (G13.12), so a face that pulls a half toward P faces down in its pose. A male dovetail or a flat-backed lug for a C-clip would be a ceiling over air. A **female** dovetail, a socket that widens away from P, prints: the solid overhangs it only by its flare, and its floor faces up. So the halves carry the sockets, in a pair of **ears**, and the separate printed part is the **key**: a tapered double dovetail (a "bowtie") that slides in along −b, toward the mold, across both ears of a pair. Its 40 degree flares draw the halves together; its 4 degree taper along its length closes the seam as it is pushed, takes up print error and locks by friction. Rejected, from the design: a snap-fit C-clip (a PLA snap needs 3 to 5% strain, which cracks it and relaxes over a cure), a sliding dovetail rail over the ears (a 75 degree overhang), a bowtie pocket in the 3 mm end wall (the band lies as close as 0.8 mm to O), clips on the top face (the openings and the flange's keep-out), a printed C-frame across both back faces (60 to 150 mm of plastic with no taper), and a key sliding down along z (ears 15.2 mm out, so VIS-35 x would need 258.3 mm).
+
+**Ears** (part of each half), per row on each end face (b = O.b0 and b = O.b1), built for pos and mirrored for neg:
+
+| quantity | value | rule and reason |
+|---|---|---|
+| `EAR_LENGTH` Le, out from the end face along ±b | 10 | the least that leaves the socket 9.5 mm; VIS-35 x then needs 248 of the user's 250 mm |
+| ear relief r, the ear's seam face set back from P per half | 0.2 | `print.layerHeight`, one layer, as the lugs' relief (G13.10.1): the two ears of a pair keep a 2r = 0.4 mm gap and never touch, so the key's draw reaches the seam faces through the ears' roots at the end walls, never ear to ear |
+| socket depth d, along a from the ear's face | 3.2 | layer·⌈3.2/layer⌉, so its floor is on a layer boundary in the pose |
+| floor web w_f | 2.0 | layer·⌈2.0/layer⌉, top layers over the infill |
+| socket flare φ | 40 degrees | under the 45 degree limit in the pose; the wedge spreading the ear walls is 1/tan φ = 1.19 times the draw |
+| socket taper λ, per side | 4 degrees | self-locking above μ 0.053; greased PLA on PLA is about 0.1; each mm of push tightens 0.054 mm per side |
+| neck n at the ear's tip | 5.0 | 3.67 at the socket's bottom |
+| far width f = n + 2d·tan φ | 10.37 at the tip, 9.04 at the bottom | |
+| ear wall w_e beside the socket, in z | 2.4 = 6·`print.nozzle` | three walls from each outline meet, so it is solid at any infill (README.txt asks for 3 walls) |
+| ear height h_e = f_tip + 2·w_e | 15.2 | |
+| socket length | Le − `SOCKET_BACK` (0.5) = 9.5 | it stops 0.5 short of the end face, so no cutter shares a plane with the wall |
+| corbel, the ear's underside in the pose | exactly 45 degrees | from the floor web's foot back to the end face; the audit passes 45 within its 0.1 degree tolerance |
+| ear depth along a per half | r + d + w_f + Le = 15.4 | where a half is shallower, the back face cuts the corbel off and the ear stands on the bed |
+
+- **Ear** = an extrusion along b over [O.b1 − 0.5 (into the wall), O.b1 + Le] of the (a, z) outline a ∈ [xs + r, xs + r + d + w_f] for the full h_e, then the 45 degree corbel: at depth t under the floor web, the ear reaches only to b ≤ O.b1 + Le − t. The same on O.b0.
+- **Socket** = a `CrossSection` trapezoid (neck n(b) at a = xs + r, flaring at φ to depth d), the hull of its two end sections (each flare is planar, so the hull is exact), along b from O.b1 + 0.5 to O.b1 + Le + PAST, cut from the ear only and centred in z on it.
+- **Print check:** each layer of an ear is a rectangle with a trapezoidal notch at the top, and each is a subset of the one above, growing by at most 45 degrees under the corbel and 40 at the flares; no support and no bridge.
+- **No new leak path:** the ears and sockets lie wholly outside O; inside O the half is the half with Seam fasteners None, byte for byte, which a test holds.
+
+**Key** (a separate part, in `clips.stl`):
+- **Section** at u from its tip (u = 0): the socket pair's section (the neg trapezoid, the 2r gap of width n, the pos trapezoid) at b = O.b1 + 3.5 + u, offset inward by `clips.clearance`, its anchor ends trimmed to depth d − 0.5 = 2.7, so a key never bottoms on a socket floor.
+- **Length** 11.5 (the socket's + 2): bottomed, its head still stands 2 mm off the ear's tip, so there is always a pry gap.
+- **Home**, the design's contact position: the tip 3 mm from the socket's bottom, 6.5 mm engaged, the head 5 mm out. Travel past home before the tip bottoms 3 mm (a key 0.16 mm per side small); short of home 2.5 mm before engagement falls to 4 mm (0.13 per side large).
+- **Head:** 3 mm thick, the head end's section offset 1.5 in a and z, about 8.4 x 12.8; on the bottom row it stands 1.4 mm above the table.
+- **Home marks:** 0.4 x 0.4 mm grooves across both anchor end faces (±a) at 1 mm pitch, and a double groove at the **home line** (u = 6.5), which sits level with the ear's tip at home. One mark is 1 mm of travel, about 0.05 mm per side.
+- **Draw:** the seam gap at first contact is 2c/sin φ; each mm of push closes 2·tan λ/tan φ = 0.167 mm of it. At clearance 0.1 a perfectly printed key goes 1.9 mm past home, inside the 3 mm.
+- **Printed solid, standing on its head**, at 100% infill, in PLA or PETG: its layers are the bowtie's section, so the neck's tension runs **along** the layers, never across them, and the body narrows upward, so nothing overhangs. About 0.8 cm³, 1 g of PLA. `assertRigid` holds for its pose.
+- **The plate:** `clips.stl` lays out count + `SPARES` (2) keys, head down, in a grid 5 mm apart.
+
+##### G13.10.17 Clips: how many, where, and the forces
+
+**Rows.** Each row is one ear pair and one key on **each** end face, so 2 keys a row; both end faces get the same rows. z_lo = −Tb + proud, the cover's bottom edge; z_hi = Zt − `PRY_RUN` (12) − 1, which keeps the pry chamfers clear. H = z_hi − z_lo (Zt − 9.2 at the defaults). Rows are placed in this order while rows·h_e + (rows − 1)·`ROW_GAP` (2) ≤ H:
+1. **the bottom row**, its ears' bottom flush with the cover's bottom edge, over the rebate wall, against the taper wedge (G13.9);
+2. **the top row**, its ears' top at z_hi;
+3. **a second bottom row**, stacked on the first with `ROW_GAP` between them, so the seam's bottom corners, which take the wedge, hold 4 keys;
+4. **middle rows**, evenly spaced, until no two centres are more than `SEAL_SPACING_MM` (100) apart.
+
+- Error **`clips-no-room`** (S10c) if H < h_e, which is Zt < 24.4 at Tb 4. Remedy: Seam fasteners Bolts or None.
+- Info **`clips-single`** with one row (Zt < 41.6); the bottom pair needs Zt ≥ 58.8.
+- `clips.rows` typed by the user is clamped to what fits, with an info line when it is lowered; the bottom row comes first in any count.
+
+| model (Zt at β 30) | rows | keys (+2 spares) |
+|---|---|---|
+| sphere 52.0 (the help model) | 2: bottom, top | 4 |
+| Benchy y 58.5 | 2: bottom, top (0.3 mm short of the pair) | 4 |
+| Goddess y 116.0 | 3: bottom pair, top | 6 |
+| VIS-35 x 143.1 | 4: bottom pair, middle, top | 8 |
+| wolf x 171.6 | 4 | 8 |
+| VIS-35 y at β 20, about 188 | 4 | 8 |
+
+MP1 measures them at β 20, as for the bolts, and the goldens hold them.
+
+**Load and rating.** holdN_seam is G13.10.7's. `CLIP_HOLD_N` = 40 N a key (in `parts/fasteners.ts` beside `BOLT_HOLD_N`), an estimate kept far under what a printed key carries: the neck at the least engagement about 17 mm², 2.4 MPa at 40 N (about 5% of printed PLA's strength along the layers); the ear's two walls carry the draw across layers over 2·2.4·10 = 48 mm², 0.8 MPa against about 15 MPa; bearing on the flares about 1.5 MPa; the estimated failure is several hundred N a key (neck and ear each about 700 N), so the rating is about 1/15 of it. Rule: count·`CLIP_HOLD_N` ≥ holdN_seam, else the warning **`clips-hold`** ("add a row, or set Seam fasteners to Bolts"); rows are raised first where they fit. VIS-35 x: 8 x 40 = 320 N against 28.8 (11 times); wolf 320 against 30; sphere 160 against 10.
+
+**The judge's criticisms, answered:**
+- **Preload that varies with tapping and print error.** The seal does not rest on a preload figure: it rests on seam faces that touch and the Vaseline labyrinth (G13.8), as with the bolts, and a key only has to keep the seam shut against the side push (at most 15 N a half) and the wedge. Each key's **home marks** read how far it went to ±1 mark (±0.05 mm per side), so an under-driven key is seen, not guessed: README.txt asks every double line to end within one mark of the ear's tip (or of the reading the coupon gave), and the seam to be closed along both end faces. The clip coupon (G13.10.19) sets `clips.clearance` on the user's own printer first, so the ±0.15 per side of an untuned printer is calibrated out before the mold is printed.
+- **Creep over the cure.** The key is a positive lock: at 4 degrees, beyond the self-locking limit even greased, the seam can open only by the key's elastic stretch, never by the key sliding back. At 1 to 3 MPa and room temperature PLA creeps under 0.1% in 24 h, microns over a 2.7 mm anchor; PETG about twice that, still microns. The keys are **printed solid**, so no infill creeps. As the screws are snugged again, README.txt asks for each key to be tapped once more after the leak test, just before the pour, its line read again. Heat is the real risk: README.txt says not to warm-cure a PLA mold above 40 C.
+- **The thin margin on the bottom row against the taper wedge.** The draft's single bottom row was 80 N against a frictionless wedge of 74.6 N (a 20 N tape pull, τ 15 degrees). The **second bottom row** raises it to 4 keys, 160 N: 2.1 times the frictionless case and 4.0 times the 40.4 N at μ 0.2, against a real capacity about 15 times higher. Below Zt 58.8, where the pair does not fit, the bottom keeps 80 N against wedgeN as G13.10.7 computes it (from `clampAdvice.holdN`, far below 74.6 N on such small halves), and the info line **`clips-wedge`** fires when wedgeN is over half the bottom's rating, naming Seam fasteners Bolts. README.txt's check that the seam is closed at the bottom edge stays.
+- **Ears coplanar with the seam.** They are not: each ear is relieved one layer from P, as each lug is (the relief was the clips' idea), so ears never hold the seam open and never take the draw ear to ear.
+
+**Top and middle.** The funnel's seat wedge is about 9 N with a light press, and a half is a stiff box (under 10 N a 220 mm half bends about 0.004 mm), so keys at the end faces hold the seam between them; a key cannot pull a warped seam face flat (about 500 N for a 0.2 mm bow), which the labyrinth covers as reviewed. A wide half gets the same top clamp advice as with bolts (`seam-top-span`, G13.10.7).
+
+##### G13.10.18 Clips: printing, the bed, the slide and assembly
+
+- **Halves:** no new `allowed` faces; the steepest new faces are the corbel at 45.0 degrees and the flares at 40. The audit's steep area equals the top chamfer's in every pose, so the ears add none. There are no bridges.
+- **Keys:** `clips.stl` in its own pose, head down, audited with no allowed set; nothing in it is steeper than vertical.
+- **Bed (G13.3):** each half's pose footprint is (O.b extent + 2·Le) x (Zt + Tb − proud); the height |O.a − xs| does not change, as the corbel stops at the back face. VIS-35 x on the user's 250 x 210: 248 x 147 (the 147 at β 30; MP1 gives the β 20 figure), 2 mm to spare, so README.txt asks for mouse ears at the corners rather than a full brim when the margin is under 5 mm. On the app's default 220 bed it misses with or without ears, and the y split is chosen.
+- **Slide (G13.4):** every ear lies on its own half's side of P, outside O in b and at z ≥ z_lo; moving pos along +a moves its ears into empty space, and neg is the mirror case. With the keys out the slide is unchanged; with any key in it is blocked, as the key crosses P. The two halves' sockets line up in (b, z): both sit on the same shelf, and the ridge bars and pins register b; pin error of ±0.2 is taken by the key's clearance and the flares.
+- **Base tape:** strips along b keep |a − xs| ≥ 20, clear of the ears; a half shallower than that takes its strips along a only.
+
+**Assembly** (replaces G13.11 step 6's bolting with this value):
+- **6a.** Slide the halves in and seat the pins (unchanged).
+- **6b.** Clips, bottom row first, alternating the two end faces: push each key into the slot of an ear pair, narrow end first, head out, by hand until it stops; then two light taps on its head with a screwdriver handle. Its double line should end level with the tip of the ears, within one mark. Keep Vaseline off the keys and slots.
+- **6c.** Open the base tape strips' ends (laid in step 3) and press them up the walls, then check that the seam is closed along both end faces and at the bottom edge.
+- After the leak test, tap each key once more and read its line again before the pour.
+- **7.** Seat the funnel only after the keys are in; with `seam-top-span`, the top clamp as G13.10.11.
+
+**Demold, step 2:** fold the base tape down, then take the keys out, top row first, levering each with a flat screwdriver between its head and the ears. The keys can be used again; there are 2 spares.
+
+##### G13.10.19 Clips: coupon, parameters, rules, report and README
+
+**Fit-test coupon** (in the fit-test ZIP only when `mold.type` is clamshell and `clamshell.fastener` is clips; the bolts' coupons only with bolts):
+- `fit_test/clip_coupon_block.stl`, **print 2:** a stand-in for a corner of a half, b ∈ [−8, 0], a ∈ [0, 15.4], z ∈ [0, h_e + 4], with one real ear and socket centred in z on its end face, in the halves' pose (seam face up, the corbel landing on the bed). The ear and socket are symmetric about the ear's middle in z, so the pos block turned 180 degrees about b is the neg block, and one file printed twice makes the pair (a test holds the congruence).
+- `fit_test/clip_coupon_keys.stl`: 3 keys at `clips.clearance` − 0.1, the set value and + 0.1, with 1, 2 and 3 notches on the head, standing head down. The trio stays inside the range 0 to 0.5: below a set value of 0.1 it is 0, 0.1 and 0.2, above 0.4 it is 0.3, 0.4 and 0.5, and fit_test/README.txt names each key's value.
+- Built by the mold's own `earSolid`, `socketCutter` and `keySolid`; nothing is redrawn. The one-piece fit test, and the clamshell's with bolts or None, stay byte-identical. About 6 g at 5% infill and 3 g of keys.
+- fit_test/README.txt (plain ASCII, wrapped as `boltLines`): print the block twice like the halves (5% infill, at least 3 walls) and the keys at 100% standing on their heads; stand the blocks seam to seam, push in the key with 2 notches and tap it twice; the double line should end level with the ears' tip and the seam be closed; for each mark it stops outside, lower Clip clearance by 0.05, for each mark inside raise it by 0.05; if it goes in to its head with the seam still open, try the key with 1 notch and set Clip clearance to that key's value; if even the key with 3 notches stops more than 2 marks out, set it to that key's value plus 0.1; Clip clearance never goes below 0 or above 0.5; pull the blocks apart by hand, which is well over 40 N, and nothing should move; then lever the key out whole.
+
+**Parameters** (group `clips`, rows shown only in this type with Seam fasteners Clips, under "Seam clips"):
+
+| path | default | range | reason |
+|---|---|---|---|
+| `clips.clearance` | 0.10 | 0 to 0.5, step 0.05 | per side, "slides in by hand", as `bolts.nutClearance`: a key's outside prints about 0.05 to 0.1 large per side and the 40 degree flares sag about 0.05, so contact lands within ±1 mm of home on a tuned printer; the coupon sets it |
+| `clips.rows` | auto (null) | auto, 1 to 8 | G13.10.17's order |
+
+- **Constants** (`parts/clips.ts`): `EAR_LENGTH` 10, relief one layer, `SOCKET_DEPTH` 3.2, `FLOOR` 2.0, `FLARE_DEG` 40, `TAPER_DEG` 4, `NECK_TIP` 5, `SOCKET_BACK` 0.5, `KEY_FLOOR_GAP` 0.5, `HOME_FROM_BOTTOM` 3, `HEAD_STANDOFF_MIN` 2, head 3 thick with a 1.5 margin, `MARK_PITCH` 1, `ROW_GAP` 2, `PRY_CLEAR` 1, `SPARES` 2, `CLIP_HOLD_N` 40.
+- **Rules:** `clips-no-room` (error, S10c); `clips-hold` (warning); `clips-single`, `clips-wedge`, rows lowered to fit, and `seam-top-span` (info); the bed card's line names the fastener that fits (G13.3). The switch window lists `clips.clearance` and `clips.rows` when the user changed them.
+- **UI:** with clips, the Bolts rows are hidden and the Clips rows show; help topic `seam-clips`, a pictogram of an ear pair and a key (HB).
+
+**report.json `clips`** (null unless clips): rows, count, spares, rowsZ, earLength, earDepth, relief, clearance; socket {neckTip, neckBottom, depth, flareDeg, taperDeg, length}; key {length, home, travelIn, travelOut, perMmPerSide}; clipHoldN, clipsHoldN, holdN_seam, bottomHoldN, wedgeN {frictionless, mu02}, topSpan, topClamp, bedGrowth.
+
+**Card and Cover & joint:** "Held by 8 printed clips, 4 on each end: about 320 N together (40 N each, an estimate for printed plastic), against the 29 N the seam needs."
+
+**README.txt:**
+- Parts: "clips.stl: 8 clips and 2 spares. Nothing to buy: the clips hold the two halves together."
+- Printing: "Print the clips at 100 percent infill, standing on their heads as clips.stl lays them out, in PLA or PETG: each clip is pulled along its layers, never across them."; "Each half with its clip ears needs W x H mm on the bed." (and, under 5 mm to spare, "use mouse ears at the corners rather than a full brim"); "The clip ears on the ends of each half print without supports: their undersides slope at 45 degrees."
+- Assembly, leak test and demold: G13.10.18's lines, and the top clamp with `seam-top-span`.
+- Warnings: "With PLA, do not warm the mold above 40 C to speed the cure: PLA softens from about 55 C and creeps well below it."; "Keep Vaseline off the clips and their slots; a greased clip still locks, but less firmly."
+
+##### G13.10.20 Clips: code and tests
+
+**Code:** `src/core/parts/clips.ts` (new, about 250 lines): `clipNeeds`, `placeClips`, `earSolids`, `socketCutters`, `keySolid`, `keyPose`, `clipPlate`, `clipDiagnostics`. `parts/fasteners.ts`: `CLIP_HOLD_N`. `report/clamp.ts`: `clipAdvice`. `parts/cover.ts`: halfFinal = (half ∪ ears) − sockets, after the openings. `field/side.ts` (S6c): + 2·Le. `parts/fitTest.ts`: `buildClipCoupon`, `clipLines`. Also `report/readme.ts`, the diagnostics, the schema's `clips` group and `v6ToV7` (added by MT, so format 7 is whole before MP1), the rules, the view (a `clips` part, one instanced mesh, exploding along ±b) and the export (`clips.stl`). Stages: the ears and sockets in S12c/S13c, keyed by `clips.*`, `clamshell.fastener`, `print.nozzle` and `print.layerHeight`; the plate built at export only. Cost under 50 ms a half.
+
+**Tests** (`test/unit/clips.test.ts`, `test/regression/clips.test.ts`, `test/unit/fitTest.test.ts`), on the sphere and Goddess always, VIS-35 behind `skipWithout(ctx, 'vis35')`:
+- **Constants:** φ ≤ 40 < 45, the corbel 45, and the self-locking bound under μ 0.06 (0.053 at λ 4 and φ 40, against greased PLA's 0.1).
+- **Draw:** 2·tan λ/tan φ per mm and the contact gap 2c/sin φ, against a 2D section solve.
+- **Rows:** against brute force over Zt ∈ [20, 300]: every row in [z_lo, z_hi]; the order bottom, top, second bottom, middles; centres at most 100 apart; Zt 40 one row, Zt 50 two, Zt 60 the bottom pair; Zt 24 `clips-no-room`; G13.10.17's table on the examples.
+- **Hold:** count·40 ≥ holdN_seam on every example; a side push of 90 N raises the rows or gives `clips-hold`; the bottom pair rated 160 N; a taper of 5 degrees, or a model under Zt 58.8 with a strong tape pull, gives `clips-wedge`.
+- **Bed:** VIS-35 x at 250 x 210 fits with clips by 2.0 ± 0.1 mm; at a bed 247.5 wide it does not, and the card names Bolts; with None it is the reviewed filter exactly.
+- **Outside O:** with clips, half ∩ box(O) equals the None half's within 1e-3 mm³; every ear and socket point at |b| ≥ O.b and z ≥ z_lo.
+- **Relief:** the two ears of a pair are 2r apart while the seam faces coincide in P. Negative control: no relief, the ears touch and the test fails.
+- **Socket alignment:** neg's and pos's socket sections coincide in (b, z) within 1e-3 for every row, read from both print poses undone. Negative control: neg shifted 0.01 fails.
+- **Key fit:** at home, key ∩ (neg ∪ pos) = ∅ and the least distance to each flare equals the clearance (1e-3); the anchor ends at least 0.5 off the socket floors; bottomed, the head at least 2.0 off the ear's tip; at the travel past home that closes the clearance, the key touches both flares at once; the home line lies at u = 6.5 on both anchor faces.
+- **Key solid and pose:** at 100% the plate's keys are closed solids standing on their heads, `assertRigid` holds, and the neck's section is in the layer plane.
+- **Pull test,** extended as for the lugs: each half with its ears, along its pull by d ∈ {0.25 … depth} and at b ± cG, against silicone ∪ model ∪ base ∪ cutters ∪ the other half with its ears: at most 1e-3 mm³. Positive control: keys at home block the slide at d = 0.25. Negative control: an ear moved 0.5 across P.
+- **No supports:** steep area = the top chamfer's in every pose; the plate and the coupon block audited with no allowed set. Negative controls: a corbel at 50 degrees from vertical, a flare at 50, a male dovetail ear.
+- **Leak voxel test** (`CFG_FULL`): unchanged with ears; no socket voxel joins the liquid's component.
+- **Coupon:** the block turned 180 degrees about b equals the other half's (symmetric difference at most 1e-3 mm³); block and keys come from the mold's own functions; the fit-test ZIP lists the two files only for the clamshell with clips; the one-piece's 16 fit pieces and the clamshell's bolt coupons byte-identical.
+- **Byte checks:** the one-piece type (m9 hashes, every golden); Seam fasteners None equals MP2's golden, and Bolts MP3's.
+- **Params and store:** `clamshell.fastener` clips and `clips.*` round-trip through format 7; an unknown fastener refused; the Clips rows hidden in the one-piece type and with Bolts, their values back on switching; the switch window lists `clips.clearance` when changed.
+- **Goldens:** clamshell Goddess and VIS-35 with clips add rows, count, earLength and the bed footprint.
+- **Handles:** every Manifold and CrossSection of a clipped mold freed.
+
+**Risks:** the bed margin (VIS-35 x fits the user's 250 mm bed by 2 mm with no full brim; on a narrower bed the card offers Bolts or None); a printer outside about ±0.15 per side needs the coupon before the mold; the bottom row on halves under Zt 58.8 keeps 80 N (`clips-wedge` names it); clips do not cure a warped seam face, which still relies on the labyrinth; a PLA mold, clips included, must not be warm-cured; a PLA key's head can crack under hard hammering (tap with a handle; 2 spares).
+
+#### G13.11 Assembly and demold (README.txt and WORKFLOW.md)
+
+**Assembly** (the mold never leaves the table):
+1. **Leak test, sealed exactly as for the pour:** Vaseline in the base groove and the seam groove, a thin film on the seam lands, and a bead along both halves' bottom seam edges and the rebate's seam edge; the seam bolts or clips and base tape as below; fill with water to the top of the vents and wait 10 minutes; watch the seam's bottom corners and the top under the funnel. Then empty, take apart, dry and seal again.
+2. **Release agent** on both cavities and the base's top, then the Vaseline as in step 1.
+3. **Base tape strips:** sticky side up on the table under where the base goes, their free ends turned back on themselves beyond the box.
+4. **Model on the base:** glue mode as today, or the merged print.
+5. **Slide each half in along ∓a on the base's shelf.** Its groove runs over the ridge bars, so it is guided to ±cG; this is G13.4's pull reversed, and the test sweeps a b offset of ±cG. Press the tongue home and fit the pins.
+6. **Bolt the seam** (G13.10.11, 6a to 6c), or with Seam fasteners Clips fit the clips (G13.10.18, 6a to 6c), or with None clamp or belt it (G13.10.9); a wide half also takes the top clamp (G13.10.7). Open the strips' ends and press them up the walls, then check that the seam is closed at the bottom edge.
+7. **Funnel:** seat it by its weight and a light press only, after the screws or keys are in; its 30 degree split seat is a wedge. A Vaseline ring under the flange across the seam line. Then pour.
+
+**Demold:** 1. cut the sprues, the vent rods and any hidden-leaf vent rods; 2. fold the base tape down and unscrew the seam bolts (G13.10.11), lever the clips out (G13.10.18), or take the clamps or belts off; 3. pry at the V pockets at the top of the seam on the end faces and slide the halves apart along ±a, the base staying on the table, in both modes; 4. trim the flash fin flush with the glove, and free the model by the demold verdict's cuts only. In merged mode the glove comes off the printed model.
+
+**To cast:** check that the seam closes with no silicone in it; close the halves round the glove, bolt or clip them, turn the mold over and cast through the glove's open foot.
+
+#### G13.12 Print poses with no supports
+
+Each half lies on its back face (parallel to P), seam face up. All rotations pass `assertRigid` (det +1).
+
+| half | rows | z′ |
+|---|---|---|
+| x seam, pos | [[0,0,1],[0,1,0],[−1,0,0]] | O.x1 − x |
+| x seam, neg | [[0,0,−1],[0,1,0],[1,0,0]] | x − O.x0 |
+| y seam, pos | [[1,0,0],[0,0,1],[0,−1,0]] | O.y1 − y |
+| y seam, neg | [[1,0,0],[0,0,−1],[0,1,0]] | y − O.y0 |
+
+Face by face: the cavity is a height field along the pull, so its plastic normals point toward P (up); on the seam face (the top) the tongue rises, and the groove, half-bores, half-seat cones and sockets open upward, the pins upright with their lead-in on top; the rebate's shelf and end walls are vertical and its far wall faces up; the base groove's stretches parallel to the pull are vertical slots and those facing down by more than 45 degrees have the teardrop; the pry chamfers face up; the 0.4 mm top chamfer is exactly 45 degrees at the bed's edge; the seam bolts' lugs as G13.10.10; the clip ears as G13.10.18 (45 degree corbels, 40 degree flares, no bridge). `clips.stl` prints its keys standing on their heads.
+
+**Audit:** `auditOverhang` with a new `allowed` predicate: the top chamfer's faces and `seamBoltBridges(layout)` (empty with clips or None), nothing else. The test asserts that the steep area equals the allowed set's area in every pose. There is no general bridge detector.
+
+**Bed fit** (wall 3, before the lugs' 2p across b): VIS-35 pulled along x needs about 228 x 147 mm, 247 x 147 with M3 lugs and 248 x 147 with clip ears (the 147s at β 30; MP1 gives the β 20 figures), which fits the user's 250 x 210 bed and misses the app's default 220 x 220 at any angle; pulled along y, at β 30 it needed about 62 x 220.1 mm and missed a 220 bed by 0.1 to 0.4, and at β 20 it is about 62 x 192 mm and fits. Goddess (y) is about 90 x 120 mm at β 30.
+
+#### G13.13 Analyses, report and files
+
+- **Silicone:** the exact ml from G± at the build's cell, plus bores, minus the model and sealed air, checked against the mesh of G13.7 step 6 within 1% by a test. "Saves N ml (P%) against a one-piece cover at the same settings": both at the preview cell with the same t, margin, draft, closing and base layer; the report names the baseline.
+- **report.json:** `moldType`, axis, xs, β and the bed outcome; per half the volume, plastic in g, F_side and net lift; the hold (`seamBolts`, G13.10.14, `clips`, G13.10.19, or clamps and belts), the band's length and the film's worst case; whether D grew past D_G8, and whether the wall was raised.
+- **Diagnostics:** "no saving on this model" under 3%; "does not fit your bed; a y split fits at β ≤ N°"; the hidden-leaf vent warning (S8's wording); the plateau warning; G13.10.13's and G13.10.19's rules.
+- **Unchanged:** the demold verdict and S8's underside air; `intervals.ts`'s "open above means the cover" now holds up to H_top.
+- **Files:** `cover_left.stl` (neg) / `cover_right.stl` (pos) with an x seam, or `cover_front.stl` (neg) / `cover_back.stl` (pos) with a y seam, neg being the half at a < xs; README.txt fills G13.10.11's [front] (neg, heads) and [back] (pos, nuts) from this map; with `base.stl`, `funnel.stl` and `model_oriented.stl`, and `clips.stl` with Seam fasteners Clips. Two `minGap` calls, and the margin's rebuild keeps the axis and xs.
+
+#### G13.14 Parameters, per-type defaults and locks
+
+**Group `mold`:** `mold.type`, `one-piece` | `clamshell`, default `one-piece`. It is left out of Reset, of the switch window and of per-type overrides (MT).
+
+**Group `clamshell`** (rows shown only in this type, in a "Two-part" block):
+
+| path | default | range | reason |
+|---|---|---|---|
+| `clamshell.axis` | auto | auto, x, y | least silicone among the splits that fit the bed |
+| `clamshell.offset` | auto (null) | ± extent/2 − 1 | the sweep: VIS-35 y 421.8 ml at 50% against 329.9 at 69% (β 30) |
+| `clamshell.ceilingDeg` (β) | 20 | 0 to 60 | air drains toward P; the user's answer of 2026-11-22 (the design had 30), settled by MP6's pour |
+| `clamshell.seamLand` | 2 | 0.8 to `joint.landInner` | the band's inner land |
+| `clamshell.pins` | on | flag | ±0.2 registration of the split seat |
+| `clamshell.fastener` | bolts | bolts, clips, none | G13.10: bolts the judge's choice and the default, the user having M3 hardware; clips built in 0.3.0 by the user's answer of 2026-11-23 |
+| `clips.clearance` | 0.10 | 0 to 0.5 | G13.10.19, shown with clips only |
+| `clips.rows` | auto (null) | auto, 1 to 8 | G13.10.17, shown with clips only |
+
+**`src/core/params/defaults.clamshell.json`**, overrides only, with MT's strict checks: `silicone.baseLayer` 0 where the one-piece has auto (null, = t): one model, and the layer is a flat ceiling across the base (Goddess +4.0 ml). It is this type's default, not a lock: the user may set the layer to automatic or to a number, and G13.2 step 4 builds it.
+
+**An automatic setting with a type default.** `silicone.baseLayer` is an auto path, so the override gives an auto path a number. `AutoDef.default` stays null in the schema and in `defaults.json`, the base's set, where `checkDefaults` still requires null. `checkOverridesText` accepts, for an auto path, a number in its range and nothing else; the merged set is checked by `checkDefaults(merged, { overrides: true })`, which takes a number on such a path. `defaultOf(path, type)` gives null or that number, and `isDefaultAt(path, params)` holds while the value equals it: in this type a base layer of 0 is at its default and automatic (null) counts as changed ("Changed from its Two-part cover default, 0 mm."), and in the one-piece the reverse.
+
+**Locks** (`MOLD_TYPES.clamshell.locked`, applied by `effectiveParams`, shown by a new row-level locked state in `ParamRow.tsx` (MT); the user's value is kept for switching back):
+- `grid.nx = grid.ny = 1`: "this type makes one model".
+- `bolts.enabled = false`: G13.10.13's reason.
+- `joint.pryNotches = false`: "the halves slide off the base; pry at the seam's V pockets".
+
+The base ridge's two bars are this type's construction, not a setting. `cover.wall` stays the user's setting, 3 by default in both types: G13.6 and G13.10.8 use its value, and G13.6 raises it only for the band, with its warning.
+
+**Rules** (`rules.ts`, this type): topCap ≥ seamLand + rw + 2cG + 0.8; seamLand ≤ `joint.landInner`.
+
+#### G13.15 Code and stages
+
+- **Core:** `field/side.ts` (new: frames, padding, roof, layer rows, prism rows, the flatten, H_top, the sweep with its O(1) Hmax and the lugs' 2p); `solid/tool.ts` (`buildToolMesh`'s `seam` option and the `liftMax` assert); `analysis/seam.ts` (new: S and its merge tree); `placement.ts` (the 1D seam mode and the room rule); `parts/rim.ts` (D_side, D3, Hmax_clam, Zt and the wall's raise); `parts/cover.ts` (the teardrop, the lugs, the trim, the halves, the pry chamfers); `parts/base.ts` (the ridge-bar option); `parts/seam.ts` (new: band, tongue, groove and pins); `parts/seamBolts.ts` (G13.10.15); `parts/clips.ts` (G13.10.20); `report/overhang.ts` (a new `allowed` option on `auditOverhang`); `poses` (four new poses); `report/clamp.ts` (side push, net lift, `seamBoltAdvice`, `clipAdvice`, belts); `report/readme.ts`; `params` (`defaultOf(path, type)` replaces every reader of `def.default`, and `effectiveParams` is applied everywhere).
+- **Stages** (`src/app/stages.ts`, `src/workers/fieldStages.ts`): the one-piece rows S1 to S16 are untouched, so their keys and `stages.test.ts` stay as they are. New ids with static parameter lists: S3x, S4x, S6x (from S2, keyed by pull and tier, coarse or fine, multi-slot caches); S6c (the coarse S3x to S6x and S2; reads β, axis, offset, `print.bedX/bedY/bedZ`, the base layer and G13.10.15's bolt settings, or with clips `clamshell.fastener` alone); S10c (S6c); S7c (S6c, S10c, S8); S11c, S12c, S13c per half; S14c (S10c). Stage keys are hashed from `effectiveParams`, so a hidden locked value (`grid.nx = 2`) changes no key. The halves are built one after the other, each TIN freed after its `toolSolid`, and the field worker is recycled before an export.
+- **View:** `PartName`, `LAYER_*` and `PARTS` come from the type registry (`cover-neg`, `cover-pos`, base, funnel, and `clips` with Seam fasteners Clips); `EXPLODE` becomes vectors (halves ±a, base −z, funnel +z, clips ±b); the silicone keeps GPU counting, each half's displaced grid drawn with its frame matrix and clamped at h_s, with a seam-plane quad and the z = 0 floor; P is drawn as a translucent quad, and openings drag along it.
+
+#### G13.16 Memory and time (Firefox 158; the user's machine is about 1.8 times the server)
+
+- **Measured in Node:** four coarse fields at 1 mm under 0.1 s; four 0.125 mm fields of VIS-35 with the padded lattice 1.9 s, 180 MB RSS for the whole script.
+- **Expected:** the field-to-tool steps scale with the seam section's area against the one-piece's top footprint (Goddess about 2 x 43 to 49 cm² against 26, VIS-35 x about 2 x 151 against 68), so 2.5 to 4.5 times the one-piece for these steps before the far-side flatten, which reduces it. The export's second `minGap` (9.4 to 10.4 s on Benchy at GC): 1.3 to 1.6 times that step. `NODE_PREVIEW_MS` gains rows for this type, so T1's 150 ms target is not met by quietly coarsening the cell.
+- **Gate at the end of MP1:** a Node spike of VIS-35 at cellFinal on both axes, on what MP1 builds: the side fields, two TINs, two `toolSolid`s and `minGap(model, tool)` for each, heap and time recorded. MP2 starts only if the heap's peak stays at or under the one-piece's plus 300 MiB.
+- **Gate at the end of MP2,** once the trimmed halves exist: the same spike with two `minGap(model, half)` and the margin's rebuild with two held pairs, under the same rule; past it, the run stops and the user is asked.
+- **Budgets in the browsers (MP5),** Chromium and Firefox on Goddess and VIS-35: preview and export each within the spike's ratio plus 20%; PSS peak at most the one-piece's plus 300 MiB. The type is not added to the 3 million triangle soak, as it is not offered there.
+
+#### G13.17 Silicone saved
+
+Method, one for every figure: the repo's `buildField` (raster, dilate, draft 1 degree, closing 1.2) on the oriented model standing on its first base candidate, cut at z = 0; t 3, rEff 3.366, base layer off on both sides, no openings, the roof's lattice padded by 250 mm; the best axis and offset by G13.3's sweep, the bed ignored unless noted; percentages against the one-piece with the layer off. ml:
+
+| model | one-piece (layer off / t) | β 0 | **β 20 (default)** | β 30 | β 45 | Zt at β 30 (one-piece) |
+|---|---|---|---|---|---|---|
+| Goddess, 0.5 mm | 117.9 / 121.9 | 57.7 (−51%) | **60.4 (−49%)** | 62.0 (−47%), y | 66.5 (−44%) | 116.0 (110.0) |
+| Goddess, 0.125 mm | 117.7 / 122.0 | 55.5 (−53%) | **MP1** | 60.0 (−49%), y | – | 116.0 |
+| VIS-35, x pull (bed ≥ 230 mm), 0.5 mm | 529.4 / 535.8 | 137.6 (−74%) | **138.8 (−74%)** | 140.8 (−73%) | 148.9 (−72%) | 143.1 (139.3) |
+| VIS-35, y pull, 0.5 mm | – | 159.9 (−70%) | **265.5 (−50%), fits 220** | 329.9 (−38%), misses 220 by 0.4 mm | 457.1 (−14%) | 216.6 |
+| VIS-35, 0.125 mm, x / y | 541.1 | 134.1 / 160.9 | **MP1** | 137.2 (−75%) / 334.3 (−38%) | – | 143.3 / 216.3 |
+| Wolf, x, 0.5 mm | 206.0 / 224.8 | 138.8 (−33%) | **150.1 (−27%)** | 159.3 (−23%) | 184.9 (−10%) | 171.6 (167.4) |
+| Benchy, y, 0.5 mm | 42.9 / 44.7 | 34.6 (−19%) | **36.5 (−15%)** | 38.1 (−11%) | 42.0 (−2%) | 58.5 (56.4) |
+| Sphere r21 (the help model), 0.5 mm | 28.7 / 30.6 | 21.8 (−24%) | **22.2 (−23%)** | 22.9 (−20%) | 26.1 (−9%) | 52.0 (48.4) |
+
+- Other figures (β 30): t = 4, Goddess 139.1 → 79.1 ml (−43%), VIS-35 593.4 → 183.8 (x, −69%) or 384.8 (y, −35%). VIS-35 y at β 15: 236.3 ml (−55%), Zt 175.1. Against today's default (the one-piece with the layer on), Goddess 121.9 → 60.4 ml at β 20 (−50%).
+- Not included: sprues (the same in both types), the seam's film (under 0.5 ml) and hidden-leaf vents (about 1 ml each).
+- **Plastic:** the halves keep what the silicone gave up, about +56 ml on Goddess and +390 ml on VIS-35 (x), mostly 5% infill, and about 2 cm³ per lug pair, or with clips about 1 g a key and the ears.
+- **Plan on**, at β 20: about 49% less silicone on Goddess; on VIS-35 about 74% on a bed of at least 230 x 150 mm (the user's 250 x 210 with M3 lugs, 247 x 147), and about 50% on the app's default 220 mm bed, whose y split fits at β 20; 15 to 27% on Benchy, the sphere and the wolf. The draft's "VIS-35 −60% on a 220 bed" came from the cut-off roof and was wrong.
+- The β 20 column and the 0.125 mm rows at β 20 are measured again at cellFinal with the bed applied in MP1.
+
+**Deferred to 0.3.x:** a free angle about z; a draggable P; lugs on the top face (the user chose README.txt's top clamp, 2026-11-23); the H-hull cap (−9% on VIS-35 y at β 0); a third, top part; shells that follow the cavity, to save plastic; the base rib at the seam's bottom corners, unless MP6's leak test or pour needs it. Printed seam clips, which the judge deferred, are not deferred: the user's answer of 2026-11-23 builds them in 0.3.0 (G13.10.0, MP3b).
 
 ## Analyses
 
@@ -1088,6 +1691,214 @@ Measured at RM (this server, one browser at a time, nothing else running for the
 - **Determinism**: finnedBox's copy at 0.5 mm has Node's SHA-256 in Chromium and in Firefox, with the same e_near and left-out parts (`e2e/repair.spec.ts`), and the 3 million triangle block's copy the same count and figures in both browsers; the core's run found the same SHA-256 in Node, Chromium 153 and Firefox 155 in 9 cases. README.txt's "which gives the same copy" stands on it.
 - **Test time**: the new unit files take about 35 s alone at one worker (repairFlow 9, repairGuarantee 24, repairClearance 1.5, the project tests 0.1); the whole unit suite, 61 files and 1,431 tests, took 184 s at two workers with the core's tests in it; the browser spec 8 to 10 s a browser with its build, the soak case 1.4 min in Chromium and 1.5 in Firefox. After the review the repair's six unit files take 53 s at one worker (repairGuarantee 33, repairFlow 14, repair 3.4, repairClearance 2.2, repairMeter 0.4, vote 0.005), about 18 s more.
 - **Seen in the review shots**: a rebuild rounds the edges of a flat base, so its foot can carry small sloped facets: finnedBox at a 0.1 mm grid stood on its bottom has a 4 mm² facet 0.06 mm above the plane, which G2.6 reported as an upper level; since the review a level within the grid of the plane is not offered in glue mode, where the file is printed, and still is in merged mode, where the copy is.
+
+### 0.3.0: the runs and their order
+
+0.3.0 is the user's request of 2026-11-22 (`docs/REQUIREMENTS.md`, section 2, quoted in full; section 8): a mold type switch near the top of the page, with per-type defaults and a window for the settings that differ, after PrusaSlicer; help on the switch that later help can build on; the two-part cover; and the example gallery, with credit for models that are not ours. Designed on 2026-11-22 by read-only designers (the geometry reviewed by three critics, the UI, the gallery, a cross-design critic and a judge for the fastener), with the user's answers of 2026-11-22 and 2026-11-23 (section 2): R44 to R48, D27 to D29. The runs, in the order they are built, each ending with its checks green and a commit: GA, MT, MP1, MP2, MP3, MP3b, MP4, MP5, HB, MP6. MP3b, the printed seam clips, follows the bolts' MP3, as the user asked for both in 0.3.0 (the answer of 2026-11-23, "Bolts and clips now") and the clips reuse MP3's relief, pull test and audit. GA comes first because the rename of `examples/` is its first commit, the first code commit of 0.3.0 (after `c7daedc` "Start 0.3.0" and the commit of this design). MT ships the switch before the two-part cover exists, its Two-part tile shown but unavailable ("Not built yet") outside the tests until MP5 joins the clamshell's stages to the pipeline. HB comes after MP5, as its explode animations are rendered from the real parts of both types. There is no pause for leak coupons (the user's answer of 2026-11-23: build it all and test with a real pour at the end), so the physical test is MP6's. The design's "MP0" (requirements, decisions, measurement) is gone: the rows and decisions are written, and its measurement at the default β of 20 degrees is MP1's.
+
+Rules for every run: the `one-piece` type's STLs stay byte-identical, checked by `test/fixtures/m9-parts.json` and every golden (the paths changed by the rename only). Its text files change only where 0.3.0 says, each change held by its own test: project.json, and so each `.moldproj`, takes `schemaVersion` 7, the `mold` group with `mold.type`, the `clamshell` and `clips` groups at their defaults and, for a gallery model, `gallery` (GA, MT); README.txt and report.json name the mold type at the top (MT), and README.txt carries a gallery model's credit (GA). RM's 1,090 hashes are not a check of 0.3.0, as the harness that made them is not in the repo. Every browser test runs in Chromium and Firefox, Firefox being the user's browser; `scripts/ci.sh` and `--full` green before each commit.
+
+### GA: the gallery, the default sphere, credit, and `test-models/`
+
+Not one of the plan's milestones: the example gallery the user set for 0.3.0 on 2026-11-12 and filled on 2026-11-22 (`docs/REQUIREMENTS.md`, sections 2 and 8; R47, R48, D29). The user's answers: primitives of about 4 cm, made by the project and published under CC0; the sphere loaded when the page opens; `examples/` renamed `test-models/`; the 2 or 3 complex models only under CC0, CC BY or another licence that allows any use, picked by the user before 0.3.0 is released; and a credit, author with a link to the model's page, shown in the view for every model the project does not own.
+
+Scope:
+- **The rename, its own first commit:** `git mv examples test-models`, with `.gitignore` changed to `/test-models/VIS-35-skan-skalowany.stl` and `/test-models/l_medieval_barrel.stl` in the same commit; before staging, `git check-ignore` passes for both at the new path and `git status` shows neither, as `git add -A` would otherwise publish them. The same commit changes every path that names the folder: `scripts/ci.sh`, `test/fixtures/loadExamples.ts`, the unit tests with a literal path (largeModel, repairFlow, folds, clip, stlEstimate, repair, simplifyModel, examples), `test/unit/requirements.test.ts` (README.md's "`examples/` are not covered"), the e2e harnesses and `pages.spec.ts`, `pipeline.spec.ts`, `src/ui/main.tsx` and `src/diag/pipelinePage.ts`, README.md, `docs/THIRD_PARTY.md`, `docs/DEPLOY.md`, `docs/RELEASING.md` (which now says the site holds `gallery/` but no test model), and R37's and D17's wording. This plan's history keeps `examples/`. Identifiers (`loadExamples`, `EXAMPLE_FILES`) keep their names.
+- **The primitives:** `scripts/make-gallery-primitives.mjs` committed, with two changes to the draft now in the tree, whose output folder is a required argument and whose sphere takes 128 segments: the folder defaults to `public/gallery/`, and the sphere takes 64. The shapes: a cube of 40 mm; a sphere of radius 21 mm cut flat 2 mm up, 40 mm tall, standing on a disc about 17.9 mm across; a cylinder 30 mm across; a cone 40 mm across, point up; each centred on the z axis with its base at z = 0, closed, genus 0, its header `binary STL, mold-form-generator gallery <name>`. The sphere takes 64 segments (sagitta about 0.025 mm, under the 0.125 mm cell; about 100 KB where 128 give 397 KB), the others 128, settled here before HB hashes the sphere.
+- **The catalogue** (`src/gallery/catalogue.ts`, typed, the one source the UI, the tests and the constants import): id, file, title, thumbnail, height, triangles and bytes, and for our own `own: true, licence: 'CC0-1.0'`; for any other `own: false`, author, author's page, the model's page (its source's own link, such as a Printables page by number), licence, deed and whether and how it was modified. `public/gallery/SOURCES.md` carries the same rows, shipped with the site, and is the models' one notice: `public/third-party-notices.txt` stays the software's list, which `test/unit/licences.test.ts` parses strictly against the packages. A licence that forbids commercial use or changes is refused by the test, so the Goddess Statue (CC BY-NC-SA) stays a test model.
+- **Opening a model:** fetch with `new URL('gallery/<file>', document.baseURI)`, never by `/…`, so it loads at `/`, `/mold-form-generator/` and `/beta/`; then `new File([blob], file)` into the existing `store.openFile`, which keeps the large-model check, notices, `history.clear()`, Repair mesh and MM2. The model's source gains `kind: 'gallery'` and the id.
+- **The default model:** `DEFAULT_GALLERY_MODEL = 'sphere'`, loaded after the first render on a plain page load: not under `?test=1` unless the URL has `&model=<id>`, with `model=none` an empty page; `?model=<id>` works on any load, as a link to an example; only with a WebGL 2 view; not if a file was dropped or chosen meanwhile (the store's ticket, checked before and after the fetch). A failed fetch leaves the empty page and says so only in the console. The page starts with no history and nothing unsaved.
+- **The replace prompt:** a gallery model never asks "Save, then open" when another file is opened, as nothing of the user's is lost; leaving the page still asks while settings differ from the last save (D29).
+- **Where the gallery shows:** the empty view's drop hint gains "Or try an example" with the thumbnails, and the Model section an "Examples" button beside Open and Save project that opens an inline panel (no dialog) of cards: thumbnail, title, "40 mm tall, N triangles", the credit for a model not ours, and a "Two-part" badge on the models that suit it (the sphere, and any complex model measured to save at least 15%). Cards are buttons in a `role="list"`, each "Open the example <title>".
+- **The credit** (R48), for a model not ours, while it is on screen: a second line under the file row, "<Title> by <author> · <source> · <licence>", three plain links (`target="_blank" rel="noopener"`) to the model's page, the author's page and the licence's deed, never fetched or embedded; the same on its card, in README.txt of the export, and in the `.moldproj` (project.json's `gallery: { id, title, author, authorUrl, url, licence }`), so a saved project shows it again without looking it up. Our own models show none.
+- **Thumbnails:** `scripts/make-help-media.mjs` (`npm run media -- thumbs`), Playwright's Chromium on a diag page that draws each model with the app's materials on a transparent background at a fixed three-quarter view, 192 x 192 WebP in `public/gallery/thumbs/`, committed. HB adds the explode animations to the same tool.
+- **Format 7:** `SCHEMA_VERSION` 7 with one step `v6ToV7` in `src/app/projectFile.ts` (beside `MIGRATIONS` and `readParams`), which MT extends before anything is released; this run adds the optional `gallery` field.
+- **A third-party fixture for the tests:** until MP6 the catalogue holds no third-party model, so `test/fixtures/galleryFixture.ts` gives one entry (`own: false`, an author, the pages, CC BY 4.0, the cube's file under another id), passed to the catalogue's functions in Node and added in the browser through `src/app/testHooks.ts` under `?test=1`; MP6 runs the same checks on the real rows.
+- **Test fixtures:** `DEEDS` moves from `test/unit/examples.test.ts`, where it is module-local, to `test/fixtures/licences.ts`, which both tests import; `test/fixtures/loadGallery.ts` gives `loadGallery(id)` for the gallery's STLs, as `loadExamples.ts` knows only the test models; `test/fixtures/projects/v6-sphere.json` is a format 6 project saved at `c7daedc`.
+- **The media page:** `media.html` with `src/diag/mediaPage.ts`, a build input in `vite.config.ts` as `diag.html` and `pipeline.html` are.
+
+Files: `public/gallery/` (the four STLs, `thumbs/`, `SOURCES.md`), `src/gallery/catalogue.ts`, `src/gallery/open.ts`, `src/ui/Gallery.tsx`, `src/ui/Viewport.tsx`, `src/ui/Sidebar/ModelSection.tsx`, `src/ui/main.tsx`, `src/app/store.ts`, `src/app/project.ts`, `src/app/projectFile.ts`, `src/app/testHooks.ts`, `src/core/params/schema.ts`, `src/core/report/readme.ts`, `scripts/make-gallery-primitives.mjs`, `scripts/make-help-media.mjs`, `media.html`, `src/diag/mediaPage.ts`, `vite.config.ts`, `.gitignore`, `test/fixtures/{galleryFixture.ts, licences.ts, loadGallery.ts, projects/v6-sphere.json}`, `test/unit/examples.test.ts` (`DEEDS` imported).
+
+Checks:
+- `test/unit/gallery.test.ts`: the catalogue's ids and files, the STLs git tracks in `public/gallery/`, the rows of its `SOURCES.md` and the thumbnails are one list; every third-party row (the fixture's until MP6) has an author, a page, a licence in `DEEDS` that allows any use, and `modified` recorded; no test model and no local-only file is in it; `public/third-party-notices.txt` is unchanged, so `licences.test.ts` holds; negative controls: a file with no row, a row with no file, an NC licence, an ND licence (refused even unmodified).
+- The generator, run into a temporary folder, gives the committed bytes; each primitive is closed, genus 0, its lowest point at 0 and 40 ± 0.5 mm tall; the header passes the barred-name scan.
+- Every entry's bytes and triangles match its file, below `LARGE_MODEL` and under 2 MB each, 5 MB in all.
+- In process: the sphere exports at defaults with no error in the quick suite, every gallery model under `CFG_FULL`.
+- `DEFAULT_GALLERY_MODEL` is a catalogue id; `src/` never fetches an absolute gallery path.
+- The rename: `ci.sh`, `.gitignore` and `LOCAL_ONLY` agree on `test-models/`, `git check-ignore` passes for both local-only files, and no tracked file names `examples/` as a path but the history in `docs/PLAN.md` and `docs/REQUIREMENTS.md` (section 2's quotes, the decisions and section 8 as recorded).
+- `test/unit/project.test.ts`: the format 6 fixture opens with no `gallery`; the fixture entry's credit survives a save and reopen; an invalid `gallery` field is dropped with the warning for fields not understood.
+- `e2e/gallery.spec.ts` (Chromium and Firefox): a plain `/` opens the sphere with nothing fetched past the host, nothing unsaved and no history; a drop replaces it with no prompt, also after a setting changed, and leaving the page then asks; `?test=1` stays empty and `?test=1&model=cone` opens the cone; a drop during the default's fetch wins; every card opens its model, the fixture's third-party card (added by the test hook) and its credit line link the right pages, own models show none, and the keyboard path returns focus; `pages.spec.ts`: every gallery STL and thumbnail answers 200 under the release's and the beta's prefix. The suites that expect an empty page run under `?test=1` and keep their meaning.
+- The review shots `ga-gallery-panel`, `ga-credit` and `ga-empty` in both themes.
+
+Exit: every check above green; the one-piece's STLs as at `c7daedc` (m9-parts.json and the goldens), its text files changed only as the rules list; VIS-35 and `l_medieval_barrel.stl` untracked.
+
+User: U14.
+
+### MT: mold types, per-type defaults and the switch window
+
+Not one of the plan's milestones: Notes 2 and 4 of the user's request of 2026-11-22 (`docs/REQUIREMENTS.md`, section 2; R44, D27), with the user's answer that the window lists "Your rule, literally": every setting the user changed whose value differs from the new type's default.
+
+Scope:
+- **The registry** (`src/core/mold/types.ts`): `MoldTypeId = 'one-piece' | 'clamshell'`, `DEFAULT_MOLD_TYPE = 'one-piece'`, `MOLD_TYPES` with each type's overrides (from its defaults file), `locked` (path, value and the reason a user reads), `applies(path)` and `unavailable(ctx) → reason | null` (models over one, a model past G1.8's limit not simplified, and until MP5 "Not built yet"). Under `?test=1` a hook in `src/app/testHooks.ts` (`enableMoldType('clamshell')`) lifts "Not built yet", which is how this run's e2e tests reach the Two-part tile. A project or ZIP whose type is unavailable here (before MP5, or a Two-part project with more than one model or a model past G1.8's limit) opens as the one-piece with an inline notice naming the type and the reason ("This project is a Two-part cover, which is not available here: …; it opened as a One-piece cover."), its clamshell values kept in params. The UI's side (`src/ui/mold/moldTypeUi.ts`): name ("One-piece cover", "Two-part cover"), a one-line blurb, the pictogram and its help topic; a test holds both to the same keys, and a fixture of three types gives three tiles in the layout data with no other change; that they render and wrap is e2e's, the third type injected by a test hook, as Vitest runs in Node with no DOM.
+- **The parameters:** a schema group `mold` with `mold.type`, and the groups `clamshell` and `clips` of G13.14, with all three values of `clamshell.fastener` (bolts, clips, none) from the start, so format 7 is whole before MP1; their rows are hidden in the one-piece type; a `SectionId 'moldType'` holds `mold.type`, so every path is still placed once.
+- **Per-type defaults:** `defaults.json` stays as it is, the one-piece's set; `src/core/params/defaults.clamshell.json` holds only what differs (`silicone.baseLayer` 0). `checkOverridesText(id, text)` refuses an unknown path, an auto path given anything but a number in its range (G13.14), a wrong kind or a value out of range, a value equal to the base's, and a merged set that breaks `crossParameterErrors`; the build's check (`cfg-check-defaults`) reads every `defaults.*.json`, and README.md's "Tuning the defaults" gains a paragraph on them. `checkDefaults` (`src/app/defaultsCheck.ts`) still requires null on an auto path in `defaults.json`, and takes a number there only for a merged set (`{ overrides: true }`). `defaultParams(type = 'one-piece')`, `defaultOf(path, type)` and `isDefaultAt(path, params)` replace every reader of `def.default` (the marks, `defaultText`, the resets, `readParams`' filling, README.txt); `stepOf` and the ranges keep the base's, so a slider steps the same in every type. The argument's default keeps every other caller of `defaultParams()` on the one-piece set unchanged: `src/app/pipeline.ts`, `test/fixtures/fieldRuns.ts`, `test/fixtures/loadExamples.ts`, `fitTest.ts`'s default parameter and the diag worker.
+- **`effectiveParams(params)`** applies the type's locks (`grid.nx = grid.ny = 1`, `bolts.enabled` off, `joint.pryNotches` off); every stage key, the checks, the export and the report read through it, and the user's own value stays in `params` for switching back. Locked rows show off with their reason through a new row-level locked state in `src/ui/ParamRow.tsx`: a number row's slider and box, or a flag row's switch, disabled, with the reason as the title and as a line under the row. ParamRow's `off` map greys out only a choice row's options (base.mode's Merged), so it does not serve the number and flag rows locked here.
+- **The switch:** a block pinned at the top of the sidebar, titled "Mold type", above Model and outside the scrolling sections, as Export is pinned at its foot; a `role="group"` of tile buttons with `aria-pressed`, each a pictogram (a static SVG here, HB moves it) and the type's name, laid out `repeat(auto-fill, minmax(96px, 1fr))`, so more types wrap with no change. Arrow keys move focus and never switch; Enter or Space switches. With the sidebar collapsed, its rail shows the current type's icon, which opens the sidebar.
+- **When the window opens** (`src/app/moldSwitch.ts`, pure): a setting is a row when it is not `mold.type`, applies to the new type, is changed from its default under the old type (an auto one when it differs from that type's default, null or the type's number), and its value differs from the new type's default. A setting not changed takes the new default; a changed one already equal to the new default is kept, now at its default; one that does not apply keeps its value, hidden. No rows: the switch is made at once, with no window. `planSwitch(params, to)` and `applySwitch(plan, keep)`.
+- **The window** (`src/ui/mold/SwitchDialog.tsx`, D27): a native `<dialog>` opened with `showModal()`, titled "Switching to Two-part cover", with one line, "These settings were changed by you and differ from the Two-part cover defaults. Ticked settings keep your value."; a table of a check box, the setting (its group and label), your value, and the new default (the old default in the row's title), values as the rows format them and auto as "automatic"; every row ticked at first, a header box for all, none or some, each box named with its setting's label; rows whose default is the same in both types tagged "same default in both"; a locked row shown off with its reason. Buttons, in the user's words: **Discard all changes** (every listed row takes the new default), **Transfer selected changes** (ticked rows keep your value, the rest take the new default; the default button, focused first), **Cancel** (no change, no history step; Esc and the dialog's `cancel` event too; a click on the backdrop does nothing).
+- **Keys and focus:** while the window is open, the app's key handler (`src/ui/App.tsx`) does nothing and calls `preventDefault` for Ctrl+S, Ctrl+O and Ctrl+Z, so the browser's own Save page never opens behind it; Esc is guarded in the pick mode's handler and in `Viewport.tsx`'s drag handler, so Esc only cancels the window. Focus returns to the tile clicked. A model or project opened while the window is open cancels it first; the switch is blocked while the replace prompt is open.
+- **Undo:** Discard and Transfer, or a switch with no window, are one `store.change('switching to Two-part cover', …)` step, which Undo takes back with the type and the values; the redo label says so.
+- **Reset and the marks:** Reset sets every setting to the current type's defaults and keeps the type ("Reset every setting to the Two-part cover defaults: …"); the section Resets and the marks read the current type ("Changed from its Two-part cover default, 0 mm."); `mold.type` has no mark.
+- **Project files, format 7:** `v6ToV7` (begun in GA) also writes `mold.type: 'one-piece'`, the `clamshell` group at its defaults and `clamshell.fastener: 'bolts'`, so old files open as the one-piece they were. `readParams` reads and checks `mold.type` first and fills missing keys from that type's defaults ("Not in the file, so at their Two-part cover defaults: …"); a format 7 file with no `mold.type` takes `one-piece`; an unknown type or fastener is refused with a reason, as a newer format is ("… was saved with a mold type this version does not know ('x')"), leaving the model and settings as they were. A project or ZIP applies its type with no window, or opens as the one-piece with the notice above when its type is unavailable. README.txt and report.json name the type at the top (the text change the 0.3.0 rules list). A reload opens as `one-piece`, as settings are not kept between visits.
+
+Files: `src/core/mold/types.ts`, `src/core/params/{schema.ts, defaults.ts, defaults.clamshell.json, rules.ts}`, `src/app/defaultsCheck.ts`, `src/app/moldSwitch.ts`, `src/app/store.ts`, `src/app/stages.ts` (keys through `effectiveParams`), `src/app/project.ts`, `src/app/projectFile.ts` (`v6ToV7`, `readParams`), `src/app/testHooks.ts`, `src/ui/ParamRow.tsx`, `src/ui/mold/{MoldTypeSwitch.tsx, MoldTypeIcon.tsx, SwitchDialog.tsx, moldTypeUi.ts}`, `src/ui/App.tsx`, `src/ui/Viewport.tsx`, `src/ui/Sidebar/*`, `src/ui/layout.ts`, `vite.config.ts`, README.md.
+
+Checks:
+- `test/unit/moldTypes.test.ts`: unique ids, the default exists, the two registries agree, a three-type fixture gives three tiles in the layout data; `unavailable` past G1.8's limit and with more than one model.
+- `test/unit/defaultsFile.test.ts`: the overrides file's every rule, with a negative control each; each merged set passes `checkDefaults(merged, { overrides: true })` and `crossParameterErrors`; a number on `silicone.baseLayer` is taken in the overrides and still refused in `defaults.json`.
+- `test/unit/moldSwitch.test.ts`: the table of cases (not changed, changed and different, changed and equal to the new default, an auto setting not null, a setting that does not apply, a locked one, `mold.type`), no rows and no window, Discard, Transfer with some and with none ticked.
+- `test/unit/params.test.ts`: `isDefaultAt` and `changedPaths` by type, Reset keeps the type, `stepOf` the same in every type; a hidden `grid.nx = 2` makes one tile and changes no stage key.
+- `test/unit/project.test.ts`: the format 6 fixture opens as one-piece; a format 7 Two-part project round-trips; missing keys take the Two-part defaults; an unknown type and an unknown fastener are refused, nothing changed; a Two-part project opened while the type is unavailable ("Not built yet", and with more than one model) opens as the one-piece with its notice, its clamshell values kept.
+- `test/unit/history.test.ts`: each outcome one step, Undo restoring type and values, the redo label right, Cancel recording nothing.
+- `e2e/moldType.spec.ts` (Chromium and Firefox, the Two-part tile enabled by the test hook): a third type injected by the hook renders a third tile that wraps; nothing changed, no window, the tile pressed, Undo back; t changed, the window lists t with both values; Cancel, Transfer ticked, Transfer unticked and Discard; Tab stays in the window, Esc cancels it, Ctrl+Z and Ctrl+S inside do nothing, focus returns to the tile; the locked rows' reasons; Reset's title names the type; settings hidden under Two-part come back on switching; a Two-part project reopened with no window. Review shots `mt-switch` and `mt-window` in both themes.
+
+Exit: the one-piece type byte-identical (every `def.default` reader moved, so this is checked here, not only in MP2); every check above green.
+
+User: U13's window part starts once MP5 is committed, as the Two-part tile is unavailable outside the tests until then; its help part after HB.
+
+### MP1: the two-part cover's core, in Node
+
+Not one of the plan's milestones: G13.1 to G13.6 and the core of G13.10 (R45, D28).
+
+Scope:
+- `src/core/field/side.ts`: frames, the padded lattice, the roof at β 20, base layer rows, prism rows, the far-side flatten, H_top; the sweep with its prefix sums and the O(1) Hmax; the bed filter with the lugs' 2p or the clip ears' 2·Le, `EAR_LENGTH` (10, G13.10.16) defined here and imported by MP3b's `parts/clips.ts`; ties and typed values.
+- `src/core/solid/tool.ts`: `buildToolMesh`'s `seam` option and the `liftMax` assert.
+- `src/core/parts/rim.ts`: D_side, D3, Hmax_clam, Zt and the wall's raise for the band.
+- `src/core/parts/seamBolts.ts`: `seamBoltNeeds`, `placeSeamBolts`, `lugBedGrowth`, the length rules and warnings; `src/core/parts/bolts.ts` exports `column`, `SEGMENTS`, `PAST` and `OVERLAP`.
+- `src/core/report/clamp.ts`: side push, net lift, holdN_seam, the wedge, the top span, `seamBoltAdvice`, and the belts for fastener None.
+- **Measurement**, the design's MP0 that is still to do: every example and the gallery's models by G13.17's method at cellFinal, the bed applied (the app's default 220 x 220 x 250 and the user's 250 x 210 x 220), at β 0, 20, 30 and 45, with M3 lugs, with clip ears and with neither: silicone, axis, xs, Zt, the bed footprints, side push and screws per end. G13.17's β 20 column, G13.10.6's table and the β 30 footprints of G13.10.8, G13.10.18 and G13.12 are corrected from these. The clip rows and G13.10.17's table are MP3b's, as they need `placeClips`. The help model's figure decides that the sphere's clip shows two halves.
+- **The spike** of G13.16, on what this run builds: VIS-35 at cellFinal on both axes, the side fields, two TINs, two `toolSolid`s and `minGap(model, tool)` for each, heap and time recorded. The halves' part of it is MP2's gate.
+
+Checks (`test/unit/sideField.test.ts`, `sweep.test.ts`, `seamBolts.test.ts`, `clampSeam.test.ts`):
+- Frames: det +1 and exact round trips. Each side field ≥ the brute-force voxel envelope on small random meshes. The roof's property, and the top row of every roofed field ≤ hStop. Prism rows only raise G; the flatten touches only rows with no point of the dilated model past P. `buildToolMesh`'s band holds: no final node in (h_s − eps, h_s + eps].
+- The sweep equals brute force, and so does the O(1) Hmax; a synthetic L picks the right axis; the bed: VIS-35 at 220 and β 20 gives y, at 300 x, at the user's 250 x 210 x with M3 lugs and y with M4 (`skipWithout(ctx, 'vis35')`); a box that fits at O.b but not at O.b + 2p is refused with "fits with Seam fasteners: None (clamps)", and one that fits at O.b + 19 but not + 20 names Bolts with clips set (the `clips` value is MT's, `EAR_LENGTH` this run's); a coarse xs within 2% of a fine sweep.
+- D_side, D3 and Hmax_clam bound the built tool meshes on every example, also at β 60.
+- Seam bolts, no solids: G13.10.2's table at each size, the auto lengths 10, 10 and 12; f whole layers from the back face, in [f_min, f_min + layer) over a sweep of H₊; Tn ≥ Tn,min at the auto length for every f, a flush head passing the nut by 2 threads; the lowest lug's bottom at coverBottom, the top lug's top at most Zt − 13, gaps at least `LUG_CLEAR`, centres at most 100 apart; G13.10.6's table (VIS-35 behind `skipWithout(ctx, 'vis35')`); Zt 30 gives one per end, Zt 20 `seam-bolt-no-room`; a side push of 300 N raises n; `seam-bolt-short` at M3 x 6 and `seam-bolt-long` at M3 x 40, each naming the length that fits.
+- Goldens (1%), in a new clamshell table in `test/regression/golden.ts` keyed by example or gallery id, as the existing tables are `Record<ExampleId, …>`: clamshell Goddess always, VIS-35 behind `skipWithout(ctx, 'vis35')`: silicone, axis, xs, Zt, the hold and the push.
+
+Exit: the checks green; the measurement written into G13.17, G13.10.6, G13.10.8, G13.10.18 and G13.12; the spike's heap peak at or under the one-piece's plus 300 MiB, else the run stops and the user is asked.
+
+### MP2: the halves, the base bars and the seal
+
+Not one of the plan's milestones: G13.7, G13.8, G13.9 and G13.12, built with Seam fasteners None, so the seal is proved before the lugs (R45, D28).
+
+Scope: the tools; the shared block with the teardrop; the trim; the halves; the base's ridge bars; band, tongue, groove and pins (`src/core/parts/seam.ts`); the pry chamfers; the four poses; a new `allowed` option on `auditOverhang` (`src/core/report/overhang.ts`, whose `OverhangOptions` today hold `limitDeg`, `toleranceDeg`, `bedZ` and `only`); G4 per half with two `minGap` calls and the rebuild keeping axis and xs; the silicone's mesh for the 1% check. Openings on P are placed by MP4, so this run's seal, pull and leak checks take a hand-placed pour and vent on P as test input (each at (xs, b), zb by G11's rule from G±, cut by the unchanged `openingCutters`); MP4 runs these checks again on placed openings.
+
+Checks (`test/regression/clamshell.test.ts`, `test/unit/seamSeal.test.ts`, `test/unit/leakVoxel.test.ts`):
+- Each half a valid manifold, neg ∩ pos = ∅, neg ∪ pos ∪ cavity = the block less the rebate, the seam faces coinciding.
+- G4: `minGap(model, half) − error ≥ t` per half on the cube, the sphere, the cone and Goddess, VIS-35 behind `skipWithout(ctx, 'vis35')`.
+- **Pull test**, base and model in place: each half moved along its pull by d ∈ {0.25, 0.5, 1, 2, 5, 10, 20 mm, its depth}, and at b offsets of ±cG, meets silicone ∪ model ∪ base ∪ cutters in at most 1e-3 mm³. Negative controls: a vent 3 mm off P, a full ridge ring on the base.
+- The audit's steep area equals the allowed set's in every pose.
+- The band inside O with 0.8 to spare, its legs on [D+e1, D+e4] at z = rh + gx, the tongue's tip at rh + gx + cG or above; pins and band clear of the bores and pry chamfers; sockets deeper than pins.
+- The map's silicone within 1% of the mesh.
+- **Leak voxel test** (`CFG_FULL`): a 10 mm cube coupon at t 3 and the sphere, voxelized at 0.1 mm (base, both halves, the funnel on its seat), every printed edge rounded by a voxel morphological opening of radius 0.2 mm on each part (Manifold has no fillet), the liquid in the cavity and the seat up to Zf. K4 and K5 cells are labelled from the cutter solids: a cell is K4 or K5 when its centre lies in the base groove's or the seam groove's cutter and in no part. Every path from the liquid out crosses a K4 or K5 cell or the flange's contact, the least contact length at least the one-piece coupon's: the same coupon built as a one-piece mold is the test's first case, so the baseline exists, as no leak test does today. Negative controls: the draft's loop (the joint rectangle and R_plate, legs through the rebate wall); a tongue stopping short of the base groove with a land between; a V on the top face through the seat.
+- The rules fail at topCap 4 and at seamLand 3.
+
+Exit: the checks green; the one-piece type's STLs byte-identical; a golden of Goddess with Seam fasteners None, which MP3 must keep; G13.16's second gate, the halves' spike, at or under the one-piece's heap plus 300 MiB, else the run stops and the user is asked.
+
+### MP3: the seam bolts
+
+Not one of the plan's milestones: G13.10's solids, coupon and audit (R45, D28; the user's answer of 2026-11-22, "Printed clips/bolts", and the judge's choice of bolts).
+
+Scope: `lugSolid`, `lugRelief`, `seamBoltCuts`, `seamBoltBridges`, `seamBoltDiagnostics` in `src/core/parts/seamBolts.ts`; the lug union before the trim and the relief and cuts in each half's batch (`parts/cover.ts`); the audit's `allowed` with the bridges; `buildSeamBoltCoupon` in `fitTest.ts` and the fit-test ZIP's two files in this type.
+
+Checks (`test/regression/seamBolts.test.ts`, `test/unit/fitTest.test.ts`), on the sphere and Goddess always, VIS-35 behind `skipWithout(ctx, 'vis35')`:
+- Valid manifolds, neg ∩ pos = ∅; every lug point at w > 0 or in the ε overlap, with z ≥ coverBottom.
+- The two lug faces of a pair 2r apart, while the halves' seam faces coincide in P. Negative control: no relief, the lugs touch and the test fails.
+- The cuts read off the solids: countersink and bore open along −a; the hole and a one-layer membrane; the slot open through the top face; the hole open beyond. Negative controls: no membrane, a slot 1 mm short, a bore short of the gusset. Every cut at least minWall from O's face and the lug's outer faces; the interlayer section at the slot's level at least 70 mm² (M3).
+- Axes: from the exported STLs with the poses undone, the holes of a pair agree within 1e-3. Negative control: a lug moved 0.01 mm.
+- No supports: steep area = the top chamfer and the listed slot outlines, in every pose. Negative controls: a flat lug underside, a counterbore for the countersink, a slot leaving along −h.
+- Pull test, extended: half ∪ lugs, as MP2's, at most 1e-3 mm³. Positive control: screws as cylinders block the slide at d = 0.25. Negative control: a pos lug 1 mm across P.
+- The leak voxel test is unchanged with lugs, no bolt cut's voxel joining the liquid's component.
+- The coupon built from the same functions, read at all three sizes, with negative controls; the ZIP lists its two files only for the clamshell with bolts, and the one-piece fit test is byte-identical.
+- Byte checks: the one-piece type and its fit test (m9 hashes, every golden); Seam fasteners None equals MP2's golden. The goldens of Goddess and VIS-35 add the count, length, Tn, Tp and the bed footprint with the lugs.
+
+Exit: the checks green.
+
+### MP3b: the seam clips
+
+Not one of the plan's milestones: G13.10.16 to G13.10.20, the printed seam clips as the second value of Seam fasteners (R45, D28; the user's answer of 2026-11-23, "Bolts and clips now", where the judge had chosen bolts only and deferred clips). Bolts stay the default.
+
+Scope: `src/core/parts/clips.ts` (`clipNeeds`, `placeClips`, `earSolids`, `socketCutters`, `keySolid`, `keyPose`, `clipPlate`, `clipDiagnostics`); `CLIP_HOLD_N` in `parts/fasteners.ts`; `clipAdvice` in `report/clamp.ts` with the bottom pair and the wedge; the ears and sockets in each half (`parts/cover.ts`), with the one-layer relief; `EAR_LENGTH` imported from MP1's `field/side.ts` (the `clips` group and the `clips` value of `clamshell.fastener` are MT's); the rules `clips-no-room`, `clips-hold`, `clips-single`, `clips-wedge` and the rows lowered; `buildClipCoupon` and `clipLines` in `fitTest.ts`, and the fit-test ZIP's two clip files with this value.
+
+Checks: G13.10.20's tests (`test/unit/clips.test.ts`, `test/regression/clips.test.ts`, `test/unit/fitTest.test.ts`), on the sphere and Goddess always, VIS-35 behind `skipWithout(ctx, 'vis35')`, each with its negative controls: rows, hold and the bottom pair; the relief; socket alignment; key fit and home line; the pull test with the keys out and in; the audit; the coupon's congruence and its ZIP; the leak voxel test with ears.
+
+Exit: the checks green; the clip rows of every example and gallery model measured as MP1 measures, and G13.10.17's table corrected from them (moved from MP1); the one-piece type's STLs byte-identical; Seam fasteners None equal to MP2's golden and Bolts to MP3's.
+
+### MP4: air and openings on the seam
+
+Not one of the plan's milestones: G13.5 (R45, D28).
+
+Scope: `src/core/analysis/seam.ts` (S and its merge tree); `placement.ts`'s 1D mode with the room rule (pins, pry chamfers, lugs and clip ears kept clear); hidden-leaf vents; 1D plateaus; pins stored as (x, y), an opening at (xs, pin.b); the funnel's check on P; the S7c stage.
+
+Checks (`test/unit/seamPlacement.test.ts`): H_top and S's merge tree against brute force; every centre on P; the room rule holds; on a T with an arm across P the hidden-leaf vent passes through the upper run; a 1D plateau gets the warning; the vent beside the pour keeps `flangeReach`/`ventLand`; pins survive one-piece → two-part → one-piece; MP2's seal, pull and leak voxel checks run again with the placed openings in place of the hand-placed ones.
+
+Exit: the checks green.
+
+### MP5: pipeline, view, export, report and README
+
+Not one of the plan's milestones: G13.13 to G13.16 in the app (R44, R45, D28). The Two-part tile becomes available here.
+
+Scope:
+- **Stages:** S3x, S4x, S6x, S6c, S10c, S7c, S11c to S14c with their static lists and multi-slot caches, keyed through `effectiveParams`; the one-piece's rows untouched; T1 per frame on each half's field; `NODE_PREVIEW_MS` rows for this type.
+- **View:** `PARTS` and the layers from the registry, `clips` with Seam fasteners Clips; the explode vectors, the clips along ±b; the counted silicone of each half clamped at h_s with the seam quad and the floor; P as a translucent quad; openings dragged along P; the section through a lug.
+- **Export:** the two halves' files, `base.stl`, `funnel.stl`, `model_oriented.stl`, and `clips.stl` with clips; two `minGap`s; report.json (`moldType`, G13.13, `seamBolts` or `clips`); README.txt (the type at the top, the hardware or "nothing to buy", G13.11's assembly and demold with G13.10.11's or G13.10.18's lines, the leak test, the Vaseline bead and ring, top layers, the print notes, the clips' printing and heat lines, and on wide halves, with bolts or clips, the one clamp across the top middle of the seam with `seam-top-span`); `docs/WORKFLOW.md` gains the two-part cover's section; `docs/REQUIREMENTS.md` section 7 a step for it.
+- **The card's estimate** on the Two-part tile, "saves about N ml (P%)": computed lazily in the field worker, only while the block shows, from the coarse fields, within 2 s on VIS-35 in Firefox.
+- **The rows:** a "Two-part" block with its six settings, Seam fasteners (Bolts, Clips, None) among them; with bolts the Bolts rows under "Seam bolts", no toggle, Length "Auto, 10 mm"; with clips the Clips rows under "Seam clips"; the card and Cover & joint line "6 M3 x 10 mm seam bolts, 3 on each end: they hold 300 N against the 29 N the seam needs.", or with clips G13.10.19's line.
+
+Checks:
+- `test/unit/stages.test.ts`: the one-piece rows' keys unchanged; the new stages' inputs; a locked value changes no key.
+- `test/unit/export.test.ts`: the ZIP lists the two halves by axis, and `clips.stl` only with clips; report.json's count = 2·perEnd, its Hardware line agreeing with the layout; with clips, `clips.count` = 2·rows and the plate holding count + 2 keys; `seam-top-span` and README.txt's top clamp on VIS-35 x with bolts and with clips, and not on Goddess; README.txt's lines.
+- `e2e/clamshell.spec.ts` (Chromium and Firefox): the switch builds the halves; the explode vectors; a drag held to P; the Seam fasteners row with its three values and the shared rows; the Clips rows with clips; the corner-bolt toggle off with its reason; the export ZIP and the fit-test ZIP with bolts and with clips, Node's bytes; the clips exploding along ±b; a section through a lug; budgets on Goddess and VIS-35 (G13.16). Review shots `mp-halves`, `mp-exploded`, `mp-section-lug` and `mp-card` in both themes.
+
+Exit: the checks green, budgets met in both browsers, the one-piece type byte-identical.
+
+User: U12, and U13's window part, can start once this run is committed.
+
+### HB: the help base, the pictograms and the explode animations
+
+Not one of the plan's milestones: Note 3 of the user's request of 2026-11-22 (`docs/REQUIREMENTS.md`, section 2; R46), with the user's answers "Pictogram + clip + ?" and "Sphere (Recommended)": a help base that later help reuses. The user's word "clip" for the help's animation is kept only where his answer is quoted; in code and here it is the explode animation, as "clip" names the printed seam clips (`clips.*`, `clips.stl`, the `clips` part and report key, the topic `seam-clips`).
+
+Scope:
+- **The registry,** one, in `src/help/`: `config.ts` with `HELP_MODEL: GalleryId = 'sphere'`, the one switch in source for the model every animation shows; `topics.ts` with `HELP: Record<HelpId, HelpTopic>` (title, a one-line summary, paragraphs of plain text, optional media, an animation or an image, and related topics), first holding `mold.type`, `mold.one-piece`, `mold.clamshell`, `seam-bolts` and `seam-clips`; `HelpButton.tsx`, `HelpPopover.tsx`, `HelpHint.tsx` and `HelpAnimation.tsx`. A `data-help="<id>"` attribute on any control is how later work moves the `HINTS` `title=` strings into the registry, one at a time; F1 is not in 0.3.0.
+- **The pictograms** (`MoldTypeIcon`, from MT, a 24-unit grid with a 1.8 stroke as `icons.tsx` draws): a section of the sphere in its mold, the one-piece as a cover over a plate, the two-part as two halves over a base, the silicone filled in `#2dd4bf` and everything else `currentColor`; each part a `<g>` with its own offset, pulled apart by a 250 ms CSS transform on the tile's hover and `:focus-visible`, needing no WebGL. The seam bolts' pictogram: a lug pair, a screw and a nut; the seam clips': an ear pair and a key.
+- **The hint card** (`HelpHint`, `role="tooltip"`, tied to the tile by `aria-describedby`): after 400 ms of hover or keyboard focus, gone on leave, blur or Esc, holding the type's explode animation and its line; it takes no focus.
+- **The "?"** in the block's heading opens `HelpPopover` (`popover="auto"`: light dismiss, the top layer; placed from `getBoundingClientRect`, not CSS anchors; `aria-expanded`, `aria-controls`), with every type's text, its animation and Replay.
+- **The explode animations:** `npm run media -- explode` (GA's tool) loads `public/gallery/<HELP_MODEL>.stl` through the real workers and part builders at the preview cell on a diag page, for each type, draws it with a transparent background at one fixed orthographic view (about 30 degrees up, 35 round), steps the view's own explode through 20 frames with an ease-out, and paints them into one sprite sheet (5 x 4 frames of 480 x 360 at 2x), saved with `toDataURL('image/webp', 0.8)`: `public/help/explode-<type>-<theme>.webp`, in both themes, its outlines from each theme's `--ink`, and `public/help/explode.json` (`model`, `modelSha256`, frames, grid, size, fps, and per type `partsSha256`, a hash of the parts' meshes with vertices rounded). Sprite sheets, not video: no encoder is needed and Playwright's recording is neither transparent nor timed. Fetched with `new URL('help/…', document.baseURI)`. `HelpAnimation` steps the sheet by `requestAnimationFrame`, pauses while hidden, and plays `loop` or `once`.
+- **Reduced motion** (`prefers-reduced-motion: reduce`, once in the global CSS, for later help too): the pictogram stays still and shows a thin offset outline; an animation shows its last, exploded frame; Replay plays once, only on its click.
+
+Files: `src/help/*`, `src/ui/mold/MoldTypeIcon.tsx`, `src/ui/mold/MoldTypeSwitch.tsx`, `src/diag/mediaPage.ts`, `scripts/make-help-media.mjs`, `public/help/`, the global stylesheet.
+
+Checks:
+- `test/unit/help.test.ts`: every `HelpId` used in `src` (`data-help`, `<HelpButton id>`) is in the registry; `HELP_MODEL` is an own (CC0) gallery id with its file on disk, so help needs no credit; `explode.json`'s `model` is `HELP_MODEL` and its `modelSha256` the gallery file's, and its `types` are `MOLD_TYPES`, in the quick suite; each type has an animation in both themes under 200 KB; under `CFG_FULL` the parts built again in process give `partsSha256`, else the test fails with "run npm run media -- explode"; `HELP_MODEL` yields at least one part for every type, and two cover halves for the clamshell.
+- `e2e/help.spec.ts` (Chromium and Firefox): hover and focus move the pictogram's groups; the hint shows after its delay with the animation; the "?" opens and closes (Esc, a click outside); with `reducedMotion: 'reduce'` no transform and a still frame; nothing fetched past the host; without WebGL 2 the switch and its help still work. `pages.spec.ts`: the animations and `explode.json` answer 200 under both prefixes. Review shots `hb-hint`, `hb-popover` and `hb-reduced` in both themes.
+
+Exit: the checks green.
+
+User: U13 (the help's part).
+
+### MP6: the release check, a real pour
+
+Not one of the plan's milestones: the user's answer of 2026-11-23, no pause for coupons: everything built, then tested with a real pour (R45, U12). β 20 is unpoured until this run.
+
+Scope:
+- The user prints, at 5% infill or less with at least 3 walls, the fit test with the seam bolt coupons, and a two-part mold of Goddess (or VIS-35, kept local), with M3 x 10 countersunk screws and M3 nuts, which the user has (the answer of 2026-11-23).
+- The clips: the fit test with the clip coupon (Clip clearance set from it), the coupon blocks and the halves at 5% infill or less with at least 3 walls, but the keys (`clip_coupon_keys.stl` and `clips.stl`) at 100%, standing on their heads, in PLA or PETG; and a two-part mold of the sphere with Seam fasteners Clips, assembled and leak-tested as for a pour; the keys tapped again and their lines read before the water goes in.
+- Assembled by README.txt's order, sealed exactly as for the pour, leak-tested with water for 10 minutes, the seam's bottom corners and the top under the funnel watched; the screws snugged again; then poured, cured and demolded by README.txt.
+- What it settles, each written back into this plan and section 9 of `docs/REQUIREMENTS.md`: β 20 (air under the ceilings); whether a bottom corner weeps (then the base rib, deferred, is built); whether the top weeps on a span over 100 mm (then the top clamp becomes a requirement); README.txt's order on a real assembly; whether the screws needed snugging again; and whether the clips' keys held their lines and the seam with them.
+- The user picks the 2 or 3 complex gallery models; each is added by GA's catalogue rules and measured as G13.17 measures, before 0.3.0 is released.
+
+Exit: U12 passed, or its findings fixed and passed again; the gallery's complex models in; 0.3.0 released as `docs/RELEASING.md` says, the push waiting on the user.
 
 ## Verification end to end
 
