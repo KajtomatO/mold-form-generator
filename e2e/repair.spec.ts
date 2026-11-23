@@ -41,7 +41,9 @@ test.describe('RM: Repair mesh', () => {
     test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
     watch = await openApp(page);
   });
-  test.afterEach(() => {
+  test.afterEach(({}, info) => {
+    // A test that beforeEach skipped, as Firefox without a display does, never opened the app.
+    if (info.status === 'skipped') return;
     expect(watch.errors).toEqual([]);
   });
 
