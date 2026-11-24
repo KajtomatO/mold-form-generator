@@ -20,7 +20,7 @@ import { importSolid, reversed, sharedVolume, signedVolumeAbout, type ImportedSo
 import { HEAVY_LIMITS, importFromCopy, manifoldPathSolid, simplifyForManifold, type HeavyLimits, type ManifoldPath, type MeshSimplifier } from '../core/mesh/simplify';
 import { meshBounds, weld, type WeldedMesh } from '../core/mesh/weld';
 import { resolveAuto } from '../core/params/defaults';
-import { crossParameterErrors } from '../core/params/rules';
+import { crossParameterErrors, crossParameterWarnings } from '../core/params/rules';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import { moldTypeOf, type MoldTypeId } from '../core/mold/types';
 import { MOLD_TYPE_UI } from '../ui/mold/moldTypeUi';
@@ -416,7 +416,7 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     const cap = inputs.needsTrim && model ? arena.track(model.slice(0.02)) : undefined;
     const footprint = buildFootprint(arena, mesh, inputs.candidate, scaled.base.minIsland, cap);
     const { pocketDepth, printMargin, ventPersistence, boltLength, baseLayer } = resolveAuto(scaled, bounds);
-    const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...imported.report.diagnostics, ...path.diagnostics, ...footprint.diagnostics];
+    const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...crossParameterWarnings(scaled), ...imported.report.diagnostics, ...path.diagnostics, ...footprint.diagnostics];
     // The coarser cell widens the margin of G4, and with it the cavity and the box, past what the preview showed.
     if (cellScale !== 1) diagnostics.push({ code: 'export-coarser', severity: 'warning', message: `The geometry engine failed at full detail, so the export was built again at half the detail, on a ${scaled.quality.cellFinal} mm grid instead of ${params.quality.cellFinal} mm, with a wider safety margin and a larger box than the preview shows.` });
 

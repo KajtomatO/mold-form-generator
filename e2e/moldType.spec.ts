@@ -114,6 +114,11 @@ test.describe('MT: the mold type switch', () => {
     // MT's review: at the type's number default the row has no auto or set tag, and its hint is the type's own.
     await expect(row(page, 'silicone.baseLayer').locator('.tag')).toHaveCount(0);
     await expect(row(page, 'silicone.baseLayer')).toHaveAttribute('title', 'Silicone over the whole base plate inside the joint. The Two-part cover leaves it out (0) by default; set a thickness to have one.');
+    // The flange takes the type's 4 mm, seam land + 2 (G13.8 step 6), with the type's own hint. Its warning under 4 mm
+    // needs a model's diagnostics, so test/unit/seamSeal.test.ts holds it.
+    await expect(row(page, 'funnel.flangeWidth').locator('input.num')).toHaveValue('4');
+    await expect(row(page, 'funnel.flangeWidth').locator('.mark.dot')).toHaveAttribute('title', 'At its Two-part cover default, 4 mm.');
+    await expect(row(page, 'funnel.flangeWidth')).toHaveAttribute('title', /seam land \+ 2 mm wide \(4\) by default/);
     await expect(row(page, 'clamshell.fastener')).toBeVisible();
     // Clips' own rows only with Seam fasteners Clips.
     await expect(row(page, 'clips.clearance')).toHaveCount(0);

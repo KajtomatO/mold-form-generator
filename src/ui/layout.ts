@@ -215,6 +215,7 @@ export const HINTS: Partial<Record<ParamPath, string>> = {
 export const TYPE_HINTS: Readonly<Record<string, Partial<Record<ParamPath, string>>>> = {
   clamshell: {
     'silicone.baseLayer': 'Silicone over the whole base plate inside the joint. The Two-part cover leaves it out (0) by default; set a thickness to have one.',
+    'funnel.flangeWidth': 'A flat ring round the foot of the funnel, this far past the seat\'s edge. It rests flat on the cover\'s top, so the funnel stands steady and seals there. The Two-part cover\'s is seam land + 2 mm wide (4) by default, so it covers where the seam comes up beside the pour. Vents keep clear of it. 0 leaves it out.',
   },
 };
 

@@ -321,10 +321,12 @@ export function maskOverrun(field: Field, D: Rect): number {
 export type SeamAxis = 'x' | 'y';
 
 /**
- * G13.6 and G13.8: the plastic the seam's groove keeps to O's face across the pull, in mm. The band needs O.b at least
- * seamLand + rw + 2cG + BAND_ROOM past D3.b, which deriveClamRim adds up.
+ * G13.6 and G13.8: the plastic the seam's groove keeps to O's face across the pull, past the pry chamfers, in mm. The
+ * band needs O.b at least seamLand + rw + 2cG + PRY_LEG + BAND_ROOM past D3.b, which deriveClamRim adds up.
  */
 export const BAND_ROOM = 0.8;
+/** G13.7 step 5: the pry chamfers' leg, at 45 degrees on each half's seam edge of the end faces. */
+export const PRY_LEG = 1;
 
 /**
  * G13.6, what the vertices give once, for both axes and any xs: the extremes the O(1) bounds read. The model is the
@@ -518,9 +520,9 @@ export interface ClamRim extends Rim {
 /**
  * G13.6: the rim of the two-part cover at this split. The corner bolts and the pry notches are this type's locks, so
  * they are off here whatever `params` hold. O is G8's with the user's wall, raised only where the band above the joint
- * would leave less than seamLand + gw + 0.8 between D3 and O's faces across the pull; the base, B, is unchanged. The
- * wall is one value round the box, as `cover.wall` is, so a raise moves all four of O's faces, the halves' depths
- * and the bed's height with them, and the edge's minimum by the same.
+ * would leave less than seamLand + gw + PRY_LEG + BAND_ROOM (5.9 at the defaults) between D3 and O's faces across the
+ * pull; the base, B, is unchanged. The wall is one value round the box, as `cover.wall` is, so a raise moves all four
+ * of O's faces, the halves' depths and the bed's height with them, and the edge's minimum by the same.
  */
 export function deriveClamRim(mold: MoldBounds, bounds: SideBounds, hmax: number, params: Params, axis: SeamAxis, xs: number, zJ: number): ClamRim {
   const locked: Params = { ...params, bolts: { ...params.bolts, enabled: false }, joint: { ...params.joint, pryNotches: false } };
@@ -529,7 +531,7 @@ export function deriveClamRim(mold: MoldBounds, bounds: SideBounds, hmax: number
   const dGrew = D.x0 < DG8.x0 || D.y0 < DG8.y0 || D.x1 > DG8.x1 || D.y1 > DG8.y1;
   const rim = deriveRim({ ...mold, D, hMax: hmax }, locked);
   const j = params.joint;
-  const room = params.clamshell.seamLand + j.ridgeWidth + 2 * j.grooveClearance + BAND_ROOM;
+  const room = params.clamshell.seamLand + j.ridgeWidth + 2 * j.grooveClearance + PRY_LEG + BAND_ROOM;
   const short = axis === 'x' ? Math.max(rim.O.y0 - (D3.y0 - room), D3.y1 + room - rim.O.y1) : Math.max(rim.O.x0 - (D3.x0 - room), D3.x1 + room - rim.O.x1);
   let wallRaised: ClamRim['wallRaised'] = null;
   if (short > SLACK) {
@@ -538,7 +540,7 @@ export function deriveClamRim(mold: MoldBounds, bounds: SideBounds, hmax: number
     rim.O = outset(rim.O, short);
     rim.wall = to;
     rim.edge = { ...rim.edge, minimum: rim.edge.minimum + short };
-    rim.diagnostics.push({ code: 'seam-wall-raised', severity: 'info', also: ['cover.wall'], message: `Wall raised from ${wallRaised.from.toFixed(1)} to ${to.toFixed(1)} mm for the seam seal, so its groove keeps ${BAND_ROOM} mm of plastic to the outside.` });
+    rim.diagnostics.push({ code: 'seam-wall-raised', severity: 'info', also: ['cover.wall'], message: `Wall raised from ${wallRaised.from.toFixed(1)} to ${to.toFixed(1)} mm for the seam seal, so its groove keeps ${BAND_ROOM} mm of plastic to the outside past the pry chamfers.` });
   }
   // D3 along the pull stays inside O less the wall, as D_G8 holds every vertex with its margin: G13.6's assert.
   const [a0, a1, o0, o1] = axis === 'x' ? [D3.x0, D3.x1, rim.O.x0, rim.O.x1] : [D3.y0, D3.y1, rim.O.y0, rim.O.y1];

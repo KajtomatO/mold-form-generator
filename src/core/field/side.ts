@@ -75,6 +75,14 @@ export function frameInverse(frame: RigidTransform): RigidTransform {
   };
 }
 
+/**
+ * G13.8's frame of the seam: the + pull's turn, with h = a - xs, so P is h = 0 and (u, v) is the seam face, v = z and
+ * u = b with an x seam, -b with a y seam (bOf). The seal's sections are drawn in (u, v) and extruded along h.
+ */
+export function seamFrame(axis: SeamAxis, xs: number): RigidTransform {
+  return { rotation: ROWS[pullOf(axis, 1)], translation: [0, 0, -xs] };
+}
+
 /** The model turned into a pull's frame. The indices are the model's, as the turn is rigid. */
 export function turnMesh(mesh: WeldedMesh, frame: RigidTransform): WeldedMesh {
   return { ...mesh, positions: transformPositions(mesh.positions, frame) };

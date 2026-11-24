@@ -9,7 +9,7 @@ import type { SolidReport } from '../core/mesh/shells';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
 import { effectiveParams } from '../core/mold/types';
-import { crossParameterErrors } from '../core/params/rules';
+import { crossParameterErrors, crossParameterWarnings } from '../core/params/rules';
 import { MANIFOLD_TRIANGLE_LIMIT } from '../core/mesh/simplify';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
 import type { GalleryCredit } from '../gallery/catalogue';
@@ -1641,7 +1641,7 @@ export class Pipeline {
   }
 
   private collectDiagnostics(): void {
-    const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.run)];
+    const all: ShownDiagnostic[] = [...this.notes, ...crossParameterErrors(this.run), ...crossParameterWarnings(this.run)];
     if (this.parsed) all.push(...this.parsed.value.diagnostics);
     // A hole's Show marks the middle of its rim; the cavity's warning marks only the holes facing up.
     // RM: a fold's Show marks each place it folds through itself.

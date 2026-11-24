@@ -11,7 +11,7 @@ import { buildToolMesh, TOOL_BOTTOM } from '../../src/core/solid/tool';
 import { coarseRows, exactRim, fineSplit, orientedGallery, prepareClamshell, sideField, type ClamshellPrep } from '../fixtures/clamshell';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { EXAMPLE_IDS, type ExampleId } from '../fixtures/loadExamples';
-import { BAND_ROOM, hmaxClam } from '../../src/core/parts/rim';
+import { BAND_ROOM, hmaxClam, PRY_LEG } from '../../src/core/parts/rim';
 import { box, join } from '../fixtures/synthetic';
 
 /** MP1: G13.1's frames and G13.2's side fields (docs/PLAN.md, MP1's checks). */
@@ -266,7 +266,7 @@ describe('G13.6 the wall raise', () => {
     expect(d?.severity).toBe('info');
     expect(d?.also).toEqual(['cover.wall']);
     expect(d?.message).toContain(`Wall raised from 3.0 to ${rim.wall.toFixed(1)} mm for the seam seal`);
-    const j = params.joint, room = params.clamshell.seamLand + j.ridgeWidth + 2 * j.grooveClearance + BAND_ROOM;
+    const j = params.joint, room = params.clamshell.seamLand + j.ridgeWidth + 2 * j.grooveClearance + PRY_LEG + BAND_ROOM;
     expect(rim.O.y0).toBeLessThanOrEqual(rim.D3.y0 - room + 1e-9);
     expect(rim.O.y1).toBeGreaterThanOrEqual(rim.D3.y1 + room - 1e-9);
     // One wall round the box: O moves by the raise on every side, the edge's minimum with it, and D3 stays inside along a.

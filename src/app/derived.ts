@@ -117,6 +117,10 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   // MT: the two-part cover's rules between settings (G13.14).
   'seam-cap': 'cover.topCap',
   'seam-land': 'clamshell.seamLand',
+  // crossParameterWarnings: G13.8 step 6's flange beside the seam.
+  'seam-flange': 'funnel.flangeWidth',
+  // MP2: the seal's pins, dropped when the seam's top corners have no room.
+  'seam-pins-dropped': 'clamshell.pins',
   // deriveRim
   'edge-raised': 'grid.edge',
   'corner-clamped': 'base.cornerRadius',

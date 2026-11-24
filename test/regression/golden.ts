@@ -421,3 +421,29 @@ export const CLAMSHELL_GOLDEN = {
   goddess: { silicone: 58.49, axis: 'y', xs: 152.5, Zt: 114.027, holdN: 12.01, push: [4.89, 4.31], boltsPerEnd: 2 },
   vis35: { silicone: 270.45, axis: 'y', xs: 219, Zt: 192.693, holdN: 23.22, push: [8.4, 8.69], boltsPerEnd: 3 },
 } satisfies Partial<Record<ClamshellModelId, ClamshellGolden>>;
+
+/**
+ * MP2's golden, which MP3 must keep (docs/PLAN.md, MP2's exit): the Goddess Statue as a two-part cover with Seam fasteners
+ * None, at the two-part defaults otherwise, fine fields at the export cell, a pour hand-placed on P where its bore stands
+ * highest and a vent beside it (test/fixtures/clamshell.ts, clamCase and defaultOpenings). The split, each part's volume
+ * in mm3 (1%), and the SHA-256 of each half's STL in its print pose (G13.12), byte for byte.
+ */
+export interface ClamshellPartsGolden {
+  axis: 'x' | 'y';
+  xs: number;
+  neg: number;
+  pos: number;
+  base: number;
+  sha256: { neg: string; pos: string };
+}
+
+export const CLAMSHELL_PARTS_GOLDEN = {
+  goddess: {
+    axis: 'y',
+    xs: 152.5,
+    neg: 371689.7,
+    pos: 247824.6,
+    base: 22392.1,
+    sha256: { neg: '8adc54aa2a88697cde9b5bc1fa6b1c49f3384e159894514d5d7d2214fac4849f', pos: '2686ea0ef0636872e095b4aa5860fef0bf0ba4c2e0be127afe9ddf14d55d1757' },
+  },
+} satisfies Partial<Record<ClamshellModelId, ClamshellPartsGolden>>;

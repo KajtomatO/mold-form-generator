@@ -9,8 +9,8 @@ import { auditOverhang } from '../report/overhang';
 import { checked, type Arena } from '../solid/arena';
 import { outset } from '../solid/rect';
 import { baseBoltCutters } from './bolts';
-import { ridgeSolid, ringHull } from './joint';
-import type { Rim } from './rim';
+import { ridgeBars, ridgeSolid, ringHull } from './joint';
+import type { Rim, SeamAxis } from './rim';
 
 const POCKET_SEGMENTS = 32;
 /** How far the pocket's cut runs above the plate, so the two share no plane. */
@@ -26,6 +26,11 @@ export interface BaseBodyOptions {
    * shelf at 0, so the union overlaps for real instead of touching.
    */
   plateTop?: number;
+  /**
+   * G13.7 step 7, the two-part cover's base: its ridge only as two straight bars along this seam axis, for a in
+   * [D.a0 + cG, D.a1 - cG], so the halves slide off along a with the base in place. Without it, G10's ring.
+   */
+  ridgeBars?: SeamAxis;
 }
 
 /** G10, S14: plate and ridge. Flat underside, with the relief around it against first-layer squish. With bolts, their countersunk holes. */
@@ -39,7 +44,8 @@ export function buildBaseBody(arena: Arena, rim: Rim, options: BaseBodyOptions =
     { rect: outset(B, spread), radius: cornerRadius + spread, z: reliefHeight - Tb },
     { rect: outset(B, spread - reliefRun), radius: Math.max(0, cornerRadius + spread - reliefRun), z: -Tb },
   ]);
-  const body = arena.track(plate.add(ridgeSolid(arena, rim)));
+  const ridge = options.ridgeBars ? ridgeBars(arena, rim, options.ridgeBars) : ridgeSolid(arena, rim);
+  const body = arena.track(plate.add(ridge));
   if (!rim.bolts) return checked(body, 'The base body');
   return checked(arena.track(arena.api.Manifold.difference([body, ...baseBoltCutters(arena, rim.bolts)])), 'The base body');
 }

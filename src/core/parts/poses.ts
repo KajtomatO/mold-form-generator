@@ -3,7 +3,7 @@ import { assertRigid, orientSolid, type OrientedModel, type RigidTransform } fro
 import { weld } from '../mesh/weld';
 import { writeBinaryStl } from '../stl/write';
 import { withArena } from '../solid/arena';
-import type { Rim } from './rim';
+import type { Rim, SeamAxis } from './rim';
 
 /**
  * G9: flat top on the bed, by a half turn about x: (x, -y, Zt - z). A plain z -> Zt - z would export a
@@ -18,6 +18,23 @@ export function coverPose(rim: Pick<Rim, 'Zt'>): RigidTransform {
 /** G10: flat underside on the bed. */
 export function basePose(rim: Pick<Rim, 'Tb'>): RigidTransform {
   return { rotation: [1, 0, 0, 0, 1, 0, 0, 0, 1], translation: [0, 0, rim.Tb] };
+}
+
+/**
+ * G13.12: a half of the two-part cover on its back face, the face parallel to P, seam face up. `sign` is +1 for pos (the
+ * half at a >= xs) and -1 for neg. z' is O.a1 - a for pos and a - O.a0 for neg, so the back face lies on the bed.
+ */
+export function halfPose(rim: Pick<Rim, 'O'>, axis: SeamAxis, sign: 1 | -1): RigidTransform {
+  const { O } = rim;
+  const pose: RigidTransform = axis === 'x'
+    ? sign > 0
+      ? { rotation: [0, 0, 1, 0, 1, 0, -1, 0, 0], translation: [0, 0, O.x1] }
+      : { rotation: [0, 0, -1, 0, 1, 0, 1, 0, 0], translation: [0, 0, -O.x0] }
+    : sign > 0
+      ? { rotation: [1, 0, 0, 0, 0, 1, 0, -1, 0], translation: [0, 0, O.y1] }
+      : { rotation: [1, 0, 0, 0, 0, -1, 0, 1, 0], translation: [0, 0, -O.y0] };
+  assertRigid(pose);
+  return pose;
 }
 
 /** Back from a print pose to the assembled position. */

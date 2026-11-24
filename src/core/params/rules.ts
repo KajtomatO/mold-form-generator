@@ -87,6 +87,12 @@ export function crossParameterErrors(params: Params): Diagnostic[] {
  * holds the band's land, the ridge, the groove's play on both sides and 0.8 mm of plastic over them.
  */
 const SEAM_CAP_ROOF = 0.8;
+/**
+ * G13.8 step 6: beside a pour the seam's band comes up through the top face seamLand past the seat's top, inside which
+ * the seam is wet, so the funnel's flange reaches this far past it, as the one-piece cover's reaches past the seat. The
+ * two-part cover's default Flange width is seamLand + this (defaults.clamshell.json).
+ */
+export const SEAM_FLANGE_LAP = 2;
 
 function seamProblems(params: Params): Diagnostic[] {
   const problems: Diagnostic[] = [];
@@ -100,4 +106,17 @@ function seamProblems(params: Params): Diagnostic[] {
     problems.push({ code: 'seam-cap', severity: 'error', message: `A top cap of ${cover.topCap} mm is under the ${round(cap)} mm the seam needs: its land, the ridge, the groove's play on each side and ${SEAM_CAP_ROOF} mm of plastic over them. Use a top cap of at least ${round(cap)} mm, or a narrower seam land.` });
   }
   return problems;
+}
+
+/**
+ * The warnings between parameters, which build as set but say what to change: crossParameterErrors holds only errors.
+ * G13.8 step 6's, in the two-part cover: a flange that stops short of SEAM_FLANGE_LAP past where the seam comes up
+ * beside the pour leaves the seam's wet side at its rim, as MP2's leak voxel test found at a Flange width of 2.
+ */
+export function crossParameterWarnings(params: Params): Diagnostic[] {
+  const { clamshell, funnel, seat } = params;
+  if (params.mold.type !== 'clamshell') return [];
+  const flange = clamshell.seamLand + SEAM_FLANGE_LAP;
+  if (!funnel.generate || !seat.enabled || funnel.flangeWidth >= flange - 1e-9) return [];
+  return [{ code: 'seam-flange', severity: 'warning', message: `A flange ${funnel.flangeWidth} mm wide does not reach ${SEAM_FLANGE_LAP} mm past where the seam comes up beside the pour, ${clamshell.seamLand} mm out from the seat, so the seam reaches the flange's rim and the silicone can seep out under it: make Flange width at least ${Number(flange.toFixed(2))} mm.` }];
 }

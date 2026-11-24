@@ -1,5 +1,8 @@
 {
   "silicone": {
     "baseLayer": 0
+  },
+  "funnel": {
+    "flangeWidth": 4
   }
 }

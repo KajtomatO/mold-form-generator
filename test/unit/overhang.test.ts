@@ -54,6 +54,29 @@ describe('the overhang audit', () => {
     expect(auditOverhang(hanging, { bedZ: 0, only: (x) => x < 100 }).steepCount).toBe(2);
   });
 
+  it('counts the steep faces `allowed` passes as allowedArea too, only with the option, and only among those `only` keeps', () => {
+    const hanging = box([0, 0, 5], [10, 10, 10]);
+    const plain = auditOverhang(hanging, { bedZ: 0 });
+    expect('allowedArea' in plain).toBe(false);
+    expect('allowedCount' in plain).toBe(false);
+    // Every face passes, but only the two steep ones of the underside are counted, the walls and the top not.
+    const all = auditOverhang(hanging, { bedZ: 0, allowed: () => true });
+    expect(all.allowedCount).toBe(2);
+    expect(all.allowedArea).toBeCloseTo(100, 6);
+    expect(all.steepArea).toBeCloseTo(100, 6);
+    // Half the underside: one triangle of its two, whose centres lie either side of x = 5.
+    const half = auditOverhang(hanging, { bedZ: 0, allowed: (x) => x < 5 });
+    expect(half.allowedCount).toBe(1);
+    expect(half.allowedArea).toBeCloseTo(50, 6);
+    expect(half.steepArea).toBeCloseTo(100, 6);
+    expect(auditOverhang(hanging, { bedZ: 0, allowed: () => false }).allowedArea).toBe(0);
+    // With `only`, a face it leaves out is in neither count.
+    const kept = auditOverhang(hanging, { bedZ: 0, only: (x) => x > 5, allowed: () => true });
+    expect([kept.steepCount, kept.allowedCount]).toEqual([1, 1]);
+    expect(kept.allowedArea).toBeCloseTo(50, 6);
+    expect(auditOverhang(hanging, { bedZ: 0, only: (x) => x > 5, allowed: (x) => x < 5 }).allowedCount).toBe(0);
+  });
+
   it('sets aside a crumb from a boolean, whose normal means nothing, and reports what it set aside', () => {
     const crumb = { positions: new Float32Array([0, 0, 5, 0.005, 0, 5, 0, 0.005, 5]), indices: new Uint32Array([0, 2, 1]) };
     const audit = auditOverhang(crumb, { bedZ: 0 });

@@ -263,8 +263,11 @@ describe('MT: the marks, Reset and the keys by mold type', () => {
     expect(changedPaths(two)).toEqual(['silicone.baseLayer']);
     one.silicone.baseLayer = 0;
     expect(changedPaths(one)).toEqual(['silicone.baseLayer']);
+    // The two-part cover's flange is seam land + 2 mm wide, so it covers where the seam comes up beside the pour (G13.8 step 6).
+    expect(defaultOf('funnel.flangeWidth', 'clamshell')).toBe(4);
+    expect(defaultOf('funnel.flangeWidth', 'one-piece')).toBe(2);
     // Every other setting's default is the base's in both types.
-    for (const path of PARAM_PATHS.filter((p) => p !== 'mold.type' && p !== 'silicone.baseLayer')) expect(defaultOf(path, 'clamshell'), path).toBe(defaultOf(path, 'one-piece'));
+    for (const path of PARAM_PATHS.filter((p) => p !== 'mold.type' && p !== 'silicone.baseLayer' && p !== 'funnel.flangeWidth')) expect(defaultOf(path, 'clamshell'), path).toBe(defaultOf(path, 'one-piece'));
   });
 
   it('the type itself is never changed, so Reset keeps it; settings the type hides or holds are not counted, and keep their values', () => {
@@ -282,7 +285,7 @@ describe('MT: the marks, Reset and the keys by mold type', () => {
     expect(changedPaths(one)).toEqual([]);
     // Negative control: the same values in the type that shows them are counted.
     one.mold.type = 'clamshell';
-    expect(changedPaths(one)).toEqual(['silicone.baseLayer', 'clamshell.ceilingDeg', 'clips.rows']);
+    expect(changedPaths(one)).toEqual(['silicone.baseLayer', 'funnel.flangeWidth', 'clamshell.ceilingDeg', 'clips.rows']);
     // What a Reset sets, every changed setting to the type's default, leaves the type as it is.
     for (const path of changedPaths(one)) setParamValue(one, path, defaultOf(path, 'clamshell'));
     expect(one.mold.type).toBe('clamshell');

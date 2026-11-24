@@ -1,7 +1,7 @@
 import type { Manifold, Vec3 } from 'manifold-3d';
 import type { Arena } from '../solid/arena';
 import { outset, type Rect } from '../solid/rect';
-import type { Rim } from './rim';
+import type { Rim, SeamAxis } from './rim';
 
 /**
  * Same on every ring, so a ring and its offset share their corner angles. The gap between them is
@@ -76,6 +76,47 @@ const JOINT_BOTTOM = -0.5;
 /** G9: cut into the cover. It runs below the shelf so the mouth has no plane in common with it. */
 export function grooveSolid(arena: Arena, rim: Rim): Manifold {
   return draftedRing(arena, rim, rim.e1, rim.e4, JOINT_BOTTOM, rim.ridgeHeight + rim.grooveExtra);
+}
+
+/** How far into the inner land the teardrop's fill starts, so it overlaps the plastic it is joined to. */
+const TEARDROP_INSET = 0.5;
+
+/** A box over a range of a, wide enough across b and z for any joint part. */
+function slabAlong(arena: Arena, rim: Rim, axis: SeamAxis, a0: number, a1: number, z0: number, z1: number): Manifold {
+  const O = outset(rim.O, 1);
+  const [x0, x1, y0, y1] = axis === 'x' ? [a0, a1, O.y0, O.y1] : [O.x0, O.x1, a0, a1];
+  return arena.track(arena.track(arena.api.Manifold.cube([x1 - x0, y1 - y0, z1 - z0])).translate([x0, y0, z0]));
+}
+
+/**
+ * G13.7 step 2(b), the two-part cover's groove: G9's, with a teardrop where its inner wall would face down by more than
+ * 45 degrees in a half's print pose, that is past D along the pull (a > D.a1 for pos, a < D.a0 for neg: the segment
+ * parallel to P and the corners). There the inner wall becomes a 45 degree face rising from the land's edge at z = 0
+ * to the groove's roof, the groove narrowing as it rises. The base's ridge bars stop cG inside D.a0 and D.a1, so no
+ * ridge stands there and the fit is unaffected; along the ridge bars the groove is G9's.
+ */
+export function clamGrooveSolid(arena: Arena, rim: Rim, axis: SeamAxis): Manifold {
+  const groove = grooveSolid(arena, rim);
+  const roof = rim.ridgeHeight + rim.grooveExtra;
+  const inset = Math.min(TEARDROP_INSET, rim.e1 / 2);
+  const face = ringHull(arena, [wallRing(rim, rim.e1, 1, -OVERSHOOT), wallRing(rim, rim.e1, 1, roof + OVERSHOOT)]);
+  const land = ringHull(arena, [wallRing(rim, rim.e1 - inset, 0, -2 * OVERSHOOT), wallRing(rim, rim.e1 - inset, 0, roof + 2 * OVERSHOOT)]);
+  const [a0, a1] = axis === 'x' ? [rim.D.x0, rim.D.x1] : [rim.D.y0, rim.D.y1];
+  const O = axis === 'x' ? [rim.O.x0 - 1, rim.O.x1 + 1] : [rim.O.y0 - 1, rim.O.y1 + 1];
+  const beyond = arena.track(slabAlong(arena, rim, axis, O[0], a0, -1, roof + 1).add(slabAlong(arena, rim, axis, a1, O[1], -1, roof + 1)));
+  const fill = arena.track(arena.track(face.subtract(land)).intersect(beyond));
+  return arena.track(groove.subtract(fill));
+}
+
+/**
+ * G13.7 step 7: the two-part cover's ridge, G10's as two straight bars running along a, for a in [D.a0 + cG, D.a1 - cG].
+ * They end cG short of the teardrop's fill at D.a0 and D.a1, so a half slid on along a, its fill a little proud, reaches
+ * its seat before the bars' ends, as every other fit of the joint has play.
+ */
+export function ridgeBars(arena: Arena, rim: Rim, axis: SeamAxis): Manifold {
+  const cG = rim.e2 - rim.e1;
+  const [a0, a1] = axis === 'x' ? [rim.D.x0, rim.D.x1] : [rim.D.y0, rim.D.y1];
+  return arena.track(ridgeSolid(arena, rim).intersect(slabAlong(arena, rim, axis, a0 + cG, a1 - cG, JOINT_BOTTOM - 1, rim.ridgeHeight + 1)));
 }
 
 /** G10: stands on the base. It starts inside the plate so the two fuse. */

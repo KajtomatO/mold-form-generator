@@ -11,11 +11,13 @@ import { defaultParams } from '../../src/core/params/defaults';
 import { orientedSolid } from '../../src/core/parts/base';
 import { withArena } from '../../src/core/solid/arena';
 import { buildToolMesh, toolSolid } from '../../src/core/solid/tool';
-import { chooseFor, fineSplit, prepareClamshell } from '../fixtures/clamshell';
+import { buildClamshell, chooseFor, fineSplit, prepareClamshell, seamOpening, highestOnSeam } from '../fixtures/clamshell';
+import { gapSearch } from '../../src/core/parts/clamshell';
+import { resolveAuto } from '../../src/core/params/defaults';
 import { loadExample, loadManifold, skipWithout } from '../fixtures/loadExamples';
 
 /**
- * G13.16's gate at the end of MP1: VIS-35 at cellFinal on both axes, on what MP1 builds (the side fields, two TINs, two
+ * G13.16's gates at the end of MP1 and MP2. MP1's: VIS-35 at cellFinal on both axes, on what MP1 builds (the side fields, two TINs, two
  * toolSolids and minGap(model, tool) for each), heap and time recorded, against the one-piece's field, TIN, toolSolid
  * and minGap. Each case reads the process's peak RSS, so run each in a process of its own:
  *   CFG_MEASURE=1 npx vitest run test/regression/clamshellSpike.test.ts -t "<case>"
@@ -89,6 +91,44 @@ describe.runIf(MEASURE)('G13.16 spike, VIS-35 at cellFinal', () => {
         }
       });
       console.log(`two-part ${axis} at ${choice.xs}: coarse and fine fields ${(t1 - t0).toFixed(0)} ms (${fine.plus.field.nx} x ${fine.plus.field.ny} and ${fine.minus.field.nx} x ${fine.minus.field.ny}); ${lines.join('; ')}; JS heap ${(process.memoryUsage().heapUsed / MiB).toFixed(0)} MiB, ${peak()}`);
+    }, 1_800_000);
+  }
+
+  // MP2's gate: the same, once the trimmed halves exist: both halves with a pour on P, minGap(model, half) for each, and
+  // the margin's rebuild at the same split with both pairs held, as the heap budget counts them.
+  for (const axis of ['x', 'y'] as const satisfies readonly SeamAxis[]) {
+    it(`two-part halves ${axis}`, async (ctx) => {
+      skipWithout(ctx, 'vis35');
+      const api = await loadManifold();
+      const { welded, audit, options } = loadExample('vis35');
+      const t0 = performance.now();
+      const [top] = findBaseCandidates(welded, options);
+      const oriented = orientToBase(welded, top, { planeTol: options.planeTol, soup: false });
+      const params = defaultParams('clamshell');
+      params.clamshell.axis = axis;
+      params.clamshell.fastener = 'none';
+      params.print.bedX = 300;
+      params.print.bedY = 300;
+      const lines: string[] = [];
+      withArena(api, (arena) => {
+        const model = orientedSolid(arena, importSolid(arena, welded, audit), oriented)!;
+        const once = (p: typeof params, xs?: number): void => {
+          const s0 = performance.now();
+          const prep = prepareClamshell(oriented.mesh, p);
+          const at = xs ?? chooseFor(prep, p.clamshell.ceilingDeg).xs;
+          const fine = fineSplit(prep, axis, at, p.quality.cellFinal);
+          const build = buildClamshell(arena, prep, fine, { openings: [seamOpening(prep, fine, 'pour', highestOnSeam(prep, fine))] });
+          const s1 = performance.now();
+          const gaps = build.halves.map((half) => model.minGap(half, gapSearch(p)));
+          lines.push(`xs ${at}: fields and halves ${(s1 - s0).toFixed(0)} ms (TINs ${build.meshes.map((m) => m.tinTriangles).join(' and ')}), two minGap ${(performance.now() - s1).toFixed(0)} ms, gaps ${gaps.map((g) => g.toFixed(3)).join(' and ')} mm`);
+          if (xs === undefined) {
+            const margin = resolveAuto(p, prep.bounds).printMargin;
+            once({ ...p, silicone: { ...p.silicone, printMargin: margin + 0.05 } }, at);
+          }
+        };
+        once(params);
+      });
+      console.log(`two-part halves ${axis}, ${(performance.now() - t0).toFixed(0)} ms: ${lines.join('; then the rebuild, the first pair held: ')}; JS heap ${(process.memoryUsage().heapUsed / MiB).toFixed(0)} MiB, ${peak()}`);
     }, 1_800_000);
   }
 });

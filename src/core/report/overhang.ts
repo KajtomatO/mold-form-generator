@@ -7,6 +7,11 @@ export interface OverhangOptions {
   bedZ?: number;
   /** Only faces whose centre passes this count, so a merged model can be reported apart from its plate. */
   only?: (x: number, y: number, z: number) => boolean;
+  /**
+   * G13.12: the steep faces a print may have, such as the top chamfer's or a nut slot's bridge. A steep face whose
+   * centre passes this is still counted in steepArea, and in allowedArea too, so an audit holds that the two are equal.
+   */
+  allowed?: (x: number, y: number, z: number) => boolean;
 }
 
 export interface OverhangAudit {
@@ -17,6 +22,9 @@ export interface OverhangAudit {
   worstDeg: number;
   /** Faces too small or thin to have a normal worth reading. Reported so that a real face cannot hide here. */
   ignoredArea: number;
+  /** The steep faces `allowed` passes, which steepArea includes. Only with `allowed`. */
+  allowedCount?: number;
+  allowedArea?: number;
 }
 
 /**
@@ -35,7 +43,7 @@ const ON_BED = 1e-3;
  */
 export function auditOverhang(mesh: { positions: ArrayLike<number>; indices: ArrayLike<number> }, options: OverhangOptions = {}): OverhangAudit {
   const { positions: p, indices } = mesh;
-  const { limitDeg = 45, toleranceDeg = 0.1, only } = options;
+  const { limitDeg = 45, toleranceDeg = 0.1, only, allowed } = options;
   let bedZ = options.bedZ;
   if (bedZ === undefined) {
     bedZ = Infinity;
@@ -43,7 +51,7 @@ export function auditOverhang(mesh: { positions: ArrayLike<number>; indices: Arr
   }
   const limit = Math.sin(((limitDeg + toleranceDeg) * Math.PI) / 180);
 
-  let steepCount = 0, steepArea = 0, worst = 0, ignoredArea = 0;
+  let steepCount = 0, steepArea = 0, worst = 0, ignoredArea = 0, allowedCount = 0, allowedArea = 0;
   for (let t = 0; t < indices.length; t += 3) {
     const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3;
     const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
@@ -53,9 +61,9 @@ export function auditOverhang(mesh: { positions: ArrayLike<number>; indices: Arr
     const doubled = Math.hypot(nx, ny, nz);
     const area = doubled / 2;
     const down = -nz / doubled;
-    const cz = (p[a + 2] + p[b + 2] + p[c + 2]) / 3;
+    const cx = (p[a] + p[b] + p[c]) / 3, cy = (p[a + 1] + p[b + 1] + p[c + 1]) / 3, cz = (p[a + 2] + p[b + 2] + p[c + 2]) / 3;
     if (cz - bedZ <= ON_BED) continue;
-    if (only && !only((p[a] + p[b] + p[c]) / 3, (p[a + 1] + p[b + 1] + p[c + 1]) / 3, cz)) continue;
+    if (only && !only(cx, cy, cz)) continue;
     const longest = Math.sqrt(Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz, (ux - vx) ** 2 + (uy - vy) ** 2 + (uz - vz) ** 2));
     if (area < CRUMB_AREA || doubled / longest < CRUMB_WIDTH) {
       ignoredArea += area;
@@ -65,7 +73,12 @@ export function auditOverhang(mesh: { positions: ArrayLike<number>; indices: Arr
     if (down > limit) {
       steepCount++;
       steepArea += area;
+      if (allowed && allowed(cx, cy, cz)) {
+        allowedCount++;
+        allowedArea += area;
+      }
     }
   }
-  return { steepCount, steepArea, worstDeg: worst, ignoredArea };
+  const audit: OverhangAudit = { steepCount, steepArea, worstDeg: worst, ignoredArea };
+  return allowed ? { ...audit, allowedCount, allowedArea } : audit;
 }

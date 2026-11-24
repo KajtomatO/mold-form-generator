@@ -234,9 +234,9 @@ const OVERRIDES_TEXT = readFileSync(join(root, 'src', 'core', 'params', 'default
 const overrides = (): Record<string, Record<string, unknown>> => JSON.parse(OVERRIDES_TEXT);
 
 describe('MT: the types\' defaults files', () => {
-  it('are one per type but the one-piece cover, whose defaults are defaults.json, and the two-part cover\'s holds only its base layer of 0, which the check passes', () => {
+  it('are one per type but the one-piece cover, whose defaults are defaults.json, and the two-part cover\'s holds only its base layer of 0 and its flange width of 4, which the check passes', () => {
     expect(overrideFiles().map((path) => path.split('/').pop())).toEqual(MOLD_TYPE_IDS.filter((id) => id !== 'one-piece').map((id) => `defaults.${id}.json`));
-    expect(overrides()).toEqual({ silicone: { baseLayer: 0 } });
+    expect(overrides()).toEqual({ silicone: { baseLayer: 0 }, funnel: { flangeWidth: 4 } });
     expect(checkOverridesText('clamshell', OVERRIDES_TEXT)).toEqual([]);
     expect(OVERRIDES_TEXT).toBe(`${JSON.stringify(overrides(), null, 2)}\n`);
   });
