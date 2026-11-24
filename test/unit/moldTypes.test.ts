@@ -13,7 +13,8 @@ import { MOLD_TYPE_UI, moldTypeTiles } from '../../src/ui/mold/moldTypeUi';
 
 const NONE = { bodies: null, triangles: null, simplified: false };
 
-afterEach(() => disableMoldType('clamshell'));
+// MP5 builds the two-part cover; a test that marks it "Not built yet" puts it back.
+afterEach(() => enableMoldType('clamshell'));
 
 describe('MT: the mold types', () => {
   it('have unique ids, the default among them, which the schema\'s mold.type takes, and the two registries agree', () => {
@@ -48,12 +49,10 @@ describe('MT: the mold types', () => {
     expect(PARAM_PATHS.filter((path) => !MOLD_TYPES['one-piece'].applies(path))).toEqual(['clamshell.axis', 'clamshell.offset', 'clamshell.ceilingDeg', 'clamshell.seamLand', 'clamshell.pins', 'clamshell.fastener', 'clips.clearance', 'clips.rows']);
   });
 
-  it('the two-part cover is "Not built yet" until MP5, or the test hook, lifts it; then not past G1.8\'s limit unless simplified, nor with more than one model', () => {
+  it('the two-part cover is offered since MP5, but not past G1.8\'s limit unless simplified, nor with more than one model; a type marked "Not built yet" is not', () => {
     const clamshell = MOLD_TYPES.clamshell;
-    expect(clamshell.unavailable(NONE)).toBe(NOT_BUILT_YET);
-    expect(MOLD_TYPES['one-piece'].unavailable({ bodies: 4, triangles: 3e6, simplified: false })).toBeNull();
-    enableMoldType('clamshell');
     expect(clamshell.unavailable(NONE)).toBeNull();
+    expect(MOLD_TYPES['one-piece'].unavailable({ bodies: 4, triangles: 3e6, simplified: false })).toBeNull();
     expect(clamshell.unavailable({ ...NONE, bodies: 1, triangles: MANIFOLD_TRIANGLE_LIMIT })).toBeNull();
     expect(clamshell.unavailable({ ...NONE, triangles: MANIFOLD_TRIANGLE_LIMIT + 1 })).toBe('Past 2,000,000 triangles it needs the model simplified when it is opened');
     expect(clamshell.unavailable({ ...NONE, triangles: MANIFOLD_TRIANGLE_LIMIT + 1, simplified: true })).toBeNull();
@@ -64,7 +63,7 @@ describe('MT: the mold types', () => {
 
   it('gives a tile per type in the layout data, in order with its words, and a third type gives a third tile with no other change', () => {
     const tiles = moldTypeTiles(MOLD_TYPE_LIST, MOLD_TYPE_UI, NONE);
-    expect(tiles.map(({ id, name, unavailable }) => [id, name, unavailable])).toEqual([['one-piece', 'One-piece cover', null], ['clamshell', 'Two-part cover', NOT_BUILT_YET]]);
+    expect(tiles.map(({ id, name, unavailable }) => [id, name, unavailable])).toEqual([['one-piece', 'One-piece cover', null], ['clamshell', 'Two-part cover', null]]);
     const third: MoldType = { id: 'box', overrides: {}, locked: [], applies: () => true, unavailable: () => null };
     const ui = { ...MOLD_TYPE_UI, box: { name: 'Box', blurb: 'A test type.', icon: 'box', help: 'mold-type-box' } };
     const three = moldTypeTiles([...MOLD_TYPE_LIST, third], ui, NONE);

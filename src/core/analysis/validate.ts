@@ -193,7 +193,8 @@ export function heightAt(field: Field, x: number, y: number): number {
 }
 
 /** FL: 'flange' is a vent where a funnel's flange would rest on its mouth, which the land alone allows. */
-export type HardProblem = 'off-cavity' | 'land' | 'flange' | 'top-edge';
+/** MP5: `seam-room`, the two-part cover's alone, where G13.5's seal beside an opening on P has no room. */
+export type HardProblem = 'off-cavity' | 'land' | 'flange' | 'top-edge' | 'seam-room';
 
 export interface OpeningCheck {
   valid: boolean;

@@ -25,6 +25,9 @@ import type { Diagnostic } from '../core/report/diagnostics';
 import type { Rect } from '../core/solid/rect';
 import { parseStl } from '../core/stl/parse';
 import type { StageId } from '../app/stages';
+import { ClamFieldStages, clamDiagnostics, clamMold, type ClamField, type ClamPlacement } from './clamshellField';
+import { moldTypeOf } from '../core/mold/types';
+import { topMap } from '../core/field/side';
 
 /**
  * Which base plane: one of the ranked candidates, or the plane through a clicked triangle. `upper` is
@@ -159,6 +162,7 @@ export interface MoldStage {
 
 /** What main receives at the end of T1: the field, its plan in brief, and the export plan's bounds. */
 export interface FieldOutput {
+  /** H for the one-piece cover; for the two-part cover H_top (G13.4), which placement, the drops and the markers read. */
   field: Field;
   cell: number;
   rEff: number;
@@ -166,6 +170,8 @@ export interface FieldOutput {
   mold: MoldBounds;
   rim: Rim;
   diagnostics: Diagnostic[];
+  /** MP5: the two-part cover's side fields, split, silicone, forces and hold; absent for the one-piece cover. */
+  clam?: ClamField;
 }
 
 export interface PlacementOutput {
@@ -173,6 +179,8 @@ export interface PlacementOutput {
   /** The placement space's distance map and fit boxes, built here so a drop on main never waits for them. */
   clearance: Float32Array;
   fits: Partial<Record<OpeningKind, Rect | null>>;
+  /** MP5: the two-part cover's openings on P; absent for the one-piece cover. */
+  seam?: ClamPlacement;
 }
 
 export interface FieldOutputs {
@@ -242,6 +250,8 @@ export class FieldStages {
   private far: { key: string; mesh: WeldedMesh | null } | null = null;
   /** RM: the oriented model with those parts appended, for the S2 it was made from. */
   private joined: { oriented: OrientedStage; mesh: WeldedMesh } | null = null;
+  /** MP5: the two-part cover's rows, on the same S2. */
+  private readonly clam = new ClamFieldStages();
 
   constructor(private readonly now: () => number = () => 0) {}
 
@@ -258,12 +268,12 @@ export class FieldStages {
     add('S6', this.s6);
     add('S7', this.s7);
     add('S10', this.s10);
-    return out;
+    return { ...out, ...this.clam.cached() };
   }
 
   /** What the stages keep between jobs, for the memory meter, which counts the arrays in them (MM1). */
   heldArrays(): unknown[] {
-    return [this.s1, this.s2, this.s3, this.s4, this.s5, this.s6, this.s10, this.s7, this.groups, this.far, this.joined];
+    return [this.s1, this.s2, this.s3, this.s4, this.s5, this.s6, this.s10, this.s7, this.groups, this.far, this.joined, this.clam.heldArrays()];
   }
 
   /** Drops everything, as loading another file does: the old model's arrays are the biggest thing here. */
@@ -272,6 +282,7 @@ export class FieldStages {
     this.groups = null;
     this.far = null;
     this.joined = null;
+    this.clam.clear();
   }
 
   /**
@@ -471,7 +482,20 @@ export class FieldStages {
     const outputs: FieldOutputs = {};
     if (want.includes('S1')) outputs.S1 = s1();
     if (want.includes('S2')) outputs.S2 = s2();
-    if (want.includes('S6')) {
+    // MP5: the two-part cover builds its field and placement with rows of its own (S3x to S7c), which the keys name.
+    const clam = moldTypeOf(params).id === 'clamshell';
+    if (clam) {
+      // Only one type's rows stand at once: what the other built would only hold memory.
+      this.s3 = this.s4 = this.s5 = this.s6 = this.s10 = this.s7 = null;
+    } else {
+      this.clam.clear();
+    }
+    if (want.includes('S6') && clam) {
+      const oriented = s2();
+      const { fine, field, choice, prep } = this.clam.fieldFor(keys, params, oriented, cellOf(oriented), timed);
+      const top = topMap(fine.plus.field, fine.minus.field, prep.bounds, fine.axis, fine.xs);
+      outputs.S6 = { field: top, cell: top.cell, rEff: fine.plus.side.plan.rEff, pitch: [0, 0], mold: clamMold(prep, fine.rim), rim: fine.rim, diagnostics: clamDiagnostics(choice, field), clam: field };
+    } else if (want.includes('S6')) {
       const conditioned = s6();
       const { mold, rim } = s10();
       // M10: the bolts' wall to the cavity, against the field as the preview's tool cuts it, cropped to D. The
@@ -487,7 +511,7 @@ export class FieldStages {
         diagnostics: [...conditioned.diagnostics, ...bolts],
       };
     }
-    if (want.includes('S7')) outputs.S7 = s7();
+    if (want.includes('S7')) outputs.S7 = clam ? this.clam.placementFor(keys, params, s2(), cellOf(s2()), inputs.pins, inputs.removed, timed) : s7();
     return outputs;
   }
 }

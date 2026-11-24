@@ -60,6 +60,13 @@ function wire(outputs: FieldOutputs): { outputs: FieldWire; transfer: ArrayBuffe
     const values = outputs.S6.field.values.slice();
     out.S6 = { ...outputs.S6, field: { ...outputs.S6.field, values } };
     arrays.push(values);
+    // MP5: the two-part cover's side fields, which the worker keeps for the next job.
+    const clam = outputs.S6.clam;
+    if (clam) {
+      const sides = clam.sides.map((side) => ({ ...side, field: { ...side.field, values: side.field.values.slice() } })) as typeof clam.sides;
+      out.S6.clam = { ...clam, sides };
+      arrays.push(...sides.map((side) => side.field.values));
+    }
   }
   if (outputs.S7) {
     const clearance = outputs.S7.clearance.slice();

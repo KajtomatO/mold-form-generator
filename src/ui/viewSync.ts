@@ -3,10 +3,11 @@ import { allDiagnostics, diagnosticMarkers, flangeOutlines, moldExtent, openingR
 import type { Marker } from '../app/pipeline';
 import { explodeDistance, sectionPlane, type Store } from '../app/store';
 import { toMat4 } from '../core/base/orient';
+import { frameInverse } from '../core/field/frames';
 import { coverBottom } from '../core/parts/cover';
 import { HOVER_COLOUR, SELECTED_COLOUR } from '../view/materials';
 import { coplanarTriangles } from '../view/picking';
-import { DARK_BACKGROUND, LIGHT_BACKGROUND, type Highlight, type PreviewScene } from '../view/scene';
+import { DARK_BACKGROUND, LIGHT_BACKGROUND, type Highlight, type PreviewScene, type ViewSide } from '../view/scene';
 import { diagnosticKey } from './DiagnosticsCard';
 import { hintKey } from './Sidebar/DemoldSection';
 
@@ -51,8 +52,14 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     if (changed('joined', p.joined)) scene.setModelJoined(p.joined);
 
     const field = p.field?.value ?? null;
-    if (changed('field', field?.field ?? null)) scene.setField(field?.field ?? null);
+    // MP5: the two-part cover's silicone is each half's side field in its frame; its H_top is for the openings only.
+    const clam = field?.clam ?? null;
+    const drawn = clam ? null : (field?.field ?? null);
+    if (changed('field', drawn)) scene.setField(drawn);
+    if (changed('sides', clam?.sides ?? null)) scene.setSides(clam ? (clam.sides.map((side) => ({ field: side.field, matrix: [...toMat4(frameInverse(side.frame))], hs: side.hs })) as [ViewSide, ViewSide]) : null);
     const rim = field?.rim ?? null;
+    const split = clam && rim ? { axis: clam.axis, xs: clam.xs, O: rim.O, Tb: rim.Tb, Zt: rim.Zt } : null;
+    if (changed('split', JSON.stringify(split))) scene.setSplit(split);
     // The model at every tile, so a cut through any tile shows the model there in the silicone.
     const tiles = field?.mold.offsets ?? [[0, 0]];
     if (changed('tiles', JSON.stringify(tiles))) scene.setTiles(tiles);
@@ -64,7 +71,13 @@ export function bindScene(scene: PreviewScene, store: Store): () => void {
     // A solid stands for the rim it was cut on. Until one exists for the rim on screen, a box does.
     const cover = p.cover && p.field && p.cover.mold === p.field.mold ? p.cover.value : null;
     const base = p.base && p.field && p.base.mold === p.field.mold ? p.base.value : null;
-    if (changed('cover', cover)) scene.setPart('cover', cover);
+    if (changed('cover', cover)) {
+      // MP5: the two-part cover's halves are drawn apart, each on its own root, with the clips at home.
+      scene.setPart('cover', cover?.halves ? null : cover);
+      scene.setPart('cover-neg', cover?.halves?.[0] ?? null);
+      scene.setPart('cover-pos', cover?.halves?.[1] ?? null);
+      scene.setClips(cover?.clips ?? null);
+    }
     if (changed('base', base)) scene.setPart('base', base);
     if (changed('modelInBase', base?.merged ?? false)) scene.setModelInBase(base?.merged ?? false);
     const coverProxy = !cover && rim ? { min: [rim.O.x0, rim.O.y0, coverBottom(rim)] as [number, number, number], max: [rim.O.x1, rim.O.y1, rim.Zt] as [number, number, number] } : null;

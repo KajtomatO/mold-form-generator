@@ -8,9 +8,10 @@ import { DEFAULT_PLANE } from '../src/workers/fieldStages';
 import { app, canDraw, hooks, openApp } from './appHarness';
 
 /**
- * MT: the mold type switch and its window in the browser (docs/PLAN.md, MT; R44, D27). The Two-part tile is "Not
- * built yet" until MP5, so the test hook enables it, as it adds a fixture type to see the tiles wrap. None of this
- * needs the 3D view, so it runs in Firefox with no WebGL too; only the project reopened opens a model.
+ * MT: the mold type switch and its window in the browser (docs/PLAN.md, MT; R44, D27). The Two-part tile is offered
+ * since MP5; a test hook marks it "Not built yet", as it was before, to test that state, and adds a fixture type to see
+ * the tiles wrap. None of this needs the 3D view, so it runs in Firefox with no WebGL too; only the project reopened
+ * opens a model.
  */
 const SHOTS = process.env.CFG_SHOTS === '1';
 const SHOTS_DIR = process.env.CFG_SHOTS_DIR ?? join(import.meta.dirname, '..', 'test-results', 'shots');
@@ -22,7 +23,7 @@ const dialog = (page: Page): Locator => page.getByTestId('switch-dialog');
 const typeOf = (page: Page): Promise<string> => hooks(page, (h) => h.params().mold.type);
 const undoTitle = (page: Page): Promise<string | null> => page.getByTestId('undo').getAttribute('title');
 
-/** Opens the app with the Two-part tile enabled, as the test hook does before MP5. */
+/** Opens the app with the Two-part tile enabled, offered since MP5. */
 async function openEnabled(page: Page): Promise<void> {
   await openApp(page);
   await hooks(page, (h) => h.enableMoldType('clamshell'));
@@ -39,8 +40,12 @@ async function typeIn(page: Page, path: string, value: string): Promise<void> {
 }
 
 test.describe('MT: the mold type switch', () => {
-  test('@smoke two tiles pinned at the top of the sidebar, the Two-part one not built yet; a third type wraps with no change', async ({ page }) => {
+  test('@smoke two tiles pinned at the top of the sidebar, the Two-part one marked not built yet by the hook; a third type wraps with no change', async ({ page }) => {
     const watch = await openApp(page);
+    // Offered since MP5: a type this version does not build shows so, as the two-part cover did before.
+    await expect(tile(page, 'clamshell')).not.toHaveAttribute('aria-disabled', 'true');
+    await hooks(page, (h) => h.disableMoldType('clamshell'));
+    await hooks(page, (h) => h.setParam('silicone.t', 3));
     const block = page.locator('.mold-type');
     await expect(block.locator('h2')).toHaveText('Mold type');
     await expect(page.locator('.mold-tiles')).toHaveAttribute('role', 'group');
@@ -324,7 +329,7 @@ test.describe('MT: the mold type switch', () => {
     }
   });
 
-  test('a two-part project opens with its type and no window; where the type is not built yet, as the one-piece with a notice', async ({ page }) => {
+  test('a two-part project opens with its type and no window; where the type is not built, as the one-piece with a notice', async ({ page }) => {
     const params = defaultParams('clamshell');
     params.clamshell.ceilingDeg = 35;
     const json = projectJson(projectFile({ params, plane: DEFAULT_PLANE, pins: [], removed: [] }, 'cube.stl', { modelSha256: null, basePlane: null }));
@@ -337,8 +342,9 @@ test.describe('MT: the mold type switch', () => {
     await expect(dialog(page)).not.toBeVisible();
     expect(await hooks(page, (h) => h.params())).toEqual(params);
     await expect(row(page, 'clamshell.ceilingDeg').locator('input.num')).toHaveValue('35');
-    // A reload opens as the one-piece, and the Two-part cover is not built yet there: the notice, the values kept.
+    // A reload where the Two-part cover is not built, as before MP5: the one-piece, the notice, the values kept.
     await openApp(page);
+    await hooks(page, (h) => h.disableMoldType('clamshell'));
     await choose(moldproj);
     await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe('cube.stl');
     await expect(tile(page, 'one-piece')).toHaveAttribute('aria-pressed', 'true');

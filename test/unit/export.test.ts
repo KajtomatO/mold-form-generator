@@ -22,7 +22,7 @@ import { parseStl } from '../../src/core/stl/parse';
 import { exportSteps, type ExportOutputs, type ExportReport, type ExportRequest } from '../../src/workers/exportJob';
 import type { WorkerLike } from '../../src/workers/protocol';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
-import { asciiStl, box, BOX_TOP, join as joinMeshes, L_POCKET, patchedL, postThroughFloor, signedVolume, spikedBlock, toSoup, withoutTriangles } from '../fixtures/synthetic';
+import { asciiStl, box, BOX_TOP, join as joinMeshes, L_POCKET, patchedL, postThroughFloor, signedVolume, spikedBlock, toSoup, tShape, withoutTriangles } from '../fixtures/synthetic';
 import { meshBounds, weld, type WeldedMesh } from '../../src/core/mesh/weld';
 import { buildField } from '../../src/core/field/build';
 import { moldSilicone } from '../../src/core/field/silicone';
@@ -38,6 +38,7 @@ import { deriveRim, moldBounds } from '../../src/core/parts/rim';
 import { boltAdvice } from '../../src/core/report/clamp';
 import { withArena } from '../../src/core/solid/arena';
 import { loadManifold } from '../fixtures/loadExamples';
+import { loadGallery } from '../fixtures/loadGallery';
 import { BOLT_GOLDEN, OPENING_GOLDEN } from '../regression/golden';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -1335,4 +1336,150 @@ describe('MM2: a model loaded as it is exports what 92724e8 exported, but for th
       }
     }, 120_000);
   }
+});
+
+/**
+ * MP5 (G13.13, G13.10.14, G13.10.19): the two-part cover's export. Its ZIP holds the halves named by the split's axis,
+ * the base, the funnel, the model and, with Seam fasteners Clips, clips.stl; report.json and README.txt agree with the
+ * layout built. The sphere always; Goddess, whose split is along y; VIS-35 behind skipWithout.
+ */
+describe('MP5: the two-part cover\'s export', () => {
+  const pipelines: Pipeline[] = [];
+  afterEach(() => pipelines.splice(0).forEach((p) => p.dispose()));
+
+  async function twoPart(bytes: Uint8Array, name: string, change: (params: Params) => void = () => {}): Promise<{ out: ExportResult; report: ExportReport; readme: string; pipeline: Pipeline }> {
+    const pipeline = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true, reports: true });
+    pipelines.push(pipeline);
+    pipeline.load(bytes, name);
+    pipeline.setParams((params) => {
+      Object.assign(params, defaultParams('clamshell'));
+      change(params);
+    });
+    await pipeline.idle();
+    const out = await pipeline.exportParts();
+    // README.txt's lines unwrapped, so a test reads its sentences as they are written.
+    return { out, report: JSON.parse(text(out.files['report.json'])) as ExportReport, readme: text(out.files['README.txt']).replace(/\s+/g, ' '), pipeline };
+  }
+  /** The separate solids of an STL, as the plate's keys are. */
+  const solidsIn = (stl: Uint8Array): number => {
+    const mesh = weld(parseStl(stl).positions);
+    const parent = Array.from({ length: mesh.positions.length / 3 }, (_, k) => k);
+    const find = (k: number): number => (parent[k] === k ? k : (parent[k] = find(parent[k])));
+    for (let t = 0; t < mesh.indices.length; t += 3) for (const k of [1, 2]) parent[find(mesh.indices[t + k])] = find(mesh.indices[t]);
+    return new Set(parent.map((_, k) => find(k))).size;
+  };
+
+  it('the sphere with Seam fasteners Bolts: the halves left and right, no clips.stl, report.json\'s bolts as built and README.txt\'s hardware line from them', async () => {
+    const { out, report, readme, pipeline } = await twoPart(loadGallery('sphere'), 'sphere.stl');
+    expect(Object.keys(out.files).sort()).toEqual(['README.txt', 'base.stl', 'cover_left.stl', 'cover_right.stl', 'funnel.stl', 'model_oriented.stl', 'project.json', 'report.json']);
+    expect(report.moldType).toBe('clamshell');
+    expect(report.clamshell!.axis).toBe('x');
+    expect(report.clamshell!.halves.map((h) => [h.file, h.side])).toEqual([['cover_left.stl', 'neg'], ['cover_right.stl', 'pos']]);
+    expect(report.clips).toBeNull();
+    const bolts = report.seamBolts!;
+    expect(bolts.count).toBe(2 * bolts.perEnd);
+    expect(bolts.spots).toHaveLength(bolts.count);
+    expect(bolts.boltsHoldN).toBe(bolts.count * 50);
+    expect(readme).toContain(`- ${bolts.count} x M3 x ${bolts.length} mm countersunk screws (ISO 10642 or DIN 7991), ${bolts.count} M3 hex nuts (ISO 4032), a 2 mm hex key.`);
+    // The preview's split is the export's, and the hold line the sidebar shows names the same bolts.
+    expect(pipeline.field!.value.clam!.xs).toBe(report.clamshell!.xs);
+    expect(pipeline.field!.value.clam!.bolts!.count).toBe(bolts.count);
+    // The halves' silicone, both fields' cavity less the model, is the report's within the bores and sealed air.
+    expect(report.silicone.ml).toBeGreaterThan(15);
+    expect(report.silicone.ml).toBeLessThan(30);
+    // G4 for each half, measured.
+    expect(report.clearance.measured).toBeGreaterThanOrEqual(report.clearance.asked);
+    // README.txt's own lines (G13.10.11, G13.11).
+    for (const line of ['Mold type: Two-part cover.', '6a. Drop a nut into each slot on the top of the lugs of cover_right.stl', 'a bead of Vaseline along both halves\' bottom seam edges', 'smear a ring of Vaseline on', 'Pry at the V pockets at the top of the seam', 'at least 1.2 mm of top layers (6 at 0.2 mm)']) expect(readme, line).toContain(line);
+    // A narrow half takes no top clamp, and no hidden leaf's vent rod is cut.
+    expect(readme).not.toContain('These halves are wide');
+    expect(readme).not.toContain('cut these vent rods at demold');
+    expect(out.diagnostics.map((d) => d.code)).not.toContain('seam-top-span');
+    // The halves stand on their backs, seam face up, from z = 0.
+    for (const name of ['cover_left.stl', 'cover_right.stl']) expect(meshBounds(parseStl(out.files[name]).positions).min[2]).toBeCloseTo(0, 3);
+  }, 300_000);
+
+  it('the sphere with Seam fasteners Clips: clips.stl, with count = 2 rows and the plate holding count + 2 keys, and README.txt\'s nothing to buy', async () => {
+    const { out, report, readme } = await twoPart(loadGallery('sphere'), 'sphere.stl', (p) => (p.clamshell.fastener = 'clips'));
+    expect(Object.keys(out.files)).toContain('clips.stl');
+    expect(report.seamBolts).toBeNull();
+    const clips = report.clips!;
+    expect(clips.count).toBe(2 * clips.rows);
+    expect(clips.spares).toBe(2);
+    expect(solidsIn(out.files['clips.stl'])).toBe(clips.count + 2);
+    expect(readme).toContain(`clips.stl ${clips.count} clips and 2 spares. Nothing to buy: the clips hold the two halves together.`);
+    expect(readme).toContain('Print the clips at 100 percent infill, standing on their heads');
+    expect(readme).toContain('With PLA, do not warm the mold above 40 C to speed the cure');
+    // Each line once: the ears' note under each half's own file, the Vaseline in step 6a only.
+    const count = (line: string): number => readme.split(line).length - 1;
+    expect(count('Keep Vaseline off the clips and their sockets')).toBe(1);
+    expect(count('The clip ears on its ends print without supports')).toBe(2);
+    expect(readme).not.toContain('countersunk screws');
+  }, 300_000);
+
+  it('the Halves button\'s export: a ZIP of the two halves alone, each in its print pose, as the ZIP holds them', async () => {
+    const { out, pipeline } = await twoPart(loadGallery('sphere'), 'sphere.stl');
+    const halves = await pipeline.exportParts(() => {}, undefined, { want: 'cover', fitTest: false });
+    expect(Object.keys(halves.files).sort()).toEqual(['cover_left.stl', 'cover_right.stl']);
+    expect(Object.keys(unzipSync(halves.zip)).sort()).toEqual(['cover_left.stl', 'cover_right.stl']);
+    for (const name of ['cover_left.stl', 'cover_right.stl']) expect(Buffer.from(halves.files[name]).equals(Buffer.from(out.files[name])), name).toBe(true);
+  }, 300_000);
+
+  it('a hidden leaf\'s vent on a T: README.txt says to cut its vent rod at demold, and report.json marks it hidden', async () => {
+    const api = await loadManifold();
+    const pipeline = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true, reports: true });
+    pipelines.push(pipeline);
+    pipeline.load(asciiStl(toSoup(tShape(api, 26))), 'tee.stl');
+    await pipeline.idle();
+    // Stood on its foot, as MP4's T is: the face whose normal points down.
+    const rank = pipeline.oriented!.value.candidates.findIndex((c) => c.normal[2] < -0.99);
+    expect(rank).toBeGreaterThanOrEqual(0);
+    pipeline.setPlane({ rank, upper: false });
+    pipeline.setParams((params) => {
+      Object.assign(params, defaultParams('clamshell'));
+      params.clamshell.axis = 'x';
+      params.clamshell.offset = 0;
+    });
+    await pipeline.idle();
+    const out = await pipeline.exportParts();
+    const report = JSON.parse(text(out.files['report.json'])) as ExportReport;
+    const readme = text(out.files['README.txt']).replace(/\s+/g, ' ');
+    expect(report.openings.filter((o) => o.hidden)).toHaveLength(1);
+    expect(readme).toContain('and cut the vent rod that rises from a high point inside the mold through the silicone above it: cut these vent rods at demold, as they tie two parts of the silicone together.');
+    expect(out.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+  }, 300_000);
+
+  it('the sphere with Seam fasteners None: no lugs nor clips, and the clamps and belts in their place', async () => {
+    const { out, report, readme } = await twoPart(loadGallery('sphere'), 'sphere.stl', (p) => (p.clamshell.fastener = 'none'));
+    expect(Object.keys(out.files)).not.toContain('clips.stl');
+    expect(report.seamBolts).toBeNull();
+    expect(report.clips).toBeNull();
+    expect(report.clamshell!.belts!.count).toBeGreaterThanOrEqual(2);
+    expect(readme).toContain('Seam fasteners is set to None, so two clamps across the two back faces');
+  }, 300_000);
+
+  it('Goddess splits along y: the halves front and back, and no top clamp at about 90 mm', async (ctx) => {
+    skipWithout(ctx, 'goddess');
+    const { out, report, readme } = await twoPart(exampleBytes('goddess'), EXAMPLE_FILES.goddess);
+    expect(report.clamshell!.axis).toBe('y');
+    expect(Object.keys(out.files)).toEqual(expect.arrayContaining(['cover_front.stl', 'cover_back.stl']));
+    expect(Object.keys(out.files).some((name) => name === 'cover.stl' || name === 'clips.stl')).toBe(false);
+    expect(report.seamBolts!.topClamp).toBe(false);
+    expect(readme).not.toContain('These halves are wide');
+    expect(report.diagnostics.map((d) => d.code)).not.toContain('seam-top-span');
+  }, 600_000);
+
+  for (const fastener of ['bolts', 'clips'] as const) it(`VIS-35 split along x with ${fastener}: seam-top-span, and README.txt's one clamp across the top middle`, async (ctx) => {
+    skipWithout(ctx, 'vis35');
+    const { report, readme } = await twoPart(exampleBytes('vis35'), EXAMPLE_FILES.vis35, (p) => {
+      p.clamshell.fastener = fastener;
+      p.clamshell.axis = 'x';
+      // The ears' 20 mm miss the user's 250 mm bed by 0.6 mm along x (G13.10.18), so the bed is wide enough for both.
+      Object.assign(p.print, { bedX: 300, bedY: 300, bedZ: 250 });
+    });
+    expect(report.clamshell!.axis).toBe('x');
+    expect(report.diagnostics.map((d) => d.code)).toContain('seam-top-span');
+    expect((fastener === 'bolts' ? report.seamBolts : report.clips)!.topClamp).toBe(true);
+    expect(readme).toContain('These halves are wide: put one clamp across the two back faces at the middle of the seam, 10 mm under the top');
+  }, 900_000);
 });

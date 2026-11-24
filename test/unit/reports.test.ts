@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { allDiagnostics, clampFigure, diagnosticMarkers, plasticOnScreen, previewSilicone } from '../../src/app/derived';
 import { Pipeline } from '../../src/app/pipeline';
+import { onTheSeam, SEAM_AIR_REACH_MM, type GeometryReports } from '../../src/core/analysis/reports';
+import type { Diagnostic } from '../../src/core/report/diagnostics';
 import { buildField } from '../../src/core/field/build';
 import { fieldSettings, planField } from '../../src/core/field/grid';
 import { defaultParams } from '../../src/core/params/defaults';
@@ -367,5 +369,35 @@ describe('the reports in the pipeline', () => {
     });
     expect(read.hints).toHaveLength(16);
     expect(read.markers).toEqual(read.hints.map((h) => ({ at: h.at, seam: h.seam })));
+  });
+});
+
+describe('MP5: S9 on the two-part cover (onTheSeam)', () => {
+  const pocket = (x: number, y: number, z: number) => ({ x, y, z, volume: 300, persistence: 2 }) as GeometryReports['air']['underside'][number];
+  const reportsWith = (verdict: GeometryReports['demold']['verdict'], pockets: ReturnType<typeof pocket>[]): GeometryReports => {
+    const diagnostics: Diagnostic[] = [
+      { code: 'demold-verdict', severity: verdict === 'cut-required' ? 'warning' : 'info', message: 'Demold estimate: the one-piece words.' },
+      ...pockets.map((p): Diagnostic => ({ code: 'air-underside', severity: 'warning', at: [p.x, p.y, p.z], message: `Air at ${p.x}.` })),
+    ];
+    return { demold: { verdict, bodies: [], hints: [] }, air: { ceilingLeaves: 1, uncovered: [], underside: pockets, sealed: [], sealedAir: 0 }, diagnostics } as unknown as GeometryReports;
+  };
+
+  it('a pocket beside a vent on the seam is let out: off the card\'s lines and README.txt\'s list alike; one farther off stays', () => {
+    const vent = { kind: 'vent', x: 0, y: 10, zb: 20 };
+    const near = pocket(0, 10 + SEAM_AIR_REACH_MM - 0.5, 22), far = pocket(0, 10 + SEAM_AIR_REACH_MM + 0.5, 22), deep = pocket(0, 10, 20 - SEAM_AIR_REACH_MM - 1);
+    const seen = onTheSeam(reportsWith('plausible', [near, far, deep]), [vent], []);
+    expect(seen.air.underside).toEqual([far, deep]);
+    expect(seen.diagnostics.filter((d) => d.code === 'air-underside').map((d) => d.at)).toEqual([[far.x, far.y, far.z], [deep.x, deep.y, deep.z]]);
+    // A pour lets out nothing here; the seam's own line on the same spot names it once.
+    expect(onTheSeam(reportsWith('plausible', [near]), [{ ...vent, kind: 'pour' }], []).air.underside).toEqual([near]);
+    const own: Diagnostic = { code: 'air-underside', severity: 'warning', at: [far.x, far.y + 1, far.z], message: 'The seam\'s own line.' };
+    expect(onTheSeam(reportsWith('plausible', [far]), [], [own]).air.underside).toEqual([]);
+  });
+
+  it('the verdict in the halves\' words, by the verdict itself; a cut stays as it is', () => {
+    const verdict = (v: GeometryReports['demold']['verdict']): Diagnostic => onTheSeam(reportsWith(v, []), [], []).diagnostics.find((d) => d.code === 'demold-verdict')!;
+    expect(verdict('plausible').message).toBe('Demold estimate: once the halves are off, the model should pull out of the silicone.');
+    expect(verdict('jacket-out').message).toBe('Demold estimate: once the halves are off, stretch the silicone to free the model; the Demold report shows where it holds.');
+    expect(verdict('cut-required')).toMatchObject({ severity: 'warning', message: 'Demold estimate: the one-piece words.' });
   });
 });

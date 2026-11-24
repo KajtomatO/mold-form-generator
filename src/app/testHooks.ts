@@ -13,7 +13,7 @@ import type { Project, WallStatus } from './pipeline';
 import type { ExportReport, ExportRequest } from '../workers/exportJob';
 import type { GeometryReports } from '../core/analysis/reports';
 import type { GalleryEntry } from '../gallery/catalogue';
-import { enableMoldType, type MoldType } from '../core/mold/types';
+import { disableMoldType, enableMoldType, type MoldType } from '../core/mold/types';
 import type { MoldTypeUi } from '../ui/mold/moldTypeUi';
 
 export interface ExportSummary {
@@ -84,10 +84,12 @@ export interface TestHooks {
    */
   addGalleryEntry(entry: GalleryEntry): void;
   /**
-   * MT: lifts "Not built yet" from a mold type, so the tests reach the two-part cover's tile and its window before
-   * MP5 offers it (docs/PLAN.md, MT). Only under ?test=1; a reload puts it back.
+   * MT: lifts "Not built yet" from a mold type, as the tests did for the two-part cover's tile before MP5 offered it
+   * (docs/PLAN.md, MT). Only under ?test=1; a reload puts it back.
    */
   enableMoldType(id: string): void;
+  /** MP5: marks a mold type "Not built yet", as the two-part cover was until MP5, so its notices stay tested. */
+  disableMoldType(id: string): void;
   /**
    * MT: adds a fixture type's tile to the switch, as a third type would, to see the tiles wrap with no other change.
    * It cannot be chosen, as the registry has no defaults or locks for it. Only on the app's page.
@@ -224,6 +226,7 @@ export function installTestHooks(pipeline: Pipeline, options: PipelineOptions, v
       gallery.gallery.value = [...gallery.gallery.value.filter((e) => e.id !== entry.id), entry];
     },
     enableMoldType: (id) => enableMoldType(id),
+    disableMoldType: (id) => disableMoldType(id),
     addMoldType(id, ui) {
       if (!gallery?.moldTypes || !gallery.moldTypeUi) throw new Error('This page has no mold type switch.');
       const fixture: MoldType = { id, overrides: {}, locked: [], applies: () => true, unavailable: () => 'A test fixture, which cannot be chosen' };

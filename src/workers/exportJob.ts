@@ -49,6 +49,8 @@ import { OUTSIDE_MEASURE_LIMIT } from '../core/mesh/repair';
 import { outsideFoot } from '../core/parts/base';
 import { InlineError, type PlaneChoice } from './fieldStages';
 import { originalBytes } from './prepareJob';
+import { seamBoltNeeds } from '../core/parts/seamBolts';
+import { runClamExport, type ExportClamshell, type ExportClips, type ExportSeamBolts } from './clamshellExport';
 
 /** G4: minGap runs against the model decimated to at most this many triangles. */
 export const MIN_GAP_TRIANGLES = 60_000;
@@ -184,7 +186,7 @@ export interface ExportReport {
   tiles: [number, number][];
   box: { x: number; y: number; z: number; Zt: number; Tb: number };
   /** Per opening of the first tile: zb is the lowest ceiling under any copy's disc, the bore the longest copy's. */
-  openings: { id: string; kind: 'pour' | 'vent'; x: number; y: number; pinned: boolean; zb: number; boreLength: number; copies: number }[];
+  openings: { id: string; kind: 'pour' | 'vent'; x: number; y: number; pinned: boolean; zb: number; boreLength: number; copies: number; hidden?: true }[];
   silicone: { ml: number; grams: number; density: number; boresMl: number; sealedAirMl: number };
   /** S9 as the export works it out on its own field: the demold estimate, the air, the lift and the tape. Null if it failed. */
   reports: Omit<GeometryReports, 'diagnostics'> | null;
@@ -194,6 +196,12 @@ export interface ExportReport {
   plastic: PlasticEstimate;
   /** M10: the bolts as cut, the walls they leave and the advice on them, or null with the bolts off. */
   bolts: ExportBolts | null;
+  /** MP5, the two-part cover only (G13.13): the split, the bed, the halves and the hold. */
+  clamshell?: ExportClamshell;
+  /** MP5, the two-part cover only: its seam bolts (G13.10.14), null with clips or None. */
+  seamBolts?: ExportSeamBolts | null;
+  /** MP5, the two-part cover only: its seam clips (G13.10.19), null unless clips. */
+  clips?: ExportClips | null;
   clearance: { asked: number; measured: number | null; minGap: number | null; decimationError: number | null; simplifyErrorMm?: number; repairNearMm?: number; outsideGap?: number | null; outsideTriangles?: number; marginRaisedBy: number; searchMm: number | null };
   parts: Record<string, { triangles: number; volumeMm3: number | null }>;
   diagnostics: Diagnostic[];
@@ -419,6 +427,58 @@ export function runExport(api: ManifoldToplevel, simplifier: MeshSimplifier, job
     const diagnostics: Diagnostic[] = [...crossParameterErrors(scaled), ...crossParameterWarnings(scaled), ...imported.report.diagnostics, ...path.diagnostics, ...footprint.diagnostics];
     // The coarser cell widens the margin of G4, and with it the cavity and the box, past what the preview showed.
     if (cellScale !== 1) diagnostics.push({ code: 'export-coarser', severity: 'warning', message: `The geometry engine failed at full detail, so the export was built again at half the detail, on a ${scaled.quality.cellFinal} mm grid instead of ${params.quality.cellFinal} mm, with a wider safety margin and a larger box than the preview shows.` });
+
+    // MP5: the two-part cover builds from here on its own path (G13.13), from what was read of the model above.
+    if (moldTypeOf(scaled).id === 'clamshell') {
+      const modelVolume = wholeVolume ?? (model ? model.volume() - shared : null);
+      const credit = meta.gallery ? readmeCredit(meta.gallery) : undefined;
+      return runClamExport({
+        api,
+        arena,
+        job,
+        scaled,
+        inputs,
+        meta,
+        mesh,
+        model,
+        probe: () => (model ? timed('tool', () => decimate(arena, simplifier, mesh, { solid: model, copy: copyMesh }, inputs.needsTrim, scaled.base.mode === 'merged')) : null),
+        footprint,
+        pocketDepth,
+        // The seam bolts' own auto length, which differs from the corner bolts' (G13.10.2).
+        resolved: { 'base.pocketDepth': pocketDepth, 'base.planeTol': inputs.planeTol, 'silicone.printMargin': printMargin, 'silicone.baseLayer': baseLayer, 'vents.persistence': ventPersistence, 'bolts.length': seamBoltNeeds(scaled).autoLength },
+        shared,
+        modelVolume,
+        modelStl: () => {
+          const read = original ?? (reads === 'after' ? timed('original', () => readOriginal(api, inputs, imported.report, overlap, readBlob, holding)) : null);
+          return read?.stl ?? trimmedStl;
+        },
+        parts: { count: imported.report.shells.filter((shell) => shell.kind !== 'void').length, bodies: imported.report.bodies },
+        diagnostics,
+        timed,
+        holding,
+        fitTest: () => fitTestFiles(api, params),
+        zip,
+        started,
+        now,
+        timings,
+        report: (silicone, extra) => ({
+          app: APP_NAME,
+          appVersion: BUILD.version,
+          schemaVersion: SCHEMA_VERSION,
+          moldType: scaled.mold.type,
+          model: { file: meta.model, format: meta.triangles.format, trianglesInFile: meta.triangles.inFile, triangles: meta.triangles.kept, bodies: imported.report.bodies, volumeMm3: modelVolume, ...(meta.simplified ? { simplified: meta.simplified.record } : {}), ...(meta.repaired ? { repaired: reportedRepair(meta.repaired.record) } : {}) },
+          params,
+          plane: { choice: meta.project.plane, normal: meta.plane.normal, offset: meta.plane.offset, areaMm2: meta.plane.area, planeTol: meta.plane.planeTol },
+          ...extra,
+          silicone,
+          bolts: null,
+          timings: { ...timings, total: now() - started },
+        }),
+        app: { name: APP_NAME, version: BUILD.version, moldType: MOLD_TYPE_UI[moldTypeOf(scaled).id as MoldTypeId].name },
+        readmeCredit: credit,
+        project: (modelSha256) => new TextEncoder().encode(projectJson(projectFile(meta.project, meta.model, { modelSha256: modelSha256 ?? (inputs.stl ? sha256(inputs.stl) : null), basePlane: meta.basePlane, ...(meta.simplified ? { simplified: simplifiedEntry(meta.simplified) } : {}), ...(meta.repaired ? { repaired: repairedEntry(meta.repaired.from, meta.repaired.record) } : {}), gallery: meta.gallery ?? null }))),
+      });
+    }
 
     // The build the export stands on, in one place: the field as soon as it is built, then the whole build.
     const slot = holding.push(null) - 1;

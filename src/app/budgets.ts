@@ -33,6 +33,14 @@ export const NODE_PREVIEW_MS: Record<string, Partial<Record<TableTier, number>>>
   wolf: { t1: 19.7, t2: 247.8 + 26.7, cut: 26.7 },
   'benchy 2 x 3': { cut: 114.6 },
   'x8 3 x 3': { cut: 965.2 },
+  // MP5 (G13.16): the two-part cover at its defaults, measured in Node on the server by the pipeline's own jobs. T1 is
+  // S3x to S6x after a change of the ceiling slope, which builds the coarse fields again; T2 is S11c to S15c, the two
+  // halves one after the other, and the base. They are past the plan's 150 ms, so this type's preview is held to these
+  // and never coarsened to meet that target (Pipeline.tune); test/unit/clamshellBudgets.test.ts checks them in Node.
+  'goddess two-part': { t1: 196, t2: 1108 },
+  'vis35 two-part': { t1: 143, t2: 799 },
+  'benchy two-part': { t1: 181, t2: 863 },
+  'wolf two-part': { t1: 151, t2: 1838 },
 };
 
 /**

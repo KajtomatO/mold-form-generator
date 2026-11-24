@@ -68,18 +68,19 @@ export function overridesOf(file: unknown): Partial<Record<ParamPath, unknown>> 
 const TWO_PART = (path: ParamPath): boolean => path.startsWith('clamshell.') || path.startsWith('clips.');
 
 /**
- * Types built but not yet offered outside the tests: the two-part cover's tile shows, unavailable, until MP5 joins
- * its stages to the pipeline (docs/PLAN.md, 0.3.0's runs). `enableMoldType`, which the test hooks call under
- * ?test=1, lifts it, so this run's tests reach the switch window and its rows.
+ * Types built but not yet offered outside the tests, whose tile shows unavailable, "Not built yet". None since MP5
+ * joined the two-part cover's stages to the pipeline (docs/PLAN.md, 0.3.0's runs); a type a later run adds starts
+ * here. `disableMoldType` puts a type here for a test, so the notice of a project whose type this version does not
+ * build stays tested; `enableMoldType`, which the test hooks call under ?test=1, lifts it.
  */
-const NOT_BUILT = new Set<string>(['clamshell']);
+const NOT_BUILT = new Set<string>();
 
-/** Lifts "Not built yet" from a type, for the tests (src/app/testHooks.ts). */
+/** Lifts "Not built yet" from a type (src/app/testHooks.ts). */
 export function enableMoldType(id: string): void {
   NOT_BUILT.delete(id);
 }
 
-/** Puts "Not built yet" back, so one test's enable does not reach the next. */
+/** Marks a type "Not built yet", for a test; enableMoldType lifts it again, so one test's mark does not reach the next. */
 export function disableMoldType(id: string): void {
   NOT_BUILT.add(id);
 }

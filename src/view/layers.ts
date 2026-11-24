@@ -1,5 +1,5 @@
 /** Everything the view draws as a part, each with its own eye and opacity. No three here, so the store can import it. */
-export type LayerName = 'model' | 'silicone' | 'cover' | 'base' | 'funnel';
+export type LayerName = 'model' | 'silicone' | 'cover' | 'base' | 'funnel' | 'clips';
 
 export interface LayerStyle {
   visible: boolean;
@@ -17,4 +17,6 @@ export const DEFAULT_LAYERS: Record<LayerName, LayerStyle> = {
   cover: { visible: true, opacity: 0.35 },
   base: { visible: true, opacity: 1 },
   funnel: { visible: false, opacity: 1 },
+  // MP5: the two-part cover's seam clips, listed only with Seam fasteners Clips; less see-through than the cover they sit on.
+  clips: { visible: true, opacity: 0.7 },
 };

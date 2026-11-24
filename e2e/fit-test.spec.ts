@@ -50,9 +50,8 @@ async function fitFromApp(page: Page): Promise<Record<string, Uint8Array>> {
   return unzipSync(await readFile(await saved.path()));
 }
 
-// MP3 (docs/PLAN.md, G13.10.12): the Two-part tile is "Not built yet" until MP5, so the test hook enables it, as in
-// e2e/moldType.spec.ts. The fit test needs no mold built, so this runs whatever the two-part preview shows; the Fit test
-// button needs a model open, which needs the view.
+// MP3 (docs/PLAN.md, G13.10.12): the Two-part tile, offered since MP5; the test hook that enabled it before stays, as in
+// e2e/moldType.spec.ts. The Fit test button needs a model open, which needs the view.
 test('@smoke the Two-part cover\'s fit test holds the two seam bolt coupons with Seam fasteners Bolts, and neither with None or in the One-piece cover', async ({ page }) => {
   test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
   const watch = await openApp(page, '&model=cube');

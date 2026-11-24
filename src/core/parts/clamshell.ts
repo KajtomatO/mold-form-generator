@@ -3,6 +3,8 @@ import { boreRadius, discMinimum, openingSizes } from '../analysis/validate';
 import { orientSolid } from '../base/orient';
 import { fineSplit, prepareClamshell, type ClamshellInputs, type ClamshellPrep, type FineSplit } from '../field/clamshell';
 import { frameInverse, seamEps, topMap, type SeamAxis } from '../field/side';
+import type { Field } from '../field/grid';
+import type { RigidTransform } from '../base/orient';
 import type { WeldedMesh } from '../mesh/weld';
 import { resolveAuto } from '../params/defaults';
 import type { Params } from '../params/schema';
@@ -115,19 +117,45 @@ export function buildClamshell(arena: Arena, prep: ClamshellPrep, fine: FineSpli
   const { params, settings } = prep;
   const { rim } = fine;
   const openings = options.openings ?? [];
-  const eps = seamEps(settings.tinTol);
   const sides = [fine.minus, fine.plus] as const;
-  const meshes = sides.map((side) => buildToolMesh(side.field, { raise: prep.ctx.raise, tol: settings.tinTol, seam: { hs: side.hs, eps } })) as [ToolMesh, ToolMesh];
-  const tools = meshes.map((mesh, k) => orientSolid(arena, toolSolid(arena, mesh), frameInverse(sides[k].side.frame))) as [Manifold, Manifold];
+  const made = sides.map((side) => halfTool(arena, { field: side.field, frame: side.side.frame, hs: side.hs }, prep.ctx.raise, settings.tinTol));
+  const meshes = made.map((half) => half.mesh) as [ToolMesh, ToolMesh];
+  const tools = made.map((half) => half.tool) as [Manifold, Manifold];
+  const bolts = clamBolts(params, fine);
+  const clips = clamClips(params, fine);
+  const { seal, common, halves, diagnostics: own } = clamHalves(arena, rim, tools, params, openings, bolts, clips, options);
+  const base = buildBaseBody(arena, rim, options.ridgeRing ? {} : { ridgeBars: rim.axis });
+  const diagnostics = [...rim.diagnostics, ...meshes.flatMap((mesh) => mesh.diagnostics), ...own];
+  return { rim, meshes, tools, seal, common, halves, base, openings, bolts, clips, diagnostics };
+}
+
+/** MP5: one half's side field as the stages hand it on: the field, its pull's frame and the seam's h in it. */
+export interface HalfField {
+  field: Field;
+  frame: RigidTransform;
+  hs: number;
+}
+
+/**
+ * G13.7 step 1 for one half: its TIN with G13.2 step 7's seam held clear of P, at `tol` with the tool raised by
+ * `raise`, and its solid turned back into the mold. The TIN is the caller's to drop once the solid stands.
+ */
+export function halfTool(arena: Arena, half: HalfField, raise: number, tol: number): { mesh: ToolMesh; tool: Manifold } {
+  const mesh = buildToolMesh(half.field, { raise, tol, seam: { hs: half.hs, eps: seamEps(tol) } });
+  return { mesh, tool: orientSolid(arena, toolSolid(arena, mesh), frameInverse(half.frame)) };
+}
+
+/**
+ * G13.7 steps 2 to 5 from the tools: the seal from the cavity on P and the openings, then the shared block and the
+ * halves with the seam bolts or clips where the layouts have any, and the lines the seal and the fasteners give.
+ */
+export function clamHalves(arena: Arena, rim: ClamRim, tools: readonly [Manifold, Manifold], params: Params, openings: CutOpening[], bolts: SeamBoltLayout | null, clips: ClipLayout | null, options: Pick<ClamshellBuildOptions, 'pinsKept' | 'seal' | 'lugs' | 'cuts' | 'ears'> = {}): { seal: SeamSeal; common: Manifold; halves: [Manifold, Manifold]; diagnostics: Diagnostic[] } {
   const S = seamSection(arena, rim.axis, rim.xs, tools);
   const made = seamSeal(arena, rim, S, openings, params, options.pinsKept ?? true);
   const seal = options.seal ? options.seal(made, rim, params) : made;
-  const bolts = clamBolts(params, fine);
-  const clips = clamClips(params, fine);
   const { common, halves } = buildHalves(arena, rim, tools, seal, params, openings, bolts, clips, options);
-  const base = buildBaseBody(arena, rim, options.ridgeRing ? {} : { ridgeBars: rim.axis });
-  const diagnostics = [...rim.diagnostics, ...meshes.flatMap((mesh) => mesh.diagnostics), ...seal.diagnostics, ...(bolts ? seamBoltDiagnostics(bolts) : []), ...(clips ? clipDiagnostics(clips) : [])];
-  return { rim, meshes, tools, seal, common, halves, base, openings, bolts, clips, diagnostics };
+  const diagnostics = [...seal.diagnostics, ...(bolts ? seamBoltDiagnostics(bolts) : []), ...(clips ? clipDiagnostics(clips) : [])];
+  return { seal, common, halves, diagnostics };
 }
 
 /**
@@ -168,14 +196,16 @@ export interface ClamshellG4 {
  * bed outcome stands, and the gaps measured again. `mesh` is the oriented model, `model` its solid (or what minGap reads
  * for it). The diagnostics are the one-piece export's, with its codes.
  */
-export function clamshellG4(arena: Arena, mesh: WeldedMesh, params: Params, split: { axis: SeamAxis; xs: number }, model: Manifold, options: ClamshellBuildOptions & { cell?: number; error?: number; inputs?: ClamshellInputs; openingsFor?: (prep: ClamshellPrep, fine: FineSplit) => CutOpening[] } = {}): ClamshellG4 {
+export function clamshellG4(arena: Arena, mesh: WeldedMesh, params: Params, split: { axis: SeamAxis; xs: number }, model: Manifold, options: ClamshellBuildOptions & { cell?: number; error?: number; inputs?: ClamshellInputs; openingsFor?: (prep: ClamshellPrep, fine: FineSplit) => CutOpening[] | { openings: CutOpening[]; pinsKept: boolean } } = {}): ClamshellG4 {
   const { cell = params.quality.cellFinal, error = 0, inputs = {} } = options;
   const search = gapSearch(params);
   const make = (p: Params): { prep: ClamshellPrep; fine: FineSplit; build: ClamshellBuild; gaps: [number, number] } => {
     const prep = prepareClamshell(mesh, p, inputs);
     const fine = fineSplit(prep, split.axis, split.xs, cell);
-    const openings = options.openingsFor ? options.openingsFor(prep, fine) : options.openings;
-    const build = buildClamshell(arena, prep, fine, { ...options, openings });
+    // MP5: S7c's placement gives the pins' fate with the openings, which the seal reads.
+    const placed = options.openingsFor ? options.openingsFor(prep, fine) : options.openings;
+    const [openings, pinsKept] = Array.isArray(placed) || placed === undefined ? [placed, options.pinsKept] : [placed.openings, placed.pinsKept];
+    const build = buildClamshell(arena, prep, fine, { ...options, openings, pinsKept });
     const gaps = build.halves.map((half) => model.minGap(half, search) - error) as [number, number];
     return { prep, fine, build, gaps };
   };

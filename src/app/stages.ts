@@ -1,6 +1,6 @@
 import type { OpeningPin } from '../core/analysis/placement';
 import { isDefaultAt } from '../core/params/defaults';
-import { lockOf, moldTypeOf } from '../core/mold/types';
+import { effectiveParams, lockOf, moldTypeOf } from '../core/mold/types';
 import { PARAM_SCHEMA, type ParamDef, type Params } from '../core/params/schema';
 import { hashString } from './hash';
 
@@ -10,7 +10,13 @@ import { hashString } from './hash';
  * stage and everything downstream of it, and nothing else. test/unit/stages.test.ts is generated from
  * this table, and checks against the real stage code that no stage reads anything it does not declare.
  */
-export type StageId = 'S1' | 'S2' | 'S3' | 'S4' | 'S5' | 'S6' | 'S7' | 'S8' | 'S9' | 'S10' | 'S11' | 'S12' | 'S13' | 'S14' | 'S15' | 'S16';
+export type StageId = OnePieceStageId | ClamStageId;
+
+/** The one-piece cover's rows, S1 to S16, which the two-part cover's share up to S2 and from S16. */
+export type OnePieceStageId = 'S1' | 'S2' | 'S3' | 'S4' | 'S5' | 'S6' | 'S7' | 'S8' | 'S9' | 'S10' | 'S11' | 'S12' | 'S13' | 'S14' | 'S15' | 'S16';
+
+/** MP5: the two-part cover's own rows (G13.15), each keyed from what it reads, as the one-piece's are. */
+export type ClamStageId = 'S3x' | 'S4x' | 'S6c' | 'S10c' | 'S6x' | 'S7c' | 'S11c' | 'S12c' | 'S13c' | 'S14c' | 'S15c';
 
 export type ParamPath = { [G in keyof Params]: `${G & string}.${keyof Params[G] & string}` }[keyof Params];
 
@@ -67,8 +73,30 @@ const RADIUS: ParamPath[] = ['silicone.t', 'silicone.printMargin', 'print.layerH
 /** M10: the bolts live in the rim, as they grow its outer land and set their holes from the cover's top. */
 const BOLTS: ParamPath[] = ['bolts.enabled', 'bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall'];
 
+/** G8's rim from a box, which deriveRim reads, the two-part cover's through deriveClamRim. */
+const RIM: ParamPath[] = ['grid.edge', 'base.thickness', 'base.cornerRadius', 'base.bedReliefHeight', 'base.bedReliefRun', 'cover.wall', 'cover.topCap', 'cover.topChamfer', ...JOINT];
+
+/** G13.10.13: the bolt settings the seam bolts share with the corner bolts, whose toggle the two-part cover locks off. */
+const SEAM_BOLTS: ParamPath[] = ['bolts.size', 'bolts.length', 'bolts.holeClearance', 'bolts.nutClearance', 'bolts.minWall', 'print.layerHeight'];
+
+/** G13.10.19: the seam clips, sized from the print's layer and nozzle. */
+const CLIPS: ParamPath[] = ['clips.clearance', 'clips.rows', 'print.layerHeight', 'print.nozzle'];
+
 /** What the funnel is made of, and what the seat it sits in is. */
 const FUNNEL: ParamPath[] = ['funnel.generate', 'funnel.topDiameter', 'funnel.height', 'funnel.neckHeight', 'funnel.wall', 'funnel.tipWall', 'funnel.seatClearance', 'funnel.flangeWidth', 'funnel.flangeThickness'];
+
+/** S7's own settings, which S7c reads too, as it places the same openings on the seam. */
+const PLACEMENT: ParamPath[] = [
+      'pour.perModel', 'pour.diameter', 'pour.minLand', 'vents.enabled', 'vents.diameter', 'vents.persistence',
+      'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'funnel.generate', 'funnel.topDiameter', 'funnel.wall', 'funnel.seatClearance',
+      // FL: no vent under a flange, and a pour's flange inside the top's chamfer.
+      'funnel.flangeWidth', 'cover.topChamfer',
+      // VN: the gap between a flange and a vent's mouth takes half a printed line, past the funnel's play in its
+      // seat. S5 and S10 already read the nozzle (DOMAIN), and S7 depends on both, so no key changes for it.
+      'print.nozzle',
+      // t / 2 is the cover drop, and the vents' persistence until edited. Bodies stand within the plane tolerance.
+      'silicone.t', 'base.planeTol',
+];
 
 export const STAGES: readonly StageDef[] = [
   { id: 'S1', label: 'parsed, audited, imported', runs: 'both', deps: [], params: [], inputs: ['file'] },
@@ -85,17 +113,7 @@ export const STAGES: readonly StageDef[] = [
     label: 'peaks and placement',
     runs: 'field',
     deps: ['S6', 'S10'],
-    params: [
-      'pour.perModel', 'pour.diameter', 'pour.minLand', 'vents.enabled', 'vents.diameter', 'vents.persistence',
-      'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'funnel.generate', 'funnel.topDiameter', 'funnel.wall', 'funnel.seatClearance',
-      // FL: no vent under a flange, and a pour's flange inside the top's chamfer.
-      'funnel.flangeWidth', 'cover.topChamfer',
-      // VN: the gap between a flange and a vent's mouth takes half a printed line, past the funnel's play in its
-      // seat. S5 and S10 already read the nozzle (DOMAIN), and S7 depends on both, so no key changes for it.
-      'print.nozzle',
-      // t / 2 is the cover drop, and the vents' persistence until edited. Bodies stand within the plane tolerance.
-      'silicone.t', 'base.planeTol',
-    ],
+    params: PLACEMENT,
     inputs: ['pins', 'removed'],
   },
   // S8 and S9 run in a field.worker of their own, after the preview, so neither T1 nor T2 waits for them.
@@ -134,25 +152,51 @@ export const STAGES: readonly StageDef[] = [
   { id: 'S15', label: 'base final', runs: 'solid', deps: ['S14', 'S2'], params: ['base.mode', 'base.pocketDepth', 'base.pocketEnlarge', 'print.layerHeight', 'base.planeTol'], inputs: [] },
   // FL: the spigot's relief under the flange is 2 layers.
   { id: 'S16', label: 'funnel', runs: 'solid', deps: [], params: [...FUNNEL, 'seat.enabled', 'seat.depth', 'seat.halfAngleDeg', 'pour.diameter', 'print.layerHeight'], inputs: [] },
+  // MP5: the two-part cover's rows (G13.15). The one-piece's above keep their keys; these read the same oriented model
+  // (S2) and give the same funnel (S16). Their caches hold a slot per pull and tier (src/workers/clamshellStages.ts).
+  // The model cut at z = 0, turned into each pull's frame, its vertices' extremes and G8's box: what no beta changes.
+  { id: 'S3x', label: 'side frames', runs: 'field', deps: ['S2'], params: [...RADIUS, ...DOMAIN, 'grid.spacing', 'joint.ridgeHeight', 'joint.grooveExtraDepth', 'clamshell.seamLand'], inputs: [] },
+  // G13.2 step 8's coarse fields at 1 mm, one per pull the axis allows, which G13.3 scores.
+  { id: 'S4x', label: 'coarse side fields', runs: 'field', deps: ['S3x'], params: ['clamshell.ceilingDeg', 'clamshell.axis', 'base.thickness', 'silicone.baseLayer'], inputs: [] },
+  // G13.3: the axis and xs, filtered by the bed with the fastener's growth, from the O(1) rim.
+  { id: 'S6c', label: 'parting plane', runs: 'field', deps: ['S3x', 'S4x'], params: ['clamshell.offset', 'clamshell.fastener', 'print.bedX', 'print.bedY', 'print.bedZ', ...SEAM_BOLTS, ...RIM], inputs: [] },
+  // G13.6: the exact rim at the split, analytic and cell-independent.
+  { id: 'S10c', label: 'two-part rim', runs: 'field', deps: ['S3x', 'S6c'], params: [...RIM, 'clamshell.ceilingDeg'], inputs: [] },
+  // The chosen pair at the preview or export cell, stopped and flattened at the seam, with what they give: the
+  // silicone, G13.9's forces and the seam bolts or clips placed for the hold.
+  {
+    id: 'S6x',
+    label: 'fine side fields',
+    runs: 'field',
+    deps: ['S3x', 'S10c'],
+    params: ['quality.cellPreview', 'clamshell.ceilingDeg', 'clamshell.fastener', 'silicone.baseLayer', 'silicone.density', 'base.thickness', ...FUNNEL, 'seat.enabled', 'print.tapeStrip', ...SEAM_BOLTS, ...CLIPS, ...RIM],
+    inputs: ['tier', 'cellScale'],
+  },
+  // G13.5: the openings on P, with the room rule and the pins at (xs, pin.b).
+  { id: 'S7c', label: 'seam openings', runs: 'field', deps: ['S6x', 'S10c'], params: [...PLACEMENT, 'clamshell.pins', 'clamshell.fastener', 'quality.analysisCell', ...SEAM_BOLTS, ...CLIPS, ...JOINT], inputs: ['pins', 'removed'] },
+  // G13.7: each half's tool, its TIN freed once its solid stands.
+  { id: 'S11c', label: 'half tools', runs: 'solid', deps: ['S6x'], params: ['quality.tinTolPreview', 'quality.tinTolFinal'], inputs: ['tier'] },
+  // The seal from the cavity on P and the openings, the shared block with the lugs, and the halves cut.
+  { id: 'S12c', label: 'halves', runs: 'solid', deps: ['S11c', 'S10c', 'S7c'], params: ['clamshell.pins', 'clamshell.fastener', ...SEAM_BOLTS, ...CLIPS, ...JOINT, 'cover.topChamfer'], inputs: [] },
+  // The halves as the view draws them, with the clips at home. A drag moves only the ring on P until the drop.
+  { id: 'S13c', label: 'halves final', runs: 'solid', deps: ['S12c'], params: [], inputs: [] },
+  // G13.7 step 7: G10's base with its ridge as two bars along the pull.
+  { id: 'S14c', label: 'two-part base', runs: 'solid', deps: ['S10c'], params: [], inputs: [] },
+  { id: 'S15c', label: 'two-part base final', runs: 'solid', deps: ['S14c', 'S2'], params: ['base.mode', 'base.pocketDepth', 'base.pocketEnlarge', 'print.layerHeight', 'base.planeTol'], inputs: [] },
 ];
 
 /**
- * Parameters no worker stage reads: main checks the parts against the bed, and works out the plastic
- * from the parts on screen, whenever it draws. So they belong to no stage, and a change of one rebuilds
- * nothing.
+ * Parameters no worker stage reads: main works out the plastic from the parts on screen, whenever it draws. So they
+ * belong to no stage, and a change of one rebuilds nothing. MP5: the bed is the two-part cover's S6c's, whose choice of
+ * split it filters (G13.3); the one-piece cover's parts are still checked against it on main.
  */
-export const MAIN_ONLY: readonly ParamPath[] = ['print.bedX', 'print.bedY', 'print.bedZ', 'print.infill', 'print.density'];
+export const MAIN_ONLY: readonly ParamPath[] = ['print.infill', 'print.density'];
 
 /**
- * MT: the mold type and the two-part cover's settings, which no stage of the one-piece cover reads. The type reaches
- * those stages only through the values its locks give (effectiveParams, which the pipeline hashes the keys from), and
- * the two-part cover's own stages, which read the rest, come with MP1 to MP5 (docs/PLAN.md, G13.15).
+ * MT: the mold type, which no stage reads. It reaches the stages only through the values its locks give
+ * (effectiveParams, which the pipeline hashes the keys from) and through which rows build the mold (typedKeys).
  */
-export const NO_STAGE: readonly ParamPath[] = [
-  'mold.type',
-  'clamshell.axis', 'clamshell.offset', 'clamshell.ceilingDeg', 'clamshell.seamLand', 'clamshell.pins', 'clamshell.fastener',
-  'clips.clearance', 'clips.rows',
-];
+export const NO_STAGE: readonly ParamPath[] = ['mold.type'];
 
 export const STAGE_BY_ID = new Map(STAGES.map((stage) => [stage.id, stage]));
 
@@ -206,6 +250,36 @@ export function stageKeys(params: Params, inputs: StageInputs): Record<StageId, 
     return (keys[id] = hashString(JSON.stringify(own)));
   };
   STAGES.forEach((stage) => keyOf(stage.id));
+  return keys;
+}
+
+/**
+ * MP5: the one-piece cover's rows that the two-part cover builds with rows of its own, and those rows. A key the
+ * pipeline compares under the one-piece's id (the field on screen under S6, its rim under S10, the cover under S13)
+ * is the two-part row's in that type, so every check of what shows, what is stale and what to ask for holds in both.
+ */
+export const CLAM_ROWS: Readonly<Partial<Record<OnePieceStageId, ClamStageId>>> = {
+  S6: 'S6x',
+  S7: 'S7c',
+  S10: 'S10c',
+  S11: 'S11c',
+  S12: 'S12c',
+  S13: 'S13c',
+  S14: 'S14c',
+  S15: 'S15c',
+};
+
+/**
+ * The keys of the rows the type in `params` builds with: stageKeys of its effective settings, and for the two-part
+ * cover each row of CLAM_ROWS under the one-piece's id too, with S9's, which reads that field, placement and rim,
+ * hashed from its own key and theirs. The one-piece cover's keys are stageKeys' exactly.
+ */
+export function typedKeys(params: Params, inputs: StageInputs): Record<StageId, string> {
+  const run = effectiveParams(params);
+  const keys = stageKeys(run, inputs);
+  if (moldTypeOf(run).id !== 'clamshell') return keys;
+  for (const [id, row] of Object.entries(CLAM_ROWS) as [OnePieceStageId, ClamStageId][]) keys[id] = keys[row];
+  keys.S9 = hashString(JSON.stringify(['S9c', keys.S9, keys.S6x, keys.S7c, keys.S10c]));
   return keys;
 }
 

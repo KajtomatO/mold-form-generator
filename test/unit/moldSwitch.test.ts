@@ -11,7 +11,8 @@ import { defaultParams } from '../../src/core/params/defaults';
 
 const rowsOf = (plan: ReturnType<typeof planSwitch>): string[] => plan.rows.map((row) => row.path);
 
-afterEach(() => disableMoldType('clamshell'));
+// MP5 builds the two-part cover; a test that marks it "Not built yet" puts it back.
+afterEach(() => enableMoldType('clamshell'));
 
 describe('MT: the switch between mold types', () => {
   it('the table of cases: not changed, changed and different, changed and equal to the new default, an automatic one set, one that does not apply, a locked one and the type', () => {
@@ -114,6 +115,8 @@ describe('MT: the switch between mold types', () => {
     const two = defaultParams('clamshell');
     two.clamshell.ceilingDeg = 35;
     const NONE = { bodies: null, triangles: null, simplified: false };
+    // A type this version does not build, as the two-part cover was until MP5.
+    disableMoldType('clamshell');
     const shut = typeOnOpen(two, NONE);
     expect(shut.unavailable).toEqual({ type: 'clamshell', reason: 'Not built yet' });
     expect(shut.params.mold.type).toBe('one-piece');

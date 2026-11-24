@@ -240,11 +240,15 @@ test.describe('the app on index.html', () => {
     await dropAndWait(page, EXAMPLE_FILES.benchy);
     const welded = await app(page, (a) => a.store.pipeline.parsed!.value.welded.positions.byteLength + a.store.pipeline.parsed!.value.welded.indices.byteLength);
     await expect.poll(async () => (await shown()).reading.parts.page.arrays).toBeGreaterThanOrEqual(exampleBytes('benchy').byteLength + welded);
+    // The reports come after the preview, which is all the drop waits for.
+    await expect.poll(async () => (await shown()).reading.parts.reports.arrays).toBeGreaterThanOrEqual(welded);
     const loaded = await shown();
     expect(loaded.reading.total).toBeGreaterThan(empty.reading.total + exampleBytes('benchy').byteLength);
     expect(loaded.reading.parts.field.arrays).toBeGreaterThanOrEqual(welded);
-    // Each part that holds something, by name; the reports' worker keeps plain objects alone, which are not counted.
-    expect(loaded.title.split('\n').slice(1, -1)).toEqual([...(['page', 'field', 'solid'] as const).map((part) => `  ${MEMORY_LABELS[part]}: ${formatMemory(loaded.reading.parts[part].wasm + loaded.reading.parts[part].arrays, true)}`), '  Export: not running']);
+    // Each part that holds something, by name. MP5: the reports' worker keeps the oriented mesh for the Two-part tile's
+    // estimate of what it saves, which Benchy, one body, is offered; the rest of what it keeps is plain objects, not counted.
+    expect(loaded.reading.parts.reports.arrays).toBeGreaterThanOrEqual(welded);
+    expect(loaded.title.split('\n').slice(1, -1)).toEqual([...(['page', 'field', 'solid', 'reports'] as const).map((part) => `  ${MEMORY_LABELS[part]}: ${formatMemory(loaded.reading.parts[part].wasm + loaded.reading.parts[part].arrays, true)}`), '  Export: not running']);
     expect(loaded.reading.total).toBeLessThan(MEMORY_WARN_BYTES);
     expect(loaded.warn).toBe(false);
     // The view's arrays count with main's, in one walk: the page hands the scene's over, the view's own add

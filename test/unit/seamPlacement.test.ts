@@ -18,6 +18,7 @@ import { buildClamshell } from '../../src/core/parts/clamshell';
 import { rectSection, uOfB, uSpan, bRange } from '../../src/core/parts/seam';
 import { Arena } from '../../src/core/solid/arena';
 import { Pipeline } from '../../src/app/pipeline';
+import { onSeam, SEAM_DROP_REACH, SEAM_DROP_STEP, seamCheck, seamDrop } from '../../src/app/seamDrag';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { chooseFor, fineSplit, orientedGallery, placeSeam, prepareClamshell, seamRoom, type ClamshellPrep, type FineSplit, type SeamStage } from '../fixtures/clamshell';
 import { loadExample, loadManifold, skipWithout } from '../fixtures/loadExamples';
@@ -613,6 +614,57 @@ describe('MP4: pins stored as (x, y)', () => {
     expect(p.params.mold.type).toBe('one-piece');
     expect(p.project().pins).toEqual([stored]);
   });
+});
+
+describe('MP5: a drop on P', () => {
+  it('snaps along P by SEAM_DROP_STEP to the nearest spot with the seal\'s room, the refusal naming seam-room, within SEAM_DROP_REACH', () => {
+    const s = sphere();
+    const { fine, stage } = s;
+    const seam = { axis: fine.axis, xs: fine.xs, room: stage.room, pinsKept: stage.placement.pinsKept };
+    const vent = stage.placement.openings.find((o) => o.kind === 'vent' && !o.hidden)!;
+    const others = stage.placement.openings.filter((o) => o !== vent);
+    // On the pry chamfer at O's end: no room for the band, so the drop moves inwards along P to the first spot that has it.
+    const asked = stage.room.o0 + PRY_LEG / 2;
+    const at = fine.axis === 'x' ? { x: fine.xs + 4, y: asked } : { x: asked, y: fine.xs + 4 };
+    const drop = seamDrop(stage.space, seam, 'vent', at.x, at.y, others);
+    expect(drop.valid).toBe(true);
+    expect(drop.snapped).toBe(true);
+    expect(drop.refused).toContain('seam-room');
+    expect(seamCheck(stage.space, seam, onSeam(seam, 'vent', at.x, at.y), others).problems).toContain('seam-room');
+    const b = seamBOf(fine.axis, drop);
+    expect(b).toBeGreaterThan(asked);
+    const steps = (b - asked) / SEAM_DROP_STEP;
+    expect(Math.abs(steps - Math.round(steps))).toBeLessThan(1e-6);
+    expect(b - asked).toBeLessThanOrEqual(SEAM_DROP_REACH);
+    // On P: a = xs, whatever a the pointer had.
+    expect(fine.axis === 'x' ? drop.x : drop.y).toBe(fine.xs);
+    // Past O altogether, with no spot within reach: it stays where it was let go, invalid, as dropOpening leaves it.
+    const far = stage.room.o0 - SEAM_DROP_REACH - 20;
+    const out = seamDrop(stage.space, seam, 'vent', fine.axis === 'x' ? fine.xs : far, fine.axis === 'x' ? far : fine.xs, others);
+    expect(out.valid).toBe(false);
+    expect(out.problems).toContain('seam-room');
+  }, SLOW);
+
+  it('every spot a drop accepts, S7c accepts as valid with the vent pinned there', () => {
+    const s = sphere();
+    const { prep, fine, stage } = s;
+    const seam = { axis: fine.axis, xs: fine.xs, room: stage.room, pinsKept: stage.placement.pinsKept };
+    const vent = stage.placement.openings.find((o) => o.kind === 'vent' && !o.hidden)!;
+    const others = stage.placement.openings.filter((o) => o !== vent);
+    const { o0, o1 } = stage.room;
+    let tried = 0;
+    for (let k = 0; k <= 6; k++) {
+      const b = o0 + ((o1 - o0) * k) / 6;
+      const drop = seamDrop(stage.space, seam, 'vent', fine.axis === 'x' ? fine.xs : b, fine.axis === 'x' ? b : fine.xs, others);
+      if (!drop.valid) continue;
+      tried++;
+      const placed = placeSeam(prep, fine, { pins: [{ id: vent.id, kind: 'vent', x: drop.x, y: drop.y }] });
+      const pinned = placed.placement.openings.find((o) => o.id === vent.id)!;
+      expect(pinned.valid, `b = ${b.toFixed(2)}`).toBe(true);
+      expect(placed.placement.diagnostics.filter((d) => d.code === 'opening-invalid')).toEqual([]);
+    }
+    expect(tried).toBeGreaterThan(2);
+  }, SLOW);
 });
 
 describe('MP4: settings off the usual range', () => {

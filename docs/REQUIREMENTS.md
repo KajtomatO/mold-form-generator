@@ -353,6 +353,7 @@ These follow from research and design review. `docs/PLAN.md` has the full constr
 8. After curing, cut the sprues: each pour sprue at the floor of its seat, not flush with the top, with or without a funnel, and the vents flush with the top.
 9. Remove the silicone with the model inside it from the cover, cut or flex it, take out the model, and re-seat the silicone in the cover. Mild shapes may release while still in the cover, and the Demold report says which, with the places to cut.
 10. The silicone in the cover is the finished mold, with the cover's flat top as its bottom.
+11. With the Two-part cover (one model, a 1 x 1 grid): print the two halves on their backs, seam face up, with the fasteners Seam fasteners names (M3 seam bolts, printed clips, or clamps and belts); on the table, stand the base on the tape strips, slide each half onto it from its side, fasten the seam from the bottom up, and seal it with Vaseline in both grooves, a film on the seam faces and a bead along the bottom seam edges; seat the funnel last, with a Vaseline ring across the seam under its flange. To demold, take the fasteners out, pry at the V pockets at the top of the seam and slide the halves apart.
 
 `docs/WORKFLOW.md` has the full workflow, from printing to recasting, and README.txt in each export ZIP has the steps for that mold with its own numbers.
 

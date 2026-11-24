@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { Field } from '../core/field/grid';
 import { boxCorners, depthPlanes, orthoPlanes } from './depthPlanes';
 import { HeightPreview, type HeightMode } from './heightPreview';
-import { addViewLights, applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, type LayerName, type LayerStyle } from './materials';
+import { addViewLights, applyStyle, DEFAULT_LAYERS, LAYER_COLOURS, LAYER_ORDER, partMaterial, SEAM_PLANE_COLOUR, SEAM_PLANE_OPACITY, type LayerName, type LayerStyle } from './materials';
 import { boxMesh, DiagnosticMarkers, FlangeOutlines, OpeningMarkers, placeBox, type BoxSpan, type FlangeOutline, type MarkerSpec, type OpeningMarker } from './overlays';
 import { Picker } from './picking';
 import { SectionCaps, SectionHandle, type CapPart, type CapSource, type Counting } from './section';
@@ -14,7 +14,36 @@ export interface PartGeometry {
   indices: Uint32Array;
 }
 
-export type PartName = 'cover' | 'base' | 'funnel';
+/** MP5: the two-part cover's halves are parts of their own, drawn as the cover's layer. */
+export type PartName = 'cover' | 'base' | 'funnel' | 'cover-neg' | 'cover-pos';
+
+/** The layer each part is drawn and styled as: the halves are the cover's. */
+export function layerOf(part: PartName): LayerName {
+  return part === 'cover-neg' || part === 'cover-pos' ? 'cover' : part;
+}
+
+/** MP5: the two-part cover's split as the view draws it: P at a = xs, across O's b and from the base's underside to the top. */
+export interface ViewSplit {
+  axis: 'x' | 'y';
+  xs: number;
+  O: { x0: number; y0: number; x1: number; y1: number };
+  Tb: number;
+  Zt: number;
+}
+
+/** MP5: one half's side field and its frame, as viewSync hands them on. */
+export interface ViewSide {
+  field: Field;
+  /** Column by column, from the field's (u, v, h) to the mold's (x, y, z). */
+  matrix: number[];
+  hs: number;
+}
+
+/** MP5: the seam clips at home: one key's mesh, and each ear pair's place and way out along b. */
+export interface ViewClips {
+  key: PartGeometry;
+  spots: { matrix: number[]; out: [number, number, number] }[];
+}
 
 export interface CameraView {
   position: [number, number, number];
@@ -56,6 +85,12 @@ export interface SectionPlane {
 export const EXPLODE = { cover: 1, base: -1, funnel: 2 } as const;
 
 /**
+ * MP5 (G13.15): the two-part cover's explode, per mm of the slider: each half along its own pull, -a for neg and +a for
+ * pos, the base down, the funnels up, and each clip out along its end face's b. Moved, never turned.
+ */
+export const EXPLODE_TWO_PART = { half: 1, base: -1, funnel: 2, clips: 1.5 } as const;
+
+/**
  * The 3D view: one scene, z up as in the mold's coordinates, a camera that can be set exactly, and the
  * parts the pipeline sends. The app adds the model, the T1 height preview, box proxies, markers and
  * orbit controls on top of what the pipeline page uses.
@@ -95,6 +130,13 @@ export class PreviewScene {
   private readonly coverRoot = new THREE.Object3D();
   private readonly baseRoot = new THREE.Object3D();
   private readonly funnels = new THREE.Group();
+  /** MP5: the two-part cover's halves, each on a root of its own so the explode moves it along its pull, and the clips. */
+  private readonly halfRoots: Record<'cover-neg' | 'cover-pos', THREE.Object3D> = { 'cover-neg': new THREE.Object3D(), 'cover-pos': new THREE.Object3D() };
+  private clips: { mesh: THREE.InstancedMesh; spots: ViewClips['spots'] } | null = null;
+  /** MP5: each half's silicone, its side field in its pull's frame, and P as a see-through quad. */
+  private readonly sides: [HeightPreview, HeightPreview];
+  private readonly seamPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: SEAM_PLANE_COLOUR, transparent: true, opacity: SEAM_PLANE_OPACITY, side: THREE.DoubleSide, depthWrite: false }));
+  private split: ViewSplit | null = null;
   /** The model again at every other tile of a grid, sharing its geometry and material. */
   private readonly modelCopies = new THREE.Object3D();
   private tiles: [number, number][] = [[0, 0]];
@@ -158,6 +200,9 @@ export class PreviewScene {
     addViewLights(this.scene);
 
     this.heights = new HeightPreview(this.renderer, options.cpuHeights);
+    this.sides = [new HeightPreview(this.renderer, options.cpuHeights, true), new HeightPreview(this.renderer, options.cpuHeights, true)];
+    this.seamPlane.visible = false;
+    this.seamPlane.renderOrder = LAYER_ORDER.cover;
     this.renderer.localClippingEnabled = true;
     this.section = new SectionCaps(LAYER_COLOURS, this.renderer.getPixelRatio());
     this.heightCounting = this.section.counting(() => this.heights.stencilMaterial());
@@ -174,6 +219,7 @@ export class PreviewScene {
     this.siliconeFloor.rotation.x = Math.PI;
     this.siliconeFloor.visible = false;
     this.scene.add(this.modelGroup, this.modelCopies, this.heights.mesh, this.coverRoot, this.baseRoot, this.funnels, this.diagnosticMarkers.group, this.section.group, this.sectionHandle.group, this.siliconeFloor);
+    this.scene.add(this.halfRoots['cover-neg'], this.halfRoots['cover-pos'], this.sides[0].mesh, this.sides[1].mesh, this.seamPlane);
 
     if (options.interactive) {
       this.controls = new OrbitControls(this.camera, canvas);
@@ -223,8 +269,9 @@ export class PreviewScene {
       this.meshes.delete(name);
     }
     if (part) {
-      const mesh = new THREE.Mesh(partGeometry(part), this.clip(partMaterial(name, this.styles[name], this.wireframe)));
-      mesh.renderOrder = LAYER_ORDER[name];
+      const layer = layerOf(name);
+      const mesh = new THREE.Mesh(partGeometry(part), this.clip(partMaterial(layer, this.styles[layer], this.wireframe)));
+      mesh.renderOrder = LAYER_ORDER[layer];
       this.meshes.set(name, mesh);
       this.rootOf(name).add(mesh);
       if (!this.framed) this.frame();
@@ -234,7 +281,74 @@ export class PreviewScene {
 
   /** Where a part hangs, so the exploded view moves it. A funnel set here, as no page does, stays put. */
   private rootOf(name: PartName): THREE.Object3D {
+    if (name === 'cover-neg' || name === 'cover-pos') return this.halfRoots[name];
     return name === 'cover' ? this.coverRoot : name === 'base' ? this.baseRoot : this.scene;
+  }
+
+  /**
+   * MP5: the two-part cover's split, or null for the one-piece cover: P drawn as a see-through quad across O and up the
+   * mold, and the axis the exploded view moves the halves and clips along.
+   */
+  setSplit(split: ViewSplit | null): void {
+    this.split = split;
+    this.seamPlane.visible = split !== null;
+    if (split) {
+      const { O, Tb, Zt, xs } = split;
+      const z = (Zt - Tb) / 2, height = Zt + Tb;
+      if (split.axis === 'x') {
+        this.seamPlane.rotation.set(Math.PI / 2, Math.PI / 2, 0);
+        this.seamPlane.position.set(xs, (O.y0 + O.y1) / 2, z);
+        this.seamPlane.scale.set(O.y1 - O.y0, height, 1);
+      } else {
+        this.seamPlane.rotation.set(Math.PI / 2, 0, 0);
+        this.seamPlane.position.set((O.x0 + O.x1) / 2, xs, z);
+        this.seamPlane.scale.set(O.x1 - O.x0, height, 1);
+      }
+    }
+    this.setExplode(this.explodeBy);
+  }
+
+  /** MP5: each half's silicone from its side field, neg first, or null to draw none. */
+  setSides(sides: [ViewSide, ViewSide] | null): void {
+    this.sides.forEach((preview, k) => {
+      const side = sides?.[k] ?? null;
+      preview.set(side?.field ?? null);
+      if (side) preview.setFrame(side.matrix, side.hs);
+    });
+    this.applyStyles();
+  }
+
+  /** MP5: the seam clips at home, one instanced mesh, or null for none. */
+  setClips(clips: ViewClips | null): void {
+    if (this.clips) {
+      this.clips.mesh.removeFromParent();
+      this.clips.mesh.geometry.dispose();
+      (this.clips.mesh.material as THREE.Material).dispose();
+      this.clips.mesh.dispose();
+      this.clips = null;
+    }
+    if (clips && clips.spots.length > 0) {
+      const mesh = new THREE.InstancedMesh(partGeometry(clips.key), this.clip(partMaterial('clips', this.styles.clips, this.wireframe)), clips.spots.length);
+      mesh.renderOrder = LAYER_ORDER.clips;
+      this.clips = { mesh, spots: clips.spots };
+      this.scene.add(mesh);
+      this.placeClips();
+    }
+    this.requestRender();
+  }
+
+  /** Each clip at home, moved out along its end face's b by the explode. */
+  private placeClips(): void {
+    if (!this.clips) return;
+    const { mesh, spots } = this.clips;
+    const move = new THREE.Matrix4(), at = new THREE.Matrix4();
+    spots.forEach((spot, k) => {
+      const d = EXPLODE_TWO_PART.clips * this.explodeBy;
+      move.makeTranslation(spot.out[0] * d, spot.out[1] * d, spot.out[2] * d);
+      mesh.setMatrixAt(k, at.fromArray(spot.matrix).premultiply(move));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingBox();
   }
 
   /** Shows a box in place of a part until its solid arrives: the cover's outer box, the base's plate. */
@@ -431,15 +545,16 @@ export class PreviewScene {
     const of = (object: THREE.Object3D | null | undefined, material: THREE.Material | undefined): LayerStyle | null =>
       object && material ? { visible: object.visible && material.visible, opacity: material.opacity } : null;
     const solid = (name: 'cover' | 'base'): LayerStyle | null => {
-      const mesh = this.meshes.get(name) ?? (this.proxies[name].visible ? this.proxies[name] : null);
+      const mesh = this.meshes.get(name) ?? (name === 'cover' ? this.meshes.get('cover-neg') : undefined) ?? (this.proxies[name].visible ? this.proxies[name] : null);
       return of(mesh, mesh?.material as THREE.Material | undefined);
     };
     return {
       model: of(this.model, this.model?.material as THREE.Material | undefined),
-      silicone: of(this.heights.mesh, this.heights.mesh.material),
+      silicone: this.split ? of(this.sides[0].mesh, this.sides[0].mesh.material) : of(this.heights.mesh, this.heights.mesh.material),
       cover: solid('cover'),
       base: solid('base'),
       funnel: of(this.funnels.children[0], this.funnel?.material),
+      clips: of(this.clips?.mesh, this.clips?.mesh.material as THREE.Material | undefined),
     };
   }
 
@@ -489,15 +604,32 @@ export class PreviewScene {
   /** The cover and funnels up, the base down, by `distance` mm. Picking, the rings and the section follow. */
   setExplode(distance: number): void {
     this.explodeBy = distance;
-    this.coverRoot.position.z = EXPLODE.cover * distance;
-    this.baseRoot.position.z = EXPLODE.base * distance;
-    this.funnels.position.z = EXPLODE.funnel * distance;
+    const split = this.split;
+    // MP5: the two-part cover's halves part along the pull, and its rings stay on P, where its openings are.
+    this.coverRoot.position.z = split ? 0 : EXPLODE.cover * distance;
+    this.baseRoot.position.z = (split ? EXPLODE_TWO_PART.base : EXPLODE.base) * distance;
+    this.funnels.position.z = (split ? EXPLODE_TWO_PART.funnel : EXPLODE.funnel) * distance;
+    const along = split ? EXPLODE_TWO_PART.half * distance : 0;
+    const a = split?.axis === 'y' ? 'y' : 'x';
+    for (const [name, sign] of [['cover-neg', -1], ['cover-pos', 1]] as const) {
+      this.halfRoots[name].position.set(0, 0, 0);
+      this.halfRoots[name].position[a] = sign * along;
+    }
+    this.placeClips();
     this.showModel();
   }
 
   /** How far each part is moved in z now, for tests. */
   explodeOffsets(): { cover: number; base: number; funnel: number } {
     return { cover: this.coverRoot.position.z, base: this.baseRoot.position.z, funnel: this.funnels.position.z };
+  }
+
+  /** MP5: how far the two-part cover's halves and each clip are moved now, as vectors, for tests. */
+  splitOffsets(): { neg: [number, number, number]; pos: [number, number, number]; clips: [number, number, number][] } {
+    const vector = (object: THREE.Object3D): [number, number, number] => [object.position.x, object.position.y, object.position.z];
+    const d = this.split ? EXPLODE_TWO_PART.clips * this.explodeBy : 0;
+    const clips = (this.clips?.spots ?? []).map((spot): [number, number, number] => [spot.out[0] * d, spot.out[1] * d, spot.out[2] * d]);
+    return { neg: vector(this.halfRoots['cover-neg']), pos: vector(this.halfRoots['cover-pos']), clips };
   }
 
   /** One clipping plane on every part, or null for none. Every material clips by the same Plane object. */
@@ -513,6 +645,11 @@ export class PreviewScene {
   /** The parts whose cut was filled in the last frame drawn, for tests. */
   capParts(): CapPart[] {
     return this.section.on ? this.section.capped() : [];
+  }
+
+  /** How many solids a part's cut was counted from in the last frame drawn, for tests: both halves for the two-part cover. */
+  capSources(part: CapPart): number {
+    return this.section.on ? this.section.sourceCount(part) : 0;
   }
 
   /** Where each opening ring is, in mold coordinates, in the order set: ghosts of a drag's landing last. */
@@ -733,7 +870,8 @@ export class PreviewScene {
       });
     // The model itself, not its group: the highlights there share the whole mesh's positions.
     if (this.model && this.modelGroup.visible) grow(this.model);
-    for (const root of [this.modelCopies, this.coverRoot, this.baseRoot, this.funnels, this.diagnosticMarkers.group, this.sectionHandle.group]) grow(root);
+    for (const root of [this.modelCopies, this.coverRoot, this.baseRoot, this.funnels, this.diagnosticMarkers.group, this.sectionHandle.group, this.halfRoots['cover-neg'], this.halfRoots['cover-pos']]) grow(root);
+    if (this.clips) grow(this.clips.mesh);
     // A funnel set as a part, as no page does, hangs from the scene itself.
     const loose = this.meshes.get('funnel');
     if (loose) grow(loose);
@@ -783,6 +921,9 @@ export class PreviewScene {
       if (!shows(name)) return [];
       const built = this.meshes.get(name);
       if (built) return from(built);
+      // MP5: the two-part cover's cut is both halves', wherever the exploded view has moved them.
+      const halves = name === 'cover' ? (['cover-neg', 'cover-pos'] as const).flatMap((half) => from(this.meshes.get(half))) : [];
+      if (halves.length > 0) return halves;
       // A box stands in for the part until its solid is built on the rim on screen, as while t is
       // dragged. The cover's box has no cavity, so its cut is the box less the field's solid.
       const proxy = from(this.proxies[name]);
@@ -860,6 +1001,10 @@ export class PreviewScene {
     this.setModelJoined(null);
     this.setFunnel(null, []);
     this.heights.dispose();
+    for (const side of this.sides) side.dispose();
+    this.setClips(null);
+    this.seamPlane.geometry.dispose();
+    this.seamPlane.material.dispose();
     this.markers.dispose();
     this.flanges.dispose();
     this.section.dispose();
@@ -875,12 +1020,18 @@ export class PreviewScene {
 
   private applyStyles(): void {
     const { styles, wireframe } = this;
-    this.meshes.forEach((mesh, name) => applyStyle(this.clip(mesh.material as THREE.Material), styles[name], wireframe));
+    this.meshes.forEach((mesh, name) => applyStyle(this.clip(mesh.material as THREE.Material), styles[layerOf(name)], wireframe));
     for (const name of ['cover', 'base'] as const) applyStyle(this.clip(this.proxies[name].material as THREE.Material), styles[name], wireframe);
     if (this.funnel) applyStyle(this.clip(this.funnel.material), styles.funnel, wireframe);
     if (this.model) applyStyle(this.clip(this.model.material as THREE.Material), styles.model, wireframe);
     this.heights.style(styles.silicone, wireframe);
     this.clip(this.heights.mesh.material);
+    for (const side of this.sides) {
+      side.style(styles.silicone, wireframe);
+      this.clip(side.mesh.material);
+    }
+    if (this.clips) applyStyle(this.clip(this.clips.mesh.material as THREE.Material), styles.clips, wireframe);
+    this.clip(this.seamPlane.material);
     for (const material of Object.values(this.markers.materials)) this.clip(material);
     for (const material of Object.values(this.flanges.materials)) this.clip(material);
     for (const child of this.highlights.children) this.clip((child as THREE.Mesh).material as THREE.Material);

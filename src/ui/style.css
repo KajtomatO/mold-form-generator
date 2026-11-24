@@ -335,6 +335,15 @@ a {
   margin-top: 0;
 }
 
+/* MP5: a block within the Two-part cover's, such as Seam bolts: under its heading, a step smaller. */
+.section h4 {
+  margin: 10px 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+
 .advanced > summary {
   margin: 0;
   list-style: none;
@@ -2105,6 +2114,18 @@ li + li > .candidate {
   font-size: 10px;
   font-weight: 400;
   color: var(--ink-2);
+}
+
+/* MP5: the Two-part tile's estimate of the silicone it saves, as small as the reason a tile is unavailable. */
+.mold-tile .estimate {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+/* On the pressed tile's tint, --ink-2 falls under 4.5:1 for 10px text in both themes; --ink stands past 9:1. */
+.mold-tile[aria-pressed='true'] .estimate {
+  color: var(--ink);
 }
 
 /*

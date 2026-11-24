@@ -21,7 +21,7 @@ function wire(outputs: SolidOutputs): { outputs: SolidOutputs; transfer: ArrayBu
   }
   // The proxy is made for this message and kept nowhere, so it goes as it is.
   arrays.push(outputs.S1?.display?.positions, outputs.S1?.display?.indices);
-  for (const part of [outputs.S13, outputs.S15, outputs.S16]) arrays.push(part?.positions, part?.indices);
+  for (const part of [outputs.S13, outputs.S15, outputs.S16, ...(outputs.S13?.halves ?? []), outputs.S13?.clips?.key]) arrays.push(part?.positions, part?.indices);
   return { outputs: out, transfer: buffersOf(...arrays) };
 }
 

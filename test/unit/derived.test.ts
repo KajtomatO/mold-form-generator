@@ -1,5 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { diagnosticPoint, modelSize, moldBox, previewSilicone, siliconeAdvice } from '../../src/app/derived';
+import { diagnosticPoint, modelSize, moldBox, NO_SAVING_SHARE, noSavingLine, previewSilicone, savingText, savingTitle, siliconeAdvice, typeSaving } from '../../src/app/derived';
+import { loadGallery } from '../fixtures/loadGallery';
+import { applySwitch, planSwitch } from '../../src/app/moldSwitch';
+import { StageMiss } from '../../src/workers/fieldStages';
+import { ReportStages, type ReportsInputs } from '../../src/workers/reportStages';
 import { Pipeline } from '../../src/app/pipeline';
 import { fieldSettings } from '../../src/core/field/grid';
 import { defaultParams } from '../../src/core/params/defaults';
@@ -206,4 +210,85 @@ describe('where a diagnostic points', () => {
     expect(diagnosticPoint({ code: 'footprint-islands', severity: 'info', message: 'Dropped at (1, 2).' }, 5)).toBeNull();
     expect(diagnosticPoint({ code: 'long-vent', severity: 'warning', message: 'A vent is long.' }, 5)).toBeNull();
   });
+});
+
+describe('MP5: what the Two-part cover saves (G13.13)', () => {
+  const saving = (twoPartMl: number, onePieceMl: number) => ({ ml: onePieceMl - twoPartMl, share: (onePieceMl - twoPartMl) / onePieceMl, twoPartMl, onePieceMl });
+
+  it('the tile\'s line and title: the saving in ml and percent, or none under NO_SAVING_SHARE, with a capital as the tile\'s other lines', () => {
+    expect(savingText(null)).toBeNull();
+    expect(savingTitle(null)).toBeNull();
+    expect(savingText(saving(23.3, 31))).toBe('Saves about 7.7 ml (25%)');
+    expect(savingText(saving(80, 130))).toBe('Saves about 50 ml (38%)');
+    expect(savingTitle(saving(23.3, 31))).toBe('On this model it saves about 7.7 ml (25%) against a One-piece cover at the same settings; the figure is worked out again once it is on screen.');
+    // Just under the share, and a negative saving: nothing worth the split.
+    const under = saving(31 * (1 - NO_SAVING_SHARE) + 0.01, 31);
+    expect(savingText(under)).toBe('No saving on this model');
+    expect(savingTitle(under)).toBe('On this model it saves no silicone worth the split.');
+    expect(savingText(saving(33, 31))).toBe('No saving on this model');
+  });
+
+  it('the card\'s line: only under NO_SAVING_SHARE, saying how much it saves, or how much more it takes', () => {
+    expect(noSavingLine(null)).toBeNull();
+    expect(noSavingLine(saving(23.3, 31))).toBeNull();
+    expect(noSavingLine(saving(30.5, 31))).toMatchObject({ code: 'clamshell-no-saving', severity: 'info' });
+    expect(noSavingLine(saving(30.5, 31))!.message).toMatch(/^No saving on this model: the Two-part cover saves only 0\.5 ml of silicone than a One-piece cover at the same settings \(30\.5 against 31\.0 ml\)/);
+    expect(noSavingLine(saving(33, 31))!.message).toMatch(/^No saving on this model: the Two-part cover takes 2\.0 ml more silicone than a One-piece cover at the same settings \(33\.0 against 31\.0 ml\)/);
+  });
+
+  it('typeSaving on the sphere: one model against the one-piece preview; none on a grid; and a new bed asks for a new estimate', async () => {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true, reports: true });
+    const reportsRev = (): number => Math.max(-1, ...p.events.filter((e) => e.slot === 'reports' && e.kind === 'applied').map((e) => e.rev));
+    try {
+      p.load(loadGallery('sphere'), 'sphere.stl');
+      await p.idle();
+      const one = typeSaving(p)!;
+      expect(one).not.toBeNull();
+      expect(one.onePieceMl).toBeCloseTo(previewSilicone(p)!.ml, 9);
+      expect(one.share).toBeGreaterThan(0.1);
+      expect(one.share).toBeLessThan(0.5);
+      // A grid of two: the one-piece preview is two models' silicone, the two-part cover makes one, so no figure.
+      p.setParams((params) => (params.grid.nx = 2));
+      await p.idle();
+      expect(previewSilicone(p)!.ml).toBeGreaterThan(1.8 * one.onePieceMl);
+      expect(typeSaving(p)).toBeNull();
+      p.setParams((params) => (params.grid.nx = 1));
+      await p.idle();
+      expect(typeSaving(p)).not.toBeNull();
+      // The bed is read by no one-piece row, only by the estimate's split: the reports job runs again for it.
+      const before = reportsRev();
+      p.setParams((params) => {
+        params.print.bedX = 150;
+        params.print.bedY = 150;
+      });
+      await p.idle();
+      expect(reportsRev()).toBeGreaterThan(before);
+      expect(p.currentEstimate()).not.toBeNull();
+      expect(typeSaving(p)).not.toBeNull();
+      // The reports' worker that built S8 with no estimate asked, as before the model's bodies were known, asks for the
+      // mesh once more when one is, rather than giving none for good.
+      const field = p.field!.value, placement = p.placement!.value, oriented = p.oriented!.value;
+      const keys = p.keys();
+      const inputs = (estimate: ReportsInputs['estimate'], mesh: boolean): ReportsInputs => ({
+        mesh: mesh ? p.parsed!.value.welded : null,
+        transform: oriented.oriented.transform,
+        field: field.field,
+        raise: p.run.quality.tinTolPreview,
+        rim: field.rim,
+        tiles: 1,
+        ceiling: { leaves: placement.placement.ceilingLeaves, uncovered: placement.placement.uncovered },
+        estimate,
+      });
+      const asked: ReportsInputs['estimate'] = { kind: 'two-part', params: applySwitch(planSwitch(p.params, 'clamshell'), []), cell: field.cell };
+      const reports = new ReportStages();
+      expect(reports.run(keys, p.run, inputs(null, true)).estimate).toBeNull();
+      expect(reports.cached()).toEqual({ S8: keys.S8 });
+      expect(() => reports.run(keys, p.run, inputs(asked, false))).toThrow(StageMiss);
+      expect(reports.cached()).toEqual({});
+      expect(reports.run(keys, p.run, inputs(asked, true)).estimate!.ml).toBeCloseTo(p.currentEstimate()!.ml, 6);
+      expect(reports.cached()).toEqual({ S8: keys.S8 });
+    } finally {
+      p.dispose();
+    }
+  }, 300_000);
 });

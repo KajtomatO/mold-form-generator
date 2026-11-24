@@ -5,7 +5,10 @@ import { openingSizes, placementSpace } from '../../src/core/analysis/validate';
 import { resolveAuto, defaultParams } from '../../src/core/params/defaults';
 import { PARAM_SCHEMA, type ParamDef, type Params } from '../../src/core/params/schema';
 import { hashFloats, hashMesh, hashString } from '../../src/app/hash';
-import { downstream, invalidatedBy, invalidatedByInput, MAIN_ONLY, NO_STAGE, STAGES, stageKeys, upstream, type InputName, type ParamPath, type StageId, type StageInputs } from '../../src/app/stages';
+import { CLAM_ROWS, downstream, invalidatedBy, invalidatedByInput, MAIN_ONLY, NO_STAGE, STAGES, stageKeys, typedKeys, upstream, type InputName, type ParamPath, type StageId, type StageInputs } from '../../src/app/stages';
+import { effectiveParams } from '../../src/core/mold/types';
+import type { HalfField } from '../../src/core/parts/clamshell';
+import { loadGallery } from '../fixtures/loadGallery';
 import { DEFAULT_PLANE, FieldStages, PLAIN_IMPORT, type PlaneChoice } from '../../src/workers/fieldStages';
 import type { OpeningPin } from '../../src/core/analysis/placement';
 import { ReportStages } from '../../src/workers/reportStages';
@@ -27,6 +30,8 @@ const AUTO_VALUES: Partial<Record<ParamPath, number>> = {
   'quality.cellPreview': 0.75,
   'bolts.length': 16,
   'silicone.baseLayer': 1.5,
+  'clamshell.offset': 5,
+  'clips.rows': 3,
 };
 
 /** Another valid value for each parameter, one that the stages can still build. */
@@ -53,7 +58,11 @@ function withChange(path: ParamPath, value: unknown, params: Params = defaultPar
 }
 
 const changedKeys = (a: Record<StageId, string>, b: Record<StageId, string>): StageId[] => STAGES.map((s) => s.id).filter((id) => a[id] !== b[id]);
-const sorted = (ids: Iterable<StageId>): StageId[] => [...ids].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+/** In the table's order, the one-piece rows S1 to S16 first, then the two-part cover's (MP5). */
+const ORDER = new Map(STAGES.map((stage, k) => [stage.id, k]));
+const sorted = (ids: Iterable<StageId>): StageId[] => [...ids].sort((a, b) => ORDER.get(a)! - ORDER.get(b)!);
+/** The one-piece cover's rows of a set, which every test before MP5 was written for. */
+const onePiece = (ids: Iterable<StageId>): StageId[] => sorted([...ids].filter((id) => /^S\d+$/.test(id)));
 
 describe('the stage table', () => {
   it('maps every schema parameter to at least one stage or to main alone, and names no parameter the schema lacks', () => {
@@ -101,13 +110,13 @@ describe('the stage table', () => {
   });
 
   it('RM: a rebuilt model\'s left-out parts in glue mode change its raster and box and what is built on them, never the import, the plane or the intervals', () => {
-    expect(sorted(invalidatedByInput('outside'))).toEqual(['S3', 'S4', 'S5', 'S6', 'S7', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15']);
+    expect(onePiece(invalidatedByInput('outside'))).toEqual(['S3', 'S4', 'S5', 'S6', 'S7', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15']);
   });
 
   it('a drag changes only the cut, and a pin also the placement before it', () => {
-    expect(sorted(invalidatedByInput('drag'))).toEqual(['S13']);
-    expect(sorted(invalidatedByInput('pins'))).toEqual(['S7', 'S9', 'S13']);
-    expect(sorted(downstream(['S10']))).toEqual(['S7', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15']);
+    expect(onePiece(invalidatedByInput('drag'))).toEqual(['S13']);
+    expect(onePiece(invalidatedByInput('pins'))).toEqual(['S7', 'S9', 'S13']);
+    expect(onePiece(downstream(['S10']))).toEqual(['S7', 'S9', 'S10', 'S11', 'S12', 'S13', 'S14', 'S15']);
   });
 });
 
@@ -160,6 +169,7 @@ describe('the real stages read nothing the table does not name', () => {
         rim: S6!.rim,
         tiles: S6!.mold.offsets.length,
         ceiling: { leaves: S7!.placement.ceilingLeaves, uncovered: S7!.placement.uncovered },
+        estimate: null,
       });
       return {
         S8: hashString(JSON.stringify(reports.intervals)),
@@ -188,7 +198,8 @@ describe('the real stages read nothing the table does not name', () => {
   const boltSetting = (path: ParamPath): boolean => path.startsWith('bolts.') && path !== 'bolts.enabled';
   const bolted = (): Params => withChange('bolts.enabled', true);
   let boltBase: Partial<Record<StageId, string>> | undefined;
-  it.each(PATHS)('$path', ({ path, def }) => {
+  // The mold type is no setting of these rows: a change of it builds the two-part cover's (MP5, below).
+  it.each(PATHS.filter(({ path }) => path !== 'mold.type'))('$path', ({ path, def }) => {
     const before = boltSetting(path) ? (boltBase ??= outputsOf(bolted())) : base;
     const after = outputsOf(withChange(path, changedValue(path, def), boltSetting(path) ? bolted() : defaultParams()));
     const changed = (Object.keys(before) as StageId[]).filter((id) => before[id] !== after[id]);
@@ -288,4 +299,145 @@ describe('the real stages read nothing the table does not name', () => {
     const pretend = downstream(['S16']);
     expect(changed.filter((id) => !pretend.has(id))).not.toEqual([]);
   }, 60_000);
+});
+
+/**
+ * MP5 (G13.15): the two-part cover's rows. The one-piece rows keep the keys they had before them, a value the type
+ * holds changes no key, and the real stages of the two-part cover read nothing their rows do not name.
+ */
+describe('MP5: the two-part cover\'s rows', () => {
+  const two = (change: (params: Params) => void = () => {}): Params => {
+    const params = defaultParams('clamshell');
+    change(params);
+    return params;
+  };
+
+  it('leave the one-piece rows\' keys as they were before them (the keys at MP4\'s commit, 135c29a)', () => {
+    expect(stageKeys(defaultParams(), INPUTS)).toMatchObject({
+      S1: '15ed4dfeb41758', S2: '0eb8b9cff258b9', S3: '1964bbcf0811bc', S4: '0c24e1b5a46e67', S5: '12536efc0ea934', S6: '111f2f25451bd5', S7: '182dccb64b998d', S8: '0d1500602f81f7',
+      S9: '03aa21a7f81d4a', S10: '0af2f0ff5ebc39', S11: '0fa889051ef0df', S12: '17a8179abf40ae', S13: '08c9dbaede6936', S14: '0f2fb5ffa8460b', S15: '1f9ff0c493a3cc', S16: '12ae200f655971',
+    });
+    // The one-piece cover's typed keys are stageKeys' own.
+    expect(typedKeys(defaultParams(), INPUTS)).toEqual(stageKeys(defaultParams(), INPUTS));
+  });
+
+  it('name the two-part cover\'s rows under the one-piece\'s ids in that type, S9 from its own and theirs', () => {
+    const keys = typedKeys(two(), INPUTS);
+    for (const [id, row] of Object.entries(CLAM_ROWS)) expect(keys[id as StageId], id).toBe(keys[row as StageId]);
+    expect(keys.S9).not.toBe(stageKeys(two(), INPUTS).S9);
+    expect(keys.S1).toBe(stageKeys(defaultParams(), INPUTS).S1);
+  });
+
+  it('take their inputs: a pin and a removed vent reach the openings on P and the halves, the tier the fine fields on, a drag nothing', () => {
+    const rows = (ids: Iterable<StageId>): StageId[] => sorted([...ids].filter((id) => !/^S\d+$/.test(id)));
+    expect(rows(invalidatedByInput('pins'))).toEqual(['S7c', 'S12c', 'S13c']);
+    expect(rows(invalidatedByInput('removed'))).toEqual(['S7c', 'S12c', 'S13c']);
+    expect(rows(invalidatedByInput('tier'))).toEqual(['S6x', 'S7c', 'S11c', 'S12c', 'S13c']);
+    expect(rows(invalidatedByInput('cellScale'))).toEqual(['S6x', 'S7c', 'S11c', 'S12c', 'S13c']);
+    // A drag moves the ring along P; the halves are cut again on the drop, which pins it.
+    expect(rows(invalidatedByInput('drag'))).toEqual([]);
+    expect(rows(invalidatedByInput('plane'))).toEqual(['S3x', 'S4x', 'S6c', 'S10c', 'S6x', 'S7c', 'S11c', 'S12c', 'S13c', 'S14c', 'S15c']);
+    // S16 is the one-piece's own, which the two-part cover's funnel is.
+    expect(STAGES.find((stage) => stage.id === 'S16')!.deps).toEqual([]);
+  });
+
+  it('a value the type holds changes no key: a hidden grid of 2, the corner bolts on, the pry notches on', () => {
+    const base = typedKeys(two(), INPUTS);
+    expect(typedKeys(two((p) => (p.grid.nx = 2)), INPUTS)).toEqual(base);
+    expect(typedKeys(two((p) => (p.grid.ny = 3)), INPUTS)).toEqual(base);
+    expect(typedKeys(two((p) => (p.bolts.enabled = true)), INPUTS)).toEqual(base);
+    expect(typedKeys(two((p) => (p.joint.pryNotches = true)), INPUTS)).toEqual(base);
+    // Negative control: a value it does not hold changes keys.
+    expect(typedKeys(two((p) => (p.clamshell.ceilingDeg = 30)), INPUTS)).not.toEqual(base);
+  });
+
+  describe('the real stages read nothing their rows do not name', () => {
+    let api: ManifoldToplevel;
+    beforeAll(async () => {
+      api = await loadManifold();
+    });
+    const sphere = loadGallery('sphere');
+
+    /** One run of the two-part cover from nothing on the sphere, at a 1 mm preview cell, each output main sees hashed. */
+    function clamOutputsOf(params: Params, stageInputs: StageInputs = INPUTS): Partial<Record<StageId, string>> {
+      const keys = typedKeys(params, stageInputs);
+      const run = effectiveParams(params);
+      const field = new FieldStages();
+      const { cellScale, pins, removed } = stageInputs;
+      const out = field.run(keys, ['S1', 'S2', 'S6', 'S7'], run, { file: sphere.slice().buffer, import: PLAIN_IMPORT, plane: JSON.parse(stageInputs.plane) as PlaneChoice, cellScale, pins, removed });
+      const { S1, S2, S6, S7 } = out;
+      const clam = S6!.clam!, seam = S7!.seam!;
+      const solid = new SolidStages(api);
+      try {
+        const parts = solid.run(keys, ['S13', 'S15', 'S16'], run, {
+          model: { welded: S1!.welded, audit: S1!.audit },
+          plane: { candidate: S2!.chosen, transform: S2!.oriented.transform, needsTrim: S2!.oriented.needsTrim, planeTol: S2!.planeTol, pocketDepth: resolveAuto(run, S2!.bounds).pocketDepth },
+          rim: S6!.rim,
+          offsets: S6!.mold.offsets,
+          field: null,
+          clip: null,
+          tol: run.quality.tinTolPreview,
+          copies: seam.cuts,
+          drag: null,
+          clam: { sides: clam.sides.map((side) => ({ field: side.field, frame: side.frame, hs: side.hs })) as [HalfField, HalfField], cuts: seam.cuts, pinsKept: seam.pinsKept, bolts: clam.bolts, clips: clam.clips },
+        });
+        return {
+          S6x: hashString(JSON.stringify([clam.sides.map((side) => hashFloats(side.field.values) + side.field.cell + side.hs), clam.axis, clam.xs, clam.siliconeMl, clam.bolts, clam.clips])),
+          S10c: hashString(JSON.stringify(S6!.rim)),
+          S7c: hashString(JSON.stringify([S7!.placement, seam])),
+          S13c: hashMesh(parts.S13!.positions, parts.S13!.indices),
+          S15c: hashMesh(parts.S15!.positions, parts.S15!.indices),
+          S16: parts.S16 ? hashMesh(parts.S16.positions, parts.S16.indices) : 'none',
+        };
+      } finally {
+        solid.clear();
+      }
+    }
+
+    const coarse = (change: (params: Params) => void = () => {}): Params => two((p) => {
+      p.quality.cellPreview = 1;
+      change(p);
+    });
+    let base: Partial<Record<StageId, string>>;
+    it('builds at the two-part defaults', () => {
+      base = clamOutputsOf(coarse());
+      expect(Object.keys(base)).toHaveLength(6);
+    }, 60_000);
+
+    // The type itself and the grid it holds at 1 are no setting of these rows; the preview cell is held at 1 mm here.
+    const skipped = new Set<ParamPath>(['mold.type', 'grid.nx', 'grid.ny', 'quality.cellPreview', 'bolts.enabled', 'joint.pryNotches']);
+    it.each(PATHS.filter(({ path }) => !skipped.has(path)))('$path', ({ path, def }) => {
+      const value = changedValue(path, def);
+      const after = clamOutputsOf(coarse((p) => withChange(path, path === 'clamshell.offset' ? 3 : value, p)));
+      const changed = (Object.keys(base) as StageId[]).filter((id) => base[id] !== after[id]);
+      // Each output is the row's, and the field's and the rim's come with S6 and S10 of the one-piece's ids.
+      const allowed = invalidatedBy(path);
+      expect(changed.filter((id) => !allowed.has(id)), `${path} changed outputs it is not declared for`).toEqual([]);
+    }, 60_000);
+
+    it('a worker that holds the rows gives, for a change, what a fresh one gives: the rows after S3x read the job\'s own settings', () => {
+      const fieldOf = (stages: FieldStages, params: Params): string => {
+        const out = stages.run(typedKeys(params, INPUTS), ['S1', 'S2', 'S6', 'S7'], effectiveParams(params), { file: sphere.slice().buffer, import: PLAIN_IMPORT, plane: DEFAULT_PLANE, cellScale: 1, pins: [], removed: [] });
+        const clam = out.S6!.clam!;
+        return hashString(JSON.stringify([clam.bolts, clam.clips, clam.belts, clam.forces, clam.holdN, out.S6!.rim, out.S6!.diagnostics, out.S7!.seam, out.S7!.placement.openings]));
+      };
+      const held = new FieldStages();
+      fieldOf(held, coarse());
+      for (const change of [(p: Params) => (p.clamshell.fastener = 'clips'), (p: Params) => (p.clamshell.fastener = 'none'), (p: Params) => (p.silicone.density = 1.3), (p: Params) => (p.funnel.height = 40), (p: Params) => (p.clips.clearance = 0.2), (p: Params) => (p.print.tapeStrip = 20)]) {
+        const params = coarse(change);
+        expect(fieldOf(held, params), String(change)).toBe(fieldOf(new FieldStages(), params));
+      }
+      // A setting tried and put back finds its fine pair kept, with G13.3's bed line of its own split, not the last one's.
+      const bed = (fastener: Params['clamshell']['fastener']) => coarse((p) => ((p.print.bedX = 40), (p.print.bedY = 40), (p.clamshell.fastener = fastener)));
+      const again = new FieldStages();
+      for (const fastener of ['bolts', 'clips', 'bolts'] as const) expect(fieldOf(again, bed(fastener)), fastener).toBe(fieldOf(new FieldStages(), bed(fastener)));
+    }, 180_000);
+
+    it('sees real changes: the ceiling slope and the fastener', () => {
+      const steeper = clamOutputsOf(coarse((p) => (p.clamshell.ceilingDeg = 35)));
+      expect((Object.keys(base) as StageId[]).filter((id) => base[id] !== steeper[id])).toEqual(expect.arrayContaining(['S6x', 'S10c', 'S7c', 'S13c']));
+      const clipped = clamOutputsOf(coarse((p) => (p.clamshell.fastener = 'clips')));
+      expect((Object.keys(base) as StageId[]).filter((id) => base[id] !== clipped[id])).toEqual(expect.arrayContaining(['S6x', 'S13c']));
+    }, 120_000);
+  });
 });

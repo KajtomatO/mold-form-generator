@@ -1,5 +1,7 @@
-import { firstPourPeak, replicateOpenings, type OpeningPin } from '../core/analysis/placement';
-import { withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
+import { firstPourPeak, pinOnSeam, replicateOpenings, seamBOf, type OpeningPin } from '../core/analysis/placement';
+import { seamDrop, seamSpace } from './seamDrag';
+import type { ClamPlacement } from '../workers/clamshellField';
+import { onTheSeam, withoutDoubledVoids, type GeometryReports } from '../core/analysis/reports';
 import { dropOpening, openingSizes, placementSpace, type DropResult, type PlacementSpace } from '../core/analysis/validate';
 import { pickable } from '../core/base/candidates';
 import { transformPositions } from '../core/base/orient';
@@ -8,7 +10,8 @@ import { findStoredPlane, PLANE_MATCH_MM, planeGap, planeOf, type StoredPlane } 
 import type { SolidReport } from '../core/mesh/shells';
 import { meshBounds, type WeldedMesh } from '../core/mesh/weld';
 import { defaultParams, resolveAuto } from '../core/params/defaults';
-import { effectiveParams } from '../core/mold/types';
+import { effectiveParams, MOLD_TYPES, moldTypeOf, type MoldTypeId } from '../core/mold/types';
+import { applySwitch, planSwitch } from './moldSwitch';
 import { crossParameterErrors, crossParameterWarnings } from '../core/params/rules';
 import { MANIFOLD_TRIANGLE_LIMIT } from '../core/mesh/simplify';
 import { SCHEMA_VERSION, type Params } from '../core/params/schema';
@@ -19,8 +22,9 @@ import type { ExportInputs, ExportMeta, ExportOutputs, ExportRequest } from '../
 import type { FieldWire, OrientedWire } from '../workers/fieldHost';
 import { DEFAULT_PLANE, PLAIN_IMPORT, samePlane, type FieldOutput, type FieldWanted, type ImportInput, type ParsedModel, type PlacementOutput, type PlaneChoice } from '../workers/fieldStages';
 import { type ExportJobMessage, type Fault, type FieldJobMessage, type FromWorker, type ReportsJobMessage, type SolidJobMessage, type WallsJobMessage, type WorkerLike } from '../workers/protocol';
-import type { ReportsOutputs } from '../workers/reportStages';
-import type { FootprintOutput, ImportOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
+import type { ReportsInputs, ReportsOutputs, TypeEstimate } from '../workers/reportStages';
+import type { ClamSolidInputs, FootprintOutput, ImportOutput, PartMesh, SolidOutputs, SolidWanted } from '../workers/solidStages';
+import type { HalfField } from '../core/parts/clamshell';
 import type { WallCheck } from '../workers/wallCheck';
 import { Budgets } from './budgets';
 import { exportBlocked, siliconeAdvice } from './derived';
@@ -32,7 +36,7 @@ import { displayProxyMessage, repairedMessage, simplifiedMessage, type ModelOrig
 import { fillable } from '../core/mesh/repair';
 import { unionBounds } from '../core/field/outsidePart';
 import type { Bounds } from '../core/mesh/weld';
-import { stageKeys, type StageId, type StageInputs } from './stages';
+import { typedKeys, type StageId, type StageInputs } from './stages';
 import { BUILD } from './buildInfo';
 import { bodiesByPart, type SavedBy } from './version';
 import { formatNormal } from '../ui/format';
@@ -69,6 +73,8 @@ interface FieldTarget extends Target {
 interface ReportsTarget extends Target {
   field: FieldOutput;
   placement: PlacementOutput;
+  /** MP5: the other type's silicone, asked for where that type is offered for this model. */
+  estimate: ReportsInputs['estimate'];
 }
 
 interface SolidTarget extends Target {
@@ -77,6 +83,8 @@ interface SolidTarget extends Target {
   drag: { rest: CutOpening[]; moved: CutOpening[] } | null;
   copies: CutOpening[];
   field: FieldOutput | null;
+  /** MP5: the two-part cover's openings on P, as placed, with the pins' fate. */
+  seam: ClamPlacement | null;
 }
 
 /** A result on screen: which keys it was built for, and the request it answered. */
@@ -288,6 +296,11 @@ export class Pipeline {
    * can mean the same face in the history it holds and in what it last saved.
    */
   onPlaneResolved: ((from: PlaneChoice, to: PlaneChoice) => void) | null = null;
+  /**
+   * MP5: called once the import of the model on screen is in, when its bodies are first known, so the store can check
+   * that the mold type on screen can still be used for it.
+   */
+  onImported: (() => void) | null = null;
   private loads = 0;
   private plane: PlaneChoice = DEFAULT_PLANE;
   private importInput: ImportInput = PLAIN_IMPORT;
@@ -319,6 +332,11 @@ export class Pipeline {
   funnel: Shown<PartMesh | null> | null = null;
   /** S9 on screen, under its own key, which may lag what shows by a job. */
   reports: Shown<GeometryReports> | null = null;
+  /**
+   * MP5: the other mold type's silicone, from the same reports job, for the Two-part tile and the "no saving" line, under
+   * the key of what was asked (estimateKeyOf), as its settings are not all S9's.
+   */
+  private estimateShown: { key: string; value: TypeEstimate | null } | null = null;
   diagnostics: ShownDiagnostic[] = [];
   /** What the pipeline itself has to say, such as a coarser cell after a crash. Kept until the next file. */
   private notes: Diagnostic[] = [];
@@ -437,6 +455,7 @@ export class Pipeline {
     this.notes = [];
     this.parsed = this.oriented = this.imported = this.footprint = this.field = this.placement = this.cover = this.base = this.funnel = null;
     this.reports = null;
+    this.estimateShown = null;
     this.reportsFailure = null;
     this.displayProxy = null;
     this.joined = null;
@@ -508,6 +527,16 @@ export class Pipeline {
       return null;
     }
     const others = shown.placement.openings.filter((o) => o.id !== id);
+    const seam = shown.seam;
+    if (seam) {
+      // MP5: on the seam a drop moves the opening along P only, to the nearest spot with room (G13.5); the pin keeps
+      // its stored a, so the one-piece cover finds it where it was (pinOnSeam).
+      const result = seamDrop(seamSpace(shown.space, seam, id), seam, opening.kind, x, y, others);
+      const b = seamBOf(seam.axis, result);
+      this.pins = [...this.pins.filter((pin) => pin.id !== id), pinOnSeam(this.pins.find((pin) => pin.id === id), id, opening.kind, seam.axis, seam.xs, b)];
+      this.changed();
+      return result;
+    }
     const result = dropOpening(shown.space, { kind: opening.kind, x, y }, others, firstPourPeak(shown.placement, id, this.run.silicone.t / 2));
     this.pins = [...this.pins.filter((pin) => pin.id !== id), { id, kind: opening.kind, x: result.x, y: result.y }];
     this.changed();
@@ -755,7 +784,7 @@ export class Pipeline {
 
   /** The keys of what the screen should show now. */
   keys(): Record<StageId, string> {
-    return stageKeys(this.run, this.inputs());
+    return typedKeys(this.run, this.inputs());
   }
 
   /**
@@ -979,7 +1008,7 @@ export class Pipeline {
    * every setting for the fit test, which reads the joint through the real builders.
    */
   exportKeyFor(want: ExportRequest['want']): string {
-    if (want === 'funnel') return stageKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 }).S16;
+    if (want === 'funnel') return typedKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 }).S16;
     if (want === 'fit-test') return hashString(JSON.stringify(this.run));
     return this.exportKey();
   }
@@ -1014,7 +1043,7 @@ export class Pipeline {
    * input, and the openings it is given, which the preview placed on its own field.
    */
   private exportKey(): string {
-    const keys = stageKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 });
+    const keys = typedKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 });
     const openings = this.placement?.value.placement.openings.map(({ kind, x, y }) => [kind, x, y]) ?? [];
     return hashString(JSON.stringify([keys.S13, keys.S15, keys.S16, openings]));
   }
@@ -1280,7 +1309,7 @@ export class Pipeline {
     }
     // MM2: as for the field: the import a job is running is not ended for a request that wants it and more.
     const builds = want.map((stage) => `${stage}:${keys[stage]}`);
-    const target = this.target<SolidTarget>(keys, { want, builds, drag, copies: ready && placement ? placement.copies : [], field: ready ? field : null }, ['solid', keys, want]);
+    const target = this.target<SolidTarget>(keys, { want, builds, drag, copies: ready && placement ? placement.copies : [], field: ready ? field : null, seam: ready && placement ? (placement.seam ?? null) : null }, ['solid', keys, want]);
     if (!this.failed.has(target.id)) this.solidGate.request(target);
   }
 
@@ -1295,12 +1324,47 @@ export class Pipeline {
     const field = this.field?.key === keys.S6 && this.field.mold === keys.S10 ? this.field.value : null;
     const placement = this.placement?.key === keys.S7 ? this.placement.value : null;
     const previewDone = !this.isStale() && !this.solidGate.busy && this.debounce === null;
-    if (this.reports?.key === keys.S9 || !previewDone || !field || !placement || this.oriented?.key !== keys.S2 || !this.modelMesh()) {
+    // MP5: the estimate reads settings no row of the type on screen reads, such as the bed, so it is asked under its own key.
+    const estimate = field ? this.estimateAsked(field) : null;
+    const estimateKey = estimateKeyOf(estimate);
+    if ((this.reports?.key === keys.S9 && this.estimateShown?.key === estimateKey) || !previewDone || !field || !placement || this.oriented?.key !== keys.S2 || !this.modelMesh()) {
       gate.cancelPending();
       return;
     }
-    const target = this.target<ReportsTarget>(keys, { field, placement }, ['reports', keys.S8, keys.S9]);
+    const target = this.target<ReportsTarget>(keys, { field, placement, estimate }, ['reports', keys.S8, keys.S9, estimateKey]);
     if (!this.failed.has(target.id)) gate.request(target);
+  }
+
+  /**
+   * MP5: what the reports job works out of the other type: the two-part cover's coarse estimate while the one-piece is on
+   * screen, the one-piece's silicone while the two-part is, at the settings a switch would give with every change kept;
+   * none where the two-part cover is not offered for this model, or a grid stands: the two-part cover makes one model,
+   * so against a grid's silicone its estimate would show a saving that is not there.
+   */
+  private estimateAsked(field: FieldOutput): ReportsInputs['estimate'] {
+    if (field.mold.offsets.length > 1) return null;
+    const type = moldTypeOf(this.run).id as MoldTypeId;
+    const other: MoldTypeId = type === 'clamshell' ? 'one-piece' : 'clamshell';
+    const origin = this.file?.origin;
+    const ctx = { bodies: this.imported?.value.bodies ?? null, triangles: this.parsed?.value.triangles ?? null, simplified: origin?.record != null };
+    if (MOLD_TYPES.clamshell.unavailable(ctx) !== null || ctx.bodies === null) return null;
+    const plan = planSwitch(this.params, other);
+    return { kind: other === 'clamshell' ? 'two-part' : 'one-piece', params: applySwitch(plan, plan.rows.map((row) => row.path)), cell: field.cell };
+  }
+
+  /**
+   * MP5: the other type's estimate, where it was worked out for the S9 on screen and for the settings, kind and cell an
+   * estimate would be asked at now; null until then, or where none is asked.
+   */
+  currentEstimate(): TypeEstimate | null {
+    if (!this.estimateShown || this.reports?.key !== this.keys().S9 || this.estimateStale()) return null;
+    return this.estimateShown.value;
+  }
+
+  /** Whether the estimate on screen was asked at other settings than one would be now. */
+  private estimateStale(): boolean {
+    const field = this.field?.value;
+    return field !== undefined && this.estimateShown?.key !== estimateKeyOf(this.estimateAsked(field));
   }
 
   private deriveReports(target: ReportsTarget, cached: Partial<Record<StageId, string>>): { message: ReportsJobMessage; transfer: Transferable[] } {
@@ -1327,6 +1391,7 @@ export class Pipeline {
           rim: target.field.rim,
           tiles: target.field.mold.offsets.length,
           ceiling: { leaves: placement.ceilingLeaves, uncovered: placement.uncovered },
+          estimate: target.estimate,
         },
       },
       transfer,
@@ -1342,6 +1407,7 @@ export class Pipeline {
       if (timings.S9 !== undefined) keep(this.reportTimes.S9, timings.S9);
       if (this.accept('reports', target, this.reports)) {
         this.reports = { key: target.keys.S9, rev: target.rev, value: outputs.S9 };
+        this.estimateShown = { key: estimateKeyOf(target.estimate), value: outputs.estimate ?? null };
         if (this.reportsFailure?.key === target.keys.S9) this.reportsFailure = null;
       }
     } else if (event.kind === 'failed' || event.kind === 'crashed') {
@@ -1389,8 +1455,14 @@ export class Pipeline {
     if (model) transfer.push(model.welded.positions.buffer, model.welded.indices.buffer);
     if (model && outside) transfer.push(outside.positions.buffer, outside.indices.buffer);
     const needsField = want.includes('S13') && cached.S12 !== keys.S12 && cached.S11 !== keys.S11;
-    const field = needsField && target.field ? { ...target.field.field, values: target.field.field.values.slice() } : null;
+    // MP5: the two-part cover's halves are cut from its side fields, not from H_top.
+    const clamField = target.field?.clam ?? null;
+    const field = needsField && target.field && !clamField ? { ...target.field.field, values: target.field.field.values.slice() } : null;
     if (field) transfer.push(field.values.buffer);
+    const sides = needsField && clamField ? (clamField.sides.map((side) => ({ field: { ...side.field, values: side.field.values.slice() }, frame: side.frame, hs: side.hs })) as [HalfField, HalfField]) : null;
+    if (sides) transfer.push(...sides.map((side) => side.field.values.buffer));
+    const { seam } = target;
+    const clam: ClamSolidInputs | undefined = clamField ? { sides, cuts: seam?.cuts ?? [], pinsKept: seam?.pinsKept ?? true, bolts: clamField.bolts, clips: clamField.clips } : undefined;
     // A job that only imports has no field yet, and none of its stages reads the rim.
     const rim = target.field?.rim ?? null;
     const offsets = target.field?.mold.offsets ?? [];
@@ -1422,6 +1494,7 @@ export class Pipeline {
           tol: params.quality.tinTolPreview,
           copies: target.copies,
           drag: target.drag,
+          ...(clam ? { clam } : {}),
         },
       },
       transfer,
@@ -1448,6 +1521,9 @@ export class Pipeline {
    */
   private tune(target: FieldTarget, ms: number): void {
     if (target.modelKey !== this.modelKey() || target.inputs.cellScale !== this.cellScale()) return;
+    // MP5 (G13.16): the two-part cover's T1 is past the plan's 150 ms on every example, so its preview is not coarsened
+    // to meet it; its budgets are its own rows of NODE_PREVIEW_MS.
+    if (moldTypeOf(target.params).id === 'clamshell') return;
     this.budgets.recordT1(ms);
     const tune = this.budgets.previewCellScale(this.tuneScale);
     if (tune === this.tuneScale) return;
@@ -1480,7 +1556,9 @@ export class Pipeline {
           const space = placementSpace(field, rim, mold.offsets, openingSizes(target.params));
           space.clearance = outputs.S7.clearance;
           space.fits = outputs.S7.fits;
-          this.placement = { key: target.keys.S7, rev: target.rev, value: { ...outputs.S7, space, copies: replicateOpenings(outputs.S7.placement.openings, space) } };
+          // MP5: on the seam the openings are cut as placed, each with its own zb, a hidden leaf's vent included.
+          const copies = outputs.S7.seam ? outputs.S7.seam.cuts : replicateOpenings(outputs.S7.placement.openings, space);
+          this.placement = { key: target.keys.S7, rev: target.rev, value: { ...outputs.S7, space, copies } };
         } else if (this.field?.key !== target.keys.S6) {
           keep(this.events, { kind: 'rejected', slot: 'placement', rev: target.rev, stale: true, t: target.params.silicone.t, at: this.now(), reason: 'field' });
         }
@@ -1495,6 +1573,7 @@ export class Pipeline {
 
   private onSolid(event: GateEvent<SolidTarget>): void {
     const { target } = event;
+    let importIn = false;
     if (event.kind === 'result') {
       const outputs = event.message.outputs as SolidOutputs;
       const kind = outputs.S15 ? 't2' : outputs.S13 ? (outputs.S13.provisional ? 'drag' : 'cut') : null;
@@ -1516,6 +1595,7 @@ export class Pipeline {
           this.error = null;
         }
         if (this.checkNumbering()) this.rev++;
+        importIn = true;
       }
       if (outputs.S2 && this.accept('footprint', target, this.footprint)) this.footprint = { key: target.keys.S2, rev: target.rev, value: outputs.S2 };
       if (outputs.S13 && this.accept('cover', target, this.cover)) this.cover = { key: target.keys.S13, mold: target.keys.S10, rev: target.rev, value: outputs.S13 };
@@ -1532,6 +1612,8 @@ export class Pipeline {
       this.handleFailure('solid', event);
     }
     this.update();
+    // Once this result is applied, so the store's check sees the import and changes the settings as a change of its own.
+    if (importIn) this.onImported?.();
   }
 
   /**
@@ -1665,7 +1747,10 @@ export class Pipeline {
     if (this.reports) {
       // The verdict's Show marks every place to cut, with the line of the cut.
       const hints: Marker[] = this.reports.value.demold.hints.map((h) => ({ at: h.at, seam: h.seam }));
-      all.push(...this.reports.value.diagnostics.map((d) => (d.code === 'demold-verdict' && hints.length > 0 ? { ...d, markers: hints } : d)));
+      // MP5: on the two-part cover, as its export gives them (onTheSeam).
+      const seam = this.placement?.value.seam ? this.placement.value.placement : null;
+      const reports = seam ? onTheSeam(this.reports.value, seam.openings, seam.diagnostics) : this.reports.value;
+      all.push(...reports.diagnostics.map((d) => (d.code === 'demold-verdict' && hints.length > 0 ? { ...d, markers: hints } : d)));
     }
     const reportsError = this.reportsError();
     if (reportsError) all.push({ code: 'reports-failed', severity: 'warning', message: `The demold and air reports could not be worked out: ${reportsError}` });
@@ -1731,7 +1816,7 @@ export class Pipeline {
     const quiet = !this.fieldGate.busy && !this.solidGate.busy && this.debounce === null;
     if (!quiet || (this.isStale() && this.error === null && this.file !== null)) return;
     // The reports come after the preview: done, failed, or not wanted at all.
-    const reportsDone = !this.reportsGate || !this.file || this.error !== null || (!this.reportsGate.busy && (this.reports?.key === this.keys().S9 || this.reportsError() !== null));
+    const reportsDone = !this.reportsGate || !this.file || this.error !== null || (!this.reportsGate.busy && ((this.reports?.key === this.keys().S9 && !this.estimateStale()) || this.reportsError() !== null));
     const ready = this.idleWaiters.filter((w) => !w.reports || reportsDone);
     if (ready.length === 0) return;
     this.idleWaiters = this.idleWaiters.filter((w) => !ready.includes(w));
@@ -1746,7 +1831,7 @@ export class Pipeline {
 
   /** The export-tier key of the conditioned field, which is all the wall check reads. */
   private wallKey(): string {
-    return stageKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 }).S6;
+    return typedKeys(this.run, { ...this.inputs(), tier: 'export', cellScale: 1 }).S6;
   }
 
   private cancelWalls(): void {
@@ -1796,6 +1881,11 @@ export class Pipeline {
     const message: WallsJobMessage = { t: 'walls', id: 1, params: this.run, inputs: { mesh: sent, transform: oriented.oriented.transform, modelErrorMm: this.modelErrorMm(), ...(outside ? { outside } : {}) } };
     worker.postMessage(message, [sent.positions.buffer, sent.indices.buffer, ...(outside ? [outside.positions.buffer, outside.indices.buffer] : [])]);
   }
+}
+
+/** MP5: the key an estimate is asked under: its kind, the settings a switch would give, and the cell. */
+function estimateKeyOf(estimate: ReportsInputs['estimate']): string {
+  return estimate ? hashString(JSON.stringify([estimate.kind, estimate.params, estimate.cell])) : 'none';
 }
 
 /** A plane choice as a maker reads it in a message. */

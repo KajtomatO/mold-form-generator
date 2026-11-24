@@ -21,6 +21,12 @@ import { Arena, withArena } from '../core/solid/arena';
 import type { Rect } from '../core/solid/rect';
 import { buildToolMesh, toolSolid } from '../core/solid/tool';
 import type { StageId } from '../app/stages';
+import { moldTypeOf } from '../core/mold/types';
+import { clamHalves as cutHalves, halfTool, type HalfField } from '../core/parts/clamshell';
+import { clipSpots, keyPose, keySolid, type ClipLayout } from '../core/parts/clips';
+import type { SeamBoltLayout } from '../core/parts/seamBolts';
+import type { ClamRim } from '../core/parts/rim';
+import { toMat4 } from '../core/base/orient';
 import { PLAIN_IMPORT, StageMiss, type ImportInput } from './fieldStages';
 
 /** A mesh as it travels to main for drawing: positions only, 3 per vertex. */
@@ -52,6 +58,26 @@ export interface SolidInputs {
   copies: CutOpening[];
   /** While an opening is dragged: the other openings' copies, and the dragged one's where it is now. */
   drag: { rest: CutOpening[]; moved: CutOpening[] } | null;
+  /** MP5: what the two-part cover's halves are cut from, in that type only. */
+  clam?: ClamSolidInputs;
+}
+
+/** MP5: the two-part cover's inputs to S11c and S12c, from S6x and S7c. `rim` above is its ClamRim. */
+export interface ClamSolidInputs {
+  /** The fine pair, neg first, sent only while the worker does not hold S11c. */
+  sides: [HalfField, HalfField] | null;
+  /** The openings on P as the halves cut them, and whether the seal keeps the pins. */
+  cuts: CutOpening[];
+  pinsKept: boolean;
+  bolts: SeamBoltLayout | null;
+  clips: ClipLayout | null;
+}
+
+/** MP5: the seam clips as the view draws them: one key's mesh, and its place at home at each ear pair. */
+export interface ClipsMesh {
+  key: PartMesh;
+  /** Column by column, the key's print pose to its place in the mold, with the way out from its end face, along +b or -b. */
+  spots: { matrix: number[]; out: [number, number, number] }[];
 }
 
 export interface ImportOutput {
@@ -82,7 +108,11 @@ export interface FootprintOutput {
 export interface SolidOutputs {
   S1?: ImportOutput;
   S2?: FootprintOutput;
-  S13?: PartMesh & { provisional: boolean; diagnostics: Diagnostic[] };
+  /**
+   * The cover; for the two-part cover both halves in one mesh, which the plastic and the hashes read, with each half
+   * (neg first) and the clips as the view draws them.
+   */
+  S13?: PartMesh & { provisional: boolean; diagnostics: Diagnostic[]; halves?: [PartMesh, PartMesh]; clips?: ClipsMesh | null };
   /** `merged` when the base holds the model's copies, as Mode B's does once the model is a solid. */
   S15?: PartMesh & { diagnostics: Diagnostic[]; merged: boolean };
   S16?: PartMesh | null;
@@ -110,6 +140,32 @@ interface ToolEntry {
   diagnostics: Diagnostic[];
 }
 
+/** Two meshes as one, the second's vertices after the first's: what the plastic and the hashes read of the halves. */
+export function joinMeshes(parts: readonly PartMesh[]): PartMesh {
+  const positions = new Float32Array(parts.reduce((n, part) => n + part.positions.length, 0));
+  const indices = new Uint32Array(parts.reduce((n, part) => n + part.indices.length, 0));
+  let p = 0, i = 0;
+  for (const part of parts) {
+    positions.set(part.positions, p);
+    const base = p / 3;
+    for (let k = 0; k < part.indices.length; k++) indices[i + k] = part.indices[k] + base;
+    p += part.positions.length;
+    i += part.indices.length;
+  }
+  return { positions, indices };
+}
+
+/** G13.10.16's key in its print pose and each ear pair's place for it at home (keyPose), for the view. */
+function clipsMesh(arena: Arena, layout: ClipLayout): ClipsMesh {
+  const key = meshOf(keySolid(arena, layout));
+  const spots = clipSpots(layout).map((spot) => {
+    const out = spot.end === 'b1' ? 1 : -1;
+    const dir: [number, number, number] = layout.axis === 'x' ? [0, out, 0] : [out, 0, 0];
+    return { matrix: toMat4(keyPose(layout, spot)), out: dir };
+  });
+  return { key, spots };
+}
+
 function meshOf(solid: Manifold): PartMesh {
   const mesh = solid.getMesh();
   if (mesh.numProp !== 3) throw new Error(`Expected positions only in a part, got ${mesh.numProp} properties per vertex.`);
@@ -134,6 +190,9 @@ export class SolidStages {
   private funnel: Held | null = null;
   /** The cover with every opening but the dragged one. Only while that drag lasts, and freed by any other job. */
   private dragRest: Held | null = null;
+  /** MP5: the two-part cover's tools (S11c) and halves (S12c), which stand in for the tool and cover body in that type. */
+  private clamTools: Held<{ tools: [Manifold, Manifold]; diagnostics: Diagnostic[] }> | null = null;
+  private clamHalves: Held<{ halves: [Manifold, Manifold]; diagnostics: Diagnostic[] }> | null = null;
   /** How often that cover was cut, which a drag should do once, on its first step. */
   dragRestCuts = 0;
 
@@ -149,8 +208,10 @@ export class SolidStages {
     const out: Partial<Record<StageId, string>> = {};
     if (this.model) out.S1 = this.model.key;
     if (this.footprint) out.S2 = this.footprint.key;
-    if (this.tool) out.S11 = this.tool.key;
-    if (this.coverBody) out.S12 = this.coverBody.key;
+    // MP5: only one type's entries stand at once, and the keys name the two-part cover's under the one-piece's ids.
+    const tool = this.tool ?? this.clamTools, body = this.coverBody ?? this.clamHalves;
+    if (tool) out.S11 = tool.key;
+    if (body) out.S12 = body.key;
     if (this.baseBody) out.S14 = this.baseBody.key;
     if (this.funnel) out.S16 = this.funnel.key;
     return out;
@@ -167,12 +228,12 @@ export class SolidStages {
 
   /** Live handles held between jobs: what a soak test watches besides the heap. */
   heldEntries(): number {
-    return [this.model, this.tool, this.coverBody, this.baseBody, this.funnel, this.dragRest].filter(Boolean).length;
+    return [this.model, this.tool, this.coverBody, this.baseBody, this.funnel, this.dragRest, this.clamTools, this.clamHalves].filter(Boolean).length;
   }
 
   clear(): void {
-    for (const held of [this.model, this.tool, this.coverBody, this.baseBody, this.funnel, this.dragRest]) held?.dispose();
-    this.model = this.tool = this.coverBody = this.baseBody = this.funnel = this.dragRest = null;
+    for (const held of [this.model, this.tool, this.coverBody, this.baseBody, this.funnel, this.dragRest, this.clamTools, this.clamHalves]) held?.dispose();
+    this.model = this.tool = this.coverBody = this.baseBody = this.funnel = this.dragRest = this.clamTools = this.clamHalves = null;
     this.footprint = null;
   }
 
@@ -300,10 +361,50 @@ export class SolidStages {
       return this.coverBody.value;
     };
 
+    // MP5: the two-part cover's base has its ridge as two bars along the pull (G13.7 step 7), under S14c's key.
+    const clam = moldTypeOf(params).id === 'clamshell';
+    if (clam) {
+      // Only one type's entries stand at once: the other's would only hold memory.
+      for (const held of [this.tool, this.coverBody, this.dragRest]) held?.dispose();
+      this.tool = this.coverBody = this.dragRest = null;
+    } else {
+      for (const held of [this.clamTools, this.clamHalves]) held?.dispose();
+      this.clamTools = this.clamHalves = null;
+    }
     const baseBody = (): Manifold => {
       if (this.baseBody?.key === keys.S14) return this.baseBody.value;
-      this.baseBody = timed('S14', () => keep(this.baseBody, keys.S14, (arena) => buildBaseBody(arena, rim())));
+      const ridge = clam ? { ridgeBars: (rim() as ClamRim).axis } : {};
+      this.baseBody = timed('S14', () => keep(this.baseBody, keys.S14, (arena) => buildBaseBody(arena, rim(), ridge)));
       return this.baseBody.value;
+    };
+
+    // S11c: each half's tool from its side field, the TIN dropped once its solid stands, one half after the other.
+    const clamTools = (): [Manifold, Manifold] => {
+      if (this.clamTools?.key === keys.S11) return this.clamTools.value.tools;
+      const sides = inputs.clam?.sides;
+      if (!sides) throw new StageMiss('S11c');
+      this.clamTools = timed('S11c', () => keep(this.clamTools, keys.S11, (arena) => {
+        const diagnostics: Diagnostic[] = [];
+        const tools = sides.map((side) => {
+          const { mesh, tool } = halfTool(arena, side, inputs.tol, inputs.tol);
+          diagnostics.push(...mesh.diagnostics);
+          return tool;
+        }) as [Manifold, Manifold];
+        return { tools, diagnostics };
+      }));
+      return this.clamTools.value.tools;
+    };
+
+    // S12c: the seal, the shared block and the halves, cut for the openings on P.
+    const clamHalves = (): { halves: [Manifold, Manifold]; diagnostics: Diagnostic[] } => {
+      if (this.clamHalves?.key === keys.S12) return this.clamHalves.value;
+      const tools = clamTools();
+      const given = inputs.clam!;
+      this.clamHalves = timed('S12c', () => keep(this.clamHalves, keys.S12, (arena) => {
+        const built = cutHalves(arena, rim() as ClamRim, tools, params, given.cuts, given.bolts, given.clips, { pinsKept: given.pinsKept });
+        return { halves: built.halves, diagnostics: built.diagnostics };
+      }));
+      return this.clamHalves.value;
     };
 
     const outputs: SolidOutputs = {};
@@ -321,7 +422,14 @@ export class SolidStages {
       outputs.S2 = timed('levels', () => ({ levels: classifyLevels(mesh, candidate, print, planeTol), diagnostics: print.diagnostics, overlap }));
     }
 
-    if (want.includes('S13')) {
+    if (want.includes('S13') && clam) {
+      const built = clamHalves();
+      outputs.S13 = timed('S13c', () => withArena(api, (arena) => {
+        const halves = built.halves.map(meshOf) as [PartMesh, PartMesh];
+        const diagnostics = [...this.clamTools!.value.diagnostics, ...built.diagnostics];
+        return { ...joinMeshes(halves), provisional: false, diagnostics, halves, clips: inputs.clam?.clips ? clipsMesh(arena, inputs.clam.clips) : null };
+      }));
+    } else if (want.includes('S13')) {
       const body = coverBody();
       outputs.S13 = timed('S13', () => withArena(api, (arena) => {
         const diagnostics = [...this.tool!.value.diagnostics];

@@ -1,6 +1,6 @@
 import { placementSettings, placeSeamOpenings, seamCutOpenings, type OpeningPin, type SeamBox, type SeamPlacement, type SeamRoom } from '../analysis/placement';
 import { modelStrip, seamTree, type SeamTree } from '../analysis/seam';
-import { boreRadius, openingSizes, placementSpace } from '../analysis/validate';
+import { boreRadius, openingSizes, placementSpace, type PlacementSpace } from '../analysis/validate';
 import { clipBelow } from '../mesh/clip';
 import { meshBounds, type Bounds, type WeldedMesh } from '../mesh/weld';
 import { resolveAuto } from '../params/defaults';
@@ -213,6 +213,8 @@ export function exactFootprint(prep: ClamshellPrep, fine: Pick<FineSplit, 'rim' 
 export interface SeamStage {
   /** H_top at the split (G13.4), which placement, the funnel check and the view's markers read. */
   top: Field;
+  /** The placement space on H_top the openings were checked in, which a drop on P is checked in too (MP5). */
+  space: PlacementSpace;
   tree: SeamTree;
   room: SeamRoom;
   placement: SeamPlacement;
@@ -279,5 +281,5 @@ export function placeSeam(prep: ClamshellPrep, fine: FineSplit, options: SeamSta
     removed: options.removed,
     centre: [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2],
   });
-  return { top, tree, room, placement, openings: seamCutOpenings(placement.openings, sizes) };
+  return { top, space, tree, room, placement, openings: seamCutOpenings(placement.openings, sizes) };
 }

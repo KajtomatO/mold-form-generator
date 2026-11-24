@@ -11,8 +11,11 @@ import { Section } from './Section';
 /** Why a typed spot was moved, in brackets, so a maker sees which rule it broke (FL: a flange's, most often). */
 const reasonOf = (reason: string | null): string => (reason ? ` (${reason})` : '');
 
-/** A coordinate box: typing a value and pressing Enter moves the opening there and pins it. */
-function CoordBox({ axis, value, onCommit, onBad }: { axis: 'x' | 'y'; value: number; onCommit: (value: number) => void; onBad: (bad: boolean) => void }) {
+/**
+ * A coordinate box: typing a value and pressing Enter moves the opening there and pins it. MP5: `held` makes it read
+ * only, with why as its title, as on the two-part cover's seam, where an opening's a is the split's.
+ */
+function CoordBox({ axis, value, held, onCommit, onBad }: { axis: 'x' | 'y'; value: number; held?: string; onCommit: (value: number) => void; onBad: (bad: boolean) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [bad, setBadState] = useState(false);
   const setBad = (next: boolean): void => {
@@ -39,6 +42,8 @@ function CoordBox({ axis, value, onCommit, onBad }: { axis: 'x' | 'y'; value: nu
         inputMode="decimal"
         autocomplete="off"
         data-axis={axis}
+        readOnly={held !== undefined}
+        title={held}
         // As in a parameter's box: with no typing pending, Ctrl+Z undoes the last step, such as a drop.
         data-undo={draft === null ? 'app' : undefined}
         value={draft ?? fixed(value, 2)}
@@ -67,14 +72,18 @@ function OpeningRow({ opening, label }: { opening: PlacedOpening; label: string 
   const removable = opening.kind === 'vent' && !opening.pinned;
   // Typing that is no number moves nothing, and the row says so, as a slider row does.
   const [bad, setBad] = useState({ x: false, y: false });
+  // MP5 (G13.5): on the two-part cover's seam an opening moves along P only, so the split's axis is held at xs.
+  const seam = store.pipeline.placement?.value.seam;
+  const along = seam ? (seam.axis === 'x' ? 'Y' : 'X') : null;
+  const held = (axis: 'x' | 'y'): string | undefined => (seam && seam.axis === axis ? `On the seam: it moves along ${along} only.` : undefined);
   return (
     <div class={`opening${opening.valid ? '' : ' invalid'}${drag ? ' moving' : ''}`} data-opening={opening.id} data-kind={opening.kind} data-pinned={opening.pinned}>
       <span class={`kind ${opening.kind}`} title={opening.valid ? `${label}, placed at the ${opening.role === 'pinned' ? 'position you gave' : opening.role}` : `${label} is not valid where it is`}>
         <i />
         {label}
       </span>
-      <CoordBox axis="x" value={at.x} onCommit={(x) => move(x, opening.y)} onBad={(b) => setBad((now) => ({ ...now, x: b }))} />
-      <CoordBox axis="y" value={at.y} onCommit={(y) => move(opening.x, y)} onBad={(b) => setBad((now) => ({ ...now, y: b }))} />
+      <CoordBox axis="x" value={at.x} held={held('x')} onCommit={(x) => move(x, opening.y)} onBad={(b) => setBad((now) => ({ ...now, x: b }))} />
+      <CoordBox axis="y" value={at.y} held={held('y')} onCommit={(y) => move(opening.x, y)} onBad={(b) => setBad((now) => ({ ...now, y: b }))} />
       <button
         type="button"
         class="mini"
@@ -117,6 +126,7 @@ export function PourSection() {
   const openings = store.pipeline.placement?.value.placement.openings ?? [];
   const flange = (store.pipeline.placement?.value.space.sizes.flangeRadius ?? 0) > 0;
   const removed = store.project.value.removed;
+  const seam = store.pipeline.placement?.value.seam !== undefined;
   return (
     <Section id="pour" title="Pour & funnel" reset={SECTION_PARAMS.pour}>
       {SECTION_PARAMS.pour.map((path) => (
@@ -126,6 +136,7 @@ export function PourSection() {
         <div class="openings" data-testid="openings">
           <p class="lead drag-lead">
             Drag a ring on the cover's top in the view to move an opening on every copy, or type a position.
+            {seam ? ' On the Two-part cover the openings sit on the seam and move along it only.' : ''}
             {flange ? " The dashed circle round each pour is where its funnel's flange will rest; vents stay outside it." : ''}
             <button
               type="button"

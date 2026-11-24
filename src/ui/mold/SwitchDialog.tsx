@@ -50,6 +50,8 @@ export function SwitchDialog() {
 
   const name = plan ? store.moldTypeName(plan.to) : '';
   const from = plan ? store.moldTypeName(plan.from) : '';
+  // MP5: the vents removed by hand go with the switch, which the lead says.
+  const back = plan ? store.removedBack(plan.to) : null;
   const toggle = (path: ParamPath, on: boolean): void => {
     const next = new Set(ticked);
     if (on) next.add(path);
@@ -96,6 +98,7 @@ export function SwitchDialog() {
           <h2 id="switch-title">Switching to {name}</h2>
           <p id="switch-lead" class="lead">
             These settings were changed by you and differ from the {name} defaults. Ticked settings keep your value.
+            {back ? ` ${back}` : null}
           </p>
           <div class="switch-table-wrap">
             <table class="switch-table">

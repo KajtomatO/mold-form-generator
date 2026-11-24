@@ -5,6 +5,8 @@ import { exportPlan, fieldSettings } from '../core/field/grid';
 import type { Bounds } from '../core/mesh/weld';
 import type { Params } from '../core/params/schema';
 import { boltNeeds } from '../core/parts/bolts';
+import { seamBoltNeeds } from '../core/parts/seamBolts';
+import type { ClamField } from '../workers/clamshellField';
 import type { Rim } from '../core/parts/rim';
 import type { Rect } from '../core/solid/rect';
 import { boltAdvice, GRAVITY, type BoltAdvice, type ClampAdvice } from '../core/report/clamp';
@@ -13,6 +15,7 @@ import { plasticDiagnostic, plasticEstimate, printabilityDiagnostics, type PartA
 import type { Marker, Pipeline, ShownDiagnostic } from './pipeline';
 import { paramValue, type ParamPath } from './stages';
 import type { Clearance } from '../workers/exportJob';
+import { onSeam, seamCheck, seamDrop, seamSpace } from './seamDrag';
 
 /** Values the sidebar and status strip show, read off what the pipeline has on screen. Pure: no DOM. */
 
@@ -53,10 +56,54 @@ export function previewSilicone(pipeline: Pipeline): { ml: number; grams: number
   const overlap = trimmed ?? pipeline.imported?.value.overlapVolume ?? 0;
   const raise = pipeline.run.quality.tinTolPreview;
   const sealedAir = pipeline.reports?.value.air.sealedAir ?? 0;
+  // MP5: the two-part cover's from its fine pair (G13.13), which took off the model alone, with the bores on P.
+  if (field.clam) {
+    const bores = pipeline.placement ? boreSilicone(pipeline.placement.value.copies.filter((c) => !(c.kind === 'vent' && c.hidden)), field.field, field.rim.Zt) : 0;
+    const ml = field.clam.siliconeMl + (overlap - sealedAir + bores) / 1000;
+    return { ml, grams: ml * pipeline.run.silicone.density };
+  }
   const volume = siliconeVolume(field.field, { exteriorVolume: oriented.modelVolume - overlap, tiles: field.mold.offsets.length, sealedAir, raise });
   const bores = pipeline.placement ? boreSilicone(pipeline.placement.value.copies, field.field, field.rim.Zt) : 0;
   const ml = volume.ml + bores / 1000;
   return { ml, grams: ml * pipeline.run.silicone.density };
+}
+
+/** G13.13: under this share saved, the two-part cover's line says it saves nothing worth the split on this model. */
+export const NO_SAVING_SHARE = 0.03;
+
+/**
+ * MP5: what the two-part cover saves against the one-piece cover at the same settings, from the preview on screen and
+ * the reports job's estimate of the other type; null until both are in, or where the two-part cover is not offered.
+ */
+export function typeSaving(pipeline: Pipeline): { ml: number; share: number; twoPartMl: number; onePieceMl: number } | null {
+  const shown = previewSilicone(pipeline), estimate = pipeline.currentEstimate();
+  if (!shown || !estimate) return null;
+  const clam = pipeline.field?.value.clam !== undefined;
+  if ((estimate.kind === 'one-piece') !== clam) return null;
+  const [twoPartMl, onePieceMl] = clam ? [shown.ml, estimate.ml] : [estimate.ml, shown.ml];
+  if (!(onePieceMl > 0)) return null;
+  return { ml: onePieceMl - twoPartMl, share: (onePieceMl - twoPartMl) / onePieceMl, twoPartMl, onePieceMl };
+}
+
+/** MP5: the Two-part tile's line, "Saves about N ml (P%)", or that it saves nothing here (G13.13). */
+export function savingText(saving: ReturnType<typeof typeSaving>): string | null {
+  if (!saving) return null;
+  if (saving.share < NO_SAVING_SHARE) return 'No saving on this model';
+  return `Saves about ${savingMl(saving.ml)} ml (${Math.round(saving.share * 100)}%)`;
+}
+
+/**
+ * MP5: the Two-part tile's title past its blurb. Each side compares a coarse estimate of the other type with its own
+ * preview, so the figure is worked out again from the fine pair once the Two-part cover is on screen.
+ */
+export function savingTitle(saving: ReturnType<typeof typeSaving>): string | null {
+  if (!saving) return null;
+  if (saving.share < NO_SAVING_SHARE) return 'On this model it saves no silicone worth the split.';
+  return `On this model it saves about ${savingMl(saving.ml)} ml (${Math.round(saving.share * 100)}%) against a One-piece cover at the same settings; the figure is worked out again once it is on screen.`;
+}
+
+function savingMl(ml: number): string {
+  return ml.toFixed(ml < 10 ? 1 : 0);
 }
 
 /** G6: the pitch shown is always the export plan's, as the parts are placed on it. */
@@ -88,7 +135,8 @@ export function autoValue(path: ParamPath, pipeline: Pipeline): number | null {
     case 'quality.cellPreview':
       return pipeline.field?.value.cell ?? null;
     case 'bolts.length':
-      return boltNeeds(params).autoLength;
+      // MP5: the two-part cover's seam bolts have their own auto length (G13.10.2), 10 mm at M3 where the corner bolts' is 12.
+      return params.mold.type === 'clamshell' ? seamBoltNeeds(params).autoLength : boltNeeds(params).autoLength;
     default:
       return null;
   }
@@ -121,6 +169,22 @@ export const DIAGNOSTIC_PARAM: Record<string, ParamPath> = {
   'seam-flange': 'funnel.flangeWidth',
   // MP2: the seal's pins, dropped when the seam's top corners have no room.
   'seam-pins-dropped': 'clamshell.pins',
+  // MP5: the two-part cover's own lines from its stages (G13.3, G13.6, G13.10, G13.13), under the rows they name. Its
+  // "no saving" line advises the other type, and its hold line is drawn in Cover & joint already, so neither has a row.
+  'clamshell-bed': 'print.bedX',
+  'seam-wall-raised': 'cover.wall',
+  'seam-bolt-no-room': 'clamshell.fastener',
+  'seam-bolt-single': 'clamshell.fastener',
+  'seam-bolt-held-back': 'clamshell.fastener',
+  'seam-bolt-short': 'bolts.length',
+  'seam-bolt-long': 'bolts.length',
+  'seam-bolt-wedge': 'clamshell.fastener',
+  'seam-top-span': 'clamshell.fastener',
+  'clips-no-room': 'clamshell.fastener',
+  'clips-rows-lowered': 'clips.rows',
+  'clips-single': 'clips.rows',
+  'clips-hold': 'clips.rows',
+  'clips-wedge': 'clamshell.fastener',
   // deriveRim
   'edge-raised': 'grid.edge',
   'corner-clamped': 'base.cornerRadius',
@@ -186,6 +250,26 @@ export function siliconeAdvice(params: Params, rim: Rim | null): Diagnostic[] {
 
 const RANK = { error: 0, warning: 1, info: 2 } as const;
 
+/** G13.13's "no saving on this model", on the two-part cover where it saves under NO_SAVING_SHARE of the one-piece's silicone. */
+function noSaving(pipeline: Pipeline): Diagnostic[] {
+  const line = pipeline.field?.value.clam ? noSavingLine(typeSaving(pipeline)) : null;
+  return line ? [line] : [];
+}
+
+/** MP5 (G13.10.11, G13.10.19): the hold line on the card too, as an info line, once the fine pair is in. */
+function seamHoldOnCard(pipeline: Pipeline): Diagnostic[] {
+  const clam = pipeline.field?.value.clam;
+  const line = clam ? seamHoldLine(clam) : null;
+  return line ? [{ code: 'seam-hold', severity: 'info', message: line }] : [];
+}
+
+/** The line itself, for a saving worked out on the two-part cover; null where it saves NO_SAVING_SHARE or more. */
+export function noSavingLine(saving: ReturnType<typeof typeSaving>): Diagnostic | null {
+  if (!saving || saving.share >= NO_SAVING_SHARE) return null;
+  const more = saving.ml < 0 ? `takes ${(-saving.ml).toFixed(1)} ml more silicone` : `saves only ${saving.ml.toFixed(1)} ml of silicone`;
+  return { code: 'clamshell-no-saving', severity: 'info', message: `No saving on this model: the Two-part cover ${more} than a One-piece cover at the same settings (${saving.twoPartMl.toFixed(1)} against ${saving.onePieceMl.toFixed(1)} ml), as its ceilings slope to the seam over what a flat top would cover. A One-piece cover makes the same mold with one part less.` };
+}
+
 /**
  * The plan's printability checks for the state on screen, from S10's rim alone: the parts against the
  * bed and the ridge against the nozzle. Arithmetic, so they show with the first field and need no report.
@@ -193,6 +277,8 @@ const RANK = { error: 0, warning: 1, info: 2 } as const;
 export function printabilityOnScreen(pipeline: Pipeline): Diagnostic[] {
   const field = pipeline.field?.value, oriented = pipeline.oriented?.value;
   if (!field || !oriented) return [];
+  // MP5: the two-part cover's halves are checked against the bed in their own poses by S6c (G13.3's clamshell-bed).
+  if (field.clam) return printabilityDiagnostics(pipeline.run, field.rim, { offsets: field.mold.offsets, modelTop: oriented.bounds.max[2] }).filter((d) => d.code !== 'bed-turn' && d.code !== 'bed-too-small');
   return printabilityDiagnostics(pipeline.run, field.rim, { offsets: field.mold.offsets, modelTop: (pipeline.planBounds() ?? oriented.bounds).max[2] });
 }
 
@@ -204,7 +290,7 @@ export function allDiagnostics(pipeline: Pipeline): ShownDiagnostic[] {
   const status = pipeline.status();
   const error: ShownDiagnostic[] = status.error ? [{ code: 'pipeline-error', severity: 'error', message: status.error }] : [];
   const plastic = plasticOnScreen(pipeline);
-  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.run, pipeline.field?.value.rim ?? null), ...printabilityOnScreen(pipeline), ...(plastic ? [plasticDiagnostic(plastic, pipeline.run)] : []), ...pipeline.exportNotes()];
+  const all = [...error, ...pipeline.diagnostics, ...siliconeAdvice(pipeline.run, pipeline.field?.value.rim ?? null), ...printabilityOnScreen(pipeline), ...(plastic ? [plasticDiagnostic(plastic, pipeline.run)] : []), ...noSaving(pipeline), ...seamHoldOnCard(pipeline), ...pipeline.exportNotes()];
   return all.sort((a, b) => RANK[a.severity] - RANK[b.severity]);
 }
 
@@ -293,6 +379,27 @@ export function boltFigure(pipeline: Pipeline): BoltAdvice | null {
   const reports = pipeline.reports?.value;
   if (!bolts || !reports) return null;
   return boltAdvice(reports.lift.forceN, pipeline.run.print.tapeStrip, bolts);
+}
+
+/**
+ * MP5: the two-part cover's hold in one line, as the sidebar and the card give it (G13.10.14, G13.10.19, G13.10.9), from
+ * the fine pair on screen, or null until it is in.
+ */
+export function seamHoldLine(clam: ClamField | null): string | null {
+  if (!clam) return null;
+  const needs = `${clam.holdN.toFixed(0)} N the seam needs`;
+  if (clam.bolts && clam.boltAdvice) {
+    const { count, perEnd, size, length } = clam.bolts;
+    if (count === 0) return 'No seam bolts fit these halves: see the error under Seam fasteners.';
+    return `Held by ${count} ${size} x ${length} mm seam bolts, ${perEnd} on each end: ${clam.boltAdvice.boltsHoldN} N together, against the ${needs}.`;
+  }
+  if (clam.clips && clam.clipAdvice) {
+    const { count, zs } = clam.clips;
+    if (count === 0) return 'No seam clips fit these halves: see the error under Seam fasteners.';
+    return `Held by ${count} printed clips, ${zs.length} on each end: about ${clam.clipAdvice.clipsHoldN} N together (40 N each, an estimate for printed plastic), against the ${needs}.`;
+  }
+  const belts = clam.belts;
+  return `Held by two clamps across the back faces, each through a board, or ${belts ? `${belts.count} tape belts round all four walls` : 'tape belts round all four walls'}, against the ${needs}.`;
 }
 
 /** The radius an opening shows at the top: its seat's for a pour, its mouth's for a vent. */
@@ -432,6 +539,14 @@ export function dragCheck(pipeline: Pipeline, id: string, x: number, y: number):
   const opening = shown?.placement.openings.find((o) => o.id === id);
   if (!shown || !opening) return null;
   const others = shown.placement.openings.filter((o) => o.id !== id);
+  // MP5: on the two-part cover an opening moves along P, with the seal's room beside it (G13.5).
+  if (shown.seam) {
+    const at = onSeam(shown.seam, opening.kind, x, y);
+    const space = seamSpace(shown.space, shown.seam, id);
+    const check = seamCheck(space, shown.seam, at, others);
+    const drop = seamDrop(space, shown.seam, opening.kind, x, y, others);
+    return { valid: check.valid, problems: check.problems, reason: refusalReason(check.problems, opening.kind), lands: drop.valid ? { x: drop.x, y: drop.y } : null, warnings: [] };
+  }
   const spot = { kind: opening.kind, x, y };
   const { valid, problems } = checkOpening(shown.space, spot, others);
   // The same call as the pipeline's drop, so what the tip says is what the drop does.

@@ -31,6 +31,7 @@ import { DEFAULT_MOLD_TYPE, MOLD_TYPE_LIST, MOLD_TYPES, moldTypeOf, type MoldTyp
 import { defaultOf } from '../core/params/defaults';
 import { MOLD_TYPE_UI, type MoldTypeUi } from '../ui/mold/moldTypeUi';
 import { applySwitch, planSwitch, typeOnOpen, unavailableNotice, type SwitchPlan } from './moldSwitch';
+import { onSeam } from './seamDrag';
 
 export type Theme = 'dark' | 'light';
 
@@ -260,6 +261,9 @@ const SAVES: Record<ExportWant, { suffix: string; file: string | null; mime: str
   'fit-test': { suffix: '-fit-test.zip', file: null, mime: 'application/zip' },
 };
 
+/** MP5: the two-part cover's halves, which its Cover button saves together. */
+const HALVES_SAVE = { suffix: '-halves.zip', file: null, mime: 'application/zip' } as const;
+
 /**
  * The UI's state. The project, which is what undo and project files will keep, is the pipeline's:
  * every action here goes to the pipeline, and `project` mirrors it after each change, so there is one
@@ -383,6 +387,7 @@ export class Store {
       // project opened in full has its plane checked, and that sets it.
       if (this.saved && samePlane(this.saved.plane, from)) this.saved = { ...this.saved, plane: to };
     };
+    pipeline.onImported = () => this.recheckType();
     pipeline.subscribe(() => {
       const next = pipeline.project(), now = this.project.value;
       if (next.params !== now.params || next.plane !== now.plane || next.pins !== now.pins || next.removed !== now.removed) this.project.value = next;
@@ -1032,7 +1037,7 @@ export class Store {
         : null;
     // MT: the file's type with no window, or the one-piece with a notice where its type is not available here. The
     // model's triangles are counted from the STL in memory, exactly, as its header or its text gives them; its bodies
-    // are not known until its import, so only what is known counts (MP5 checks the rest).
+    // are not known until its import, so only what is known counts (recheckType checks the rest once it is in, MP5).
     const triangles = estimateTriangles(opened.stl!, opened.stl!.length);
     const typed = this.typedProject(projectOf(file), { bodies: null, triangles: triangles.exact ? triangles.triangles : null, simplified: origin?.record != null });
     this.pipeline.loadProject(opened.stl!, file.model, typed.project, file.basePlane, opened.stlSha256, { format: opened.from, appVersion: file.appVersion }, origin);
@@ -1067,7 +1072,7 @@ export class Store {
     this.switching.value = null;
     const same = file.modelSha256 !== null ? file.modelSha256 === this.pipeline.modelSha256 : file.model === current;
     // MT: its type with no window, or the one-piece with a notice where the type is not available for this model.
-    const typed = this.typedProject(same ? projectOf(file) : { ...this.pipeline.project(), params: file.params }, this.typeContext());
+    const typed = this.typedProject(same ? projectOf(file) : { ...this.pipeline.project(), params: file.params }, this.typeContext(), same ? file.params.mold.type : this.moldType());
     const project = typed.project;
     if (typed.note) notes.unshift(typed.note);
     // Steps already in the history are the user's own: a resolution of the file's plane, even one found
@@ -1102,12 +1107,45 @@ export class Store {
    * MT: a project's settings as they open here: its own type, or the one-piece where that type is not available
    * for what is known of the model, with the notice that says so, every other value kept.
    */
-  private typedProject(project: Project, ctx: TypeContext): { project: Project; note: ProjectNote | null } {
+  private typedProject(project: Project, ctx: TypeContext, removedFor: string = project.params.mold.type): { project: Project; note: ProjectNote | null } {
     const { params, unavailable } = typeOnOpen(project.params, ctx);
     if (!unavailable) return { project, note: null };
     const names = this.moldTypeUi.value;
     const message = unavailableNotice(names[unavailable.type]?.name ?? unavailable.type, unavailable.reason, names[DEFAULT_MOLD_TYPE].name);
-    return { project: { ...project, params }, note: { severity: 'warning', message } };
+    // MP5: removed vents made in the type given up name other high points in the one-piece cover, so they go with that
+    // type (makeSwitch). `removedFor` is the type they were made in: the file's, or the screen's where they are its.
+    const count = removedFor === unavailable.type ? project.removed.length : 0;
+    const back = count === 0 ? '' : ` ${count === 1 ? 'The vent it removed comes back' : `The ${count} vents it removed come back`}, as the ${names[DEFAULT_MOLD_TYPE].name} places its own.`;
+    return { project: { ...project, params, removed: count > 0 ? [] : project.removed }, note: { severity: 'warning', message: message + back } };
+  }
+
+  /**
+   * MP5: the re-check MT left for once the model is known. A .moldproj opens with its triangles counted from its STL, but
+   * its bodies are known only after the import; and a plain STL or a gallery model opened while the Two-part cover is on
+   * screen keeps the type. Either way, once the import is in, a type that cannot be used for this model, as with more than
+   * one body, or past G1.8's limit and not simplified, gives way to the one-piece cover, every other setting kept, as one
+   * step with its notice: no step of the history, as it is how the model opens, and what was saved is the same file's.
+   */
+  private recheckType(): void {
+    const type = this.moldType();
+    if (type === DEFAULT_MOLD_TYPE) return;
+    const reason = MOLD_TYPES[type].unavailable(this.typeContext());
+    if (reason === null) return;
+    const before = this.pipeline.project();
+    this.switching.value = null;
+    const back = this.removedBack(DEFAULT_MOLD_TYPE);
+    this.pipeline.setParams((params) => setParamValue(params, 'mold.type', DEFAULT_MOLD_TYPE));
+    // As with a switch (makeSwitch), the removed vents name other high points in the other type, so they go with it.
+    if (back) this.pipeline.setRemoved([]);
+    if (this.saved && sameProject(this.saved, before)) this.saved = this.pipeline.project();
+    const name = this.moldTypeName(type), opened = this.moldTypeName(DEFAULT_MOLD_TYPE);
+    const project = this.projectName.value;
+    const message = project !== null
+      ? unavailableNotice(name, reason, opened)
+      : `The ${name} cannot be used for this model, because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}. The mold is a ${opened} instead, with every other setting kept.`;
+    const note: ProjectNote = { severity: 'warning', message: back ? `${message} ${back}` : message };
+    const shown = this.fileNotice.value;
+    this.fileNotice.value = shown && shown.severity !== 'error' ? { ...shown, severity: 'warning', notes: [...shown.notes, note] } : { severity: 'warning', message: project !== null ? `Opened ${project}.` : `Opened ${this.pipeline.modelName ?? 'the model'}.`, notes: [note] };
   }
 
   /** MT: what the mold types' `unavailable` knows of the model on screen. */
@@ -1147,8 +1185,25 @@ export class Store {
     const type = MOLD_TYPES[to as MoldTypeId];
     if (type.unavailable(this.typeContext()) !== null) return;
     const plan = planSwitch(this.pipeline.params, to as MoldTypeId);
-    if (plan.rows.length === 0) this.makeSwitch(plan, []);
-    else this.switching.value = plan;
+    if (plan.rows.length === 0) {
+      // With no window to say so, the vents the switch brings back are told in a notice of their own.
+      const back = this.removedBack(to);
+      this.makeSwitch(plan, []);
+      if (back) this.fileNotice.value = { severity: 'info', message: `Switched to the ${this.moldTypeName(to)}.`, notes: [{ severity: 'info', message: back }] };
+    } else {
+      this.switching.value = plan;
+    }
+  }
+
+  /**
+   * MP5: what a switch to `to` says of the vents removed by hand, which go with it (makeSwitch), or null where none
+   * were removed. The switch window's lead carries it too.
+   */
+  removedBack(to: string): string | null {
+    const count = this.pipeline.project().removed.length;
+    if (count === 0) return null;
+    const vents = count === 1 ? 'The vent you removed comes back' : `The ${count} vents you removed come back`;
+    return `${vents}, as the ${this.moldTypeName(to)} places its own.`;
   }
 
   /**
@@ -1167,11 +1222,14 @@ export class Store {
     // A plan made on settings that have since changed would write the old ones back: nothing is made.
     if (plan.params !== this.pipeline.params) return;
     const next = applySwitch(plan, keep);
-    this.change(`switching to ${this.moldTypeName(plan.to)}`, null, () =>
+    this.change(`switching to ${this.moldTypeName(plan.to)}`, null, () => {
       this.pipeline.setParams((params) => {
         for (const group of Object.keys(next) as (keyof Params)[]) (params as Record<string, unknown>)[group] = next[group];
-      }),
-    );
+      });
+      // MP5 (G13.5): a removed vent is named by its rank in its type's own tree, so in the other type the same id is
+      // another high point: the removed vents go with the switch, in the same step. A pin keeps its place either way.
+      if (this.pipeline.project().removed.length > 0) this.pipeline.setRemoved([]);
+    });
   }
 
   /**
@@ -1370,6 +1428,9 @@ export class Store {
   dragOpening(id: string, x: number, y: number, pointer: { x: number; y: number }): void {
     const openings = this.pipeline.placement?.value.placement.openings ?? [];
     const opening = openings.find((o) => o.id === id);
+    // MP5: on the two-part cover an opening moves along P only (G13.5).
+    const seam = this.pipeline.placement?.value.seam;
+    if (seam && opening) ({ x, y } = onSeam(seam, opening.kind, x, y));
     const check = dragCheck(this.pipeline, id, x, y);
     if (!opening || !check) return;
     this.drag.value = { id, kind: opening.kind, label: openingLabel(openings, id), x, y, check, pointer };
@@ -1407,7 +1468,8 @@ export class Store {
    */
   async exportFile(want: ExportWant): Promise<void> {
     if (this.exportState.value.phase === 'running') return;
-    const save = SAVES[want];
+    // MP5: the two-part cover's Cover button saves both halves, each in its print pose, in a ZIP of their own.
+    const save = want === 'cover' && this.moldType() === 'clamshell' ? HALVES_SAVE : SAVES[want];
     const name = downloadName(this.pipeline.modelName ?? 'mold', save.suffix);
     this.exportState.value = { phase: 'running', want, step: 'start', done: 0, total: 1 };
     try {

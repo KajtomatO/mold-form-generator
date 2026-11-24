@@ -1553,7 +1553,8 @@ describe('MT: format 7 carries the mold type', () => {
   const pipelines: Pipeline[] = [];
   afterEach(() => {
     pipelines.splice(0).forEach((p) => p.dispose());
-    disableMoldType('clamshell');
+    // MP5 builds the two-part cover; a test that marks it "Not built yet" puts it back.
+    enableMoldType('clamshell');
   });
   const projectFiles = new ProjectFiles(inProcessProject);
   const store = (): Store => {
@@ -1638,7 +1639,8 @@ describe('MT: format 7 carries the mold type', () => {
       g.basePlane = null;
     });
     const moldproj = (): File => new File([packProject(projectJson(f), cube).slice()], 'cube.moldproj');
-    // Not built yet, as outside the tests until MP5.
+    // A type this version does not build, as the two-part cover was until MP5.
+    disableMoldType('clamshell');
     const shut = store();
     await shut.openFile(moldproj());
     expect(shut.pipeline.params.mold.type).toBe('one-piece');
@@ -1701,4 +1703,134 @@ describe('MT: format 7 carries the mold type', () => {
     expect(s.pipeline.params.mold.type).toBe('one-piece');
     expect(s.history.undoLabel).toBe('opening the settings of project.json');
   });
+});
+
+describe('MP5: the mold type checked again once the model is known', () => {
+  const pipelines: Pipeline[] = [];
+  afterEach(() => {
+    pipelines.splice(0).forEach((p) => p.dispose());
+  });
+  const projectFiles = new ProjectFiles(inProcessProject);
+  const store = (): Store => {
+    const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
+    pipelines.push(p);
+    return new Store(p, () => 0, projectFiles);
+  };
+  const twoBodies = (): Uint8Array => asciiStl(toSoup(joinMeshes(box([0, 0, 0], [20, 20, 10]), box([40, 0, 0], [60, 20, 10]))), 'two.stl');
+  const NOTICE = 'This project is a Two-part cover, which cannot be used for this model, because it makes one model, and this file holds 2. It opened as a One-piece cover, with every other setting as saved.';
+
+  it('a Two-part .moldproj whose model turns out to hold two bodies opens as the one-piece cover once its import is in, with the notice, its values kept and nothing to undo', async () => {
+    const stl = twoBodies();
+    const params = defaultParams('clamshell');
+    params.clamshell.ceilingDeg = 35;
+    const f = file((g) => {
+      g.params = params;
+      g.model = 'two.stl';
+      g.modelSha256 = nodeSha(stl);
+      g.basePlane = null;
+    });
+    const s = store();
+    await s.openFile(new File([packProject(projectJson(f), stl).slice()], 'two.moldproj'));
+    // Opened as saved: its bodies are not known until the import.
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    await s.pipeline.idle();
+    expect(s.pipeline.imported!.value.bodies).toBe(2);
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.pipeline.params.clamshell.ceilingDeg).toBe(35);
+    expect(s.fileNotice.value).toEqual({ severity: 'warning', message: 'Opened two.moldproj.', notes: [{ severity: 'warning', message: NOTICE }] });
+    // How the model opens, so no step to undo, and leaving loses nothing.
+    expect(s.history.depth).toEqual({ undo: 0, redo: 0 });
+    expect(s.unsaved()).toBe(false);
+    // The one-piece mold is built for it.
+    expect(s.pipeline.field?.value.clam).toBeUndefined();
+    expect(s.pipeline.cover?.value.halves).toBeUndefined();
+  }, 120_000);
+
+  it('a plain STL of two bodies opened while the Two-part cover is on screen gives way to the one-piece cover, with its own notice', async () => {
+    const s = store();
+    s.load(loadGallery('sphere'), 'sphere.stl');
+    await s.pipeline.idle();
+    s.requestSwitch('clamshell');
+    expect(s.switching.value).toBeNull();
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    await s.pipeline.idle();
+    expect(s.pipeline.cover?.value.halves).toHaveLength(2);
+    s.load(twoBodies(), 'two.stl');
+    await s.pipeline.idle();
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.fileNotice.value).toEqual({
+      severity: 'warning',
+      message: 'Opened two.stl.',
+      notes: [{ severity: 'warning', message: 'The Two-part cover cannot be used for this model, because it makes one model, and this file holds 2. The mold is a One-piece cover instead, with every other setting kept.' }],
+    });
+    expect(s.unsaved()).toBe(false);
+  }, 120_000);
+
+  it('its removed vents go with the Two-part cover, as they name its own high points, with a sentence in the notice', async () => {
+    const stl = twoBodies();
+    const f = file((g) => {
+      g.params = defaultParams('clamshell');
+      g.model = 'two.stl';
+      g.modelSha256 = nodeSha(stl);
+      g.basePlane = null;
+      g.removed = ['b0:vent:1'];
+    });
+    const s = store();
+    await s.openFile(new File([packProject(projectJson(f), stl).slice()], 'two.moldproj'));
+    await s.pipeline.idle();
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.pipeline.project().removed).toEqual([]);
+    expect(s.fileNotice.value?.notes).toEqual([{ severity: 'warning', message: `${NOTICE} The vent you removed comes back, as the One-piece cover places its own.` }]);
+    expect(s.history.depth).toEqual({ undo: 0, redo: 0 });
+    expect(s.unsaved()).toBe(false);
+  }, 120_000);
+
+  it('a gallery model of two bodies opened while the Two-part cover is on screen gives way to the one-piece cover, with one notice', async () => {
+    const s = store();
+    s.galleryFetch = async (entry) => new Blob([(entry.id === 'sphere' ? twoBodies() : loadGallery(entry.id)).slice()]);
+    await s.openGallery('cube');
+    await s.pipeline.idle();
+    s.requestSwitch('clamshell');
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    await s.openGallery('sphere');
+    await s.pipeline.idle();
+    expect(s.pipeline.imported!.value.bodies).toBe(2);
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.fileNotice.value?.notes).toEqual([{ severity: 'warning', message: 'The Two-part cover cannot be used for this model, because it makes one model, and this file holds 2. The mold is a One-piece cover instead, with every other setting kept.' }]);
+    expect(s.history.depth.undo).toBe(0);
+    expect(s.unsaved()).toBe(false);
+  }, 120_000);
+
+  it('a model past G1.8\'s triangle limit and not simplified gives way to the one-piece cover too, with one notice', async () => {
+    const s = store();
+    s.load(loadGallery('sphere'), 'sphere.stl');
+    await s.pipeline.idle();
+    s.requestSwitch('clamshell');
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    // A model of millions of triangles is too slow here: the context the check reads counts the next one past the limit.
+    const real = s.typeContext.bind(s);
+    vi.spyOn(s, 'typeContext').mockImplementation(() => ({ ...real(), triangles: 2_000_001, simplified: false }));
+    s.load(loadGallery('cube'), 'cube.stl');
+    await s.pipeline.idle();
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.fileNotice.value?.notes).toEqual([{ severity: 'warning', message: 'The Two-part cover cannot be used for this model, because past 2,000,000 triangles it needs the model simplified when it is opened. The mold is a One-piece cover instead, with every other setting kept.' }]);
+    expect(s.history.depth.undo).toBe(0);
+    expect(s.unsaved()).toBe(false);
+  }, 120_000);
+
+  it('a gallery model of one body keeps the Two-part cover, with no notice; negative control for the check', async () => {
+    const s = store();
+    s.galleryFetch = async (entry) => new Blob([loadGallery(entry.id).slice()]);
+    await s.openGallery('cube');
+    await s.pipeline.idle();
+    s.requestSwitch('clamshell');
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    // A gallery model is replaced with no question.
+    await s.openGallery('sphere');
+    await s.pipeline.idle();
+    expect(s.pipeline.modelName).toBe('sphere.stl');
+    expect(s.pipeline.params.mold.type).toBe('clamshell');
+    expect(s.fileNotice.value).toBeNull();
+    expect(s.pipeline.cover?.value.halves).toHaveLength(2);
+  }, 120_000);
 });

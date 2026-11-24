@@ -103,7 +103,7 @@ function filled(record: RepairedText): string {
 
 const grid = (record: RepairedText): string => `${(record.cell ?? 0).toFixed(2)} mm`;
 
-const thousands = (n: number): string => n.toLocaleString('en-US');
+export const thousands = (n: number): string => n.toLocaleString('en-US');
 
 /** How far a simplified copy lies from the file, as README.txt says it. */
 function within(simplified: NonNullable<ReadmeInput['simplified']>): string {
@@ -111,15 +111,15 @@ function within(simplified: NonNullable<ReadmeInput['simplified']>): string {
   return `within ${errorMm.toFixed(3)} mm of ${errorMm > maxErrorMm ? 'it, as close as the copy could keep to it' : 'it'}`;
 }
 
-function heading(title: string): string[] {
+export function heading(title: string): string[] {
   return ['', title.toUpperCase(), '-'.repeat(title.length)];
 }
 
-const mm = (value: number, digits = 1): string => `${Number(value.toFixed(digits))} mm`;
+export const mm = (value: number, digits = 1): string => `${Number(value.toFixed(digits))} mm`;
 
-const grams = (g: number): string => (g >= 1000 ? `${(g / 1000).toFixed(2)} kg` : `${g.toFixed(0)} g`);
+export const grams = (g: number): string => (g >= 1000 ? `${(g / 1000).toFixed(2)} kg` : `${g.toFixed(0)} g`);
 
-function plural(count: number, one: string, many = `${one}s`): string {
+export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
@@ -471,7 +471,7 @@ function repairedClearance(repaired: NonNullable<ReadmeInput['repaired']>, clear
 }
 
 /** One setting as README.txt lists it: its value and unit, or what an auto setting came to. */
-function settingText(path: string, def: ParamDef, value: unknown, resolved: number | undefined): string {
+export function settingText(path: string, def: ParamDef, value: unknown, resolved: number | undefined): string {
   if (def.kind === 'flag') return value ? 'on' : 'off';
   if (def.kind === 'choice') return value === 'glue' ? 'glue (Mode A)' : value === 'merged' ? 'merged (Mode B)' : String(value);
   const unit = def.unit ? ` ${def.unit}` : '';

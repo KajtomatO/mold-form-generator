@@ -37,14 +37,25 @@ const SINGLES: { want: ExportWant; label: string; title: string }[] = [
 
 const WHAT: Record<ExportWant, string> = { zip: 'ZIP', cover: 'cover', base: 'base', funnel: 'funnel', 'fit-test': 'fit test' };
 
-function StageBar({ state, onCancel }: { state: Extract<ExportState, { phase: 'running' }>; onCancel: () => void }) {
+/** MP5: what an export makes on the two-part cover, whose Cover button saves both halves. */
+function whatOf(want: ExportWant, twoPart: boolean): string {
+  return twoPart && want === 'cover' ? 'halves' : WHAT[want];
+}
+
+/** MP5: the step's words, the cover's cut being both halves' on the two-part cover. */
+function stepLabel(step: string, twoPart: boolean): string {
+  if (twoPart && step === 'cover') return 'Cutting the halves';
+  return STEP_LABELS[step] ?? step;
+}
+
+function StageBar({ state, twoPart, onCancel }: { state: Extract<ExportState, { phase: 'running' }>; twoPart: boolean; onCancel: () => void }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const shownAt = useRef(performance.now());
   // The button that was pressed has gone, which leaves the focus on the page: Cancel is what a keyboard needs next.
   useEffect(() => {
     if (document.activeElement === null || document.activeElement === document.body) cancel.current?.focus();
   }, []);
-  const label = STEP_LABELS[state.step] ?? state.step;
+  const label = stepLabel(state.step, twoPart);
   // Counted by steps begun, so the bar moves on as each one starts and is never full before the end.
   const counted = state.step !== 'start' && state.step !== 'wait';
   const width = counted ? Math.max(4, (100 * (state.done + 1)) / (state.total + 1)) : 4;
@@ -60,7 +71,7 @@ function StageBar({ state, onCancel }: { state: Extract<ExportState, { phase: 'r
           </span>
         ) : null}
       </span>
-      <span class="stage-track" role="progressbar" aria-label={`Exporting the ${WHAT[state.want]}`} aria-valuemin={0} aria-valuemax={state.total} aria-valuenow={counted ? state.done : 0} aria-valuetext={label}>
+      <span class="stage-track" role="progressbar" aria-label={`Exporting the ${whatOf(state.want, twoPart)}`} aria-valuemin={0} aria-valuemax={state.total} aria-valuenow={counted ? state.done : 0} aria-valuetext={label}>
         <i style={{ width: `${width}%` }} />
       </span>
       <button
@@ -92,6 +103,7 @@ export function ExportBox() {
   const blocked = exportBlocked(pipeline);
   const params = store.project.value.params;
   const current = pipeline.currentExport();
+  const twoPart = store.moldType() === 'clamshell';
   // A failure has its own line below, from how the last export ended.
   const found = pipeline.exportNotes().filter((d) => d.code !== 'export-failed');
   const reasonFor = (want: ExportWant): string | null => {
@@ -117,7 +129,7 @@ export function ExportBox() {
     <div class="export" data-testid="export" aria-busy={running}>
       <h2>Export</h2>
       {running ? (
-        <StageBar state={state} onCancel={() => store.cancelExport()} />
+        <StageBar state={state} twoPart={twoPart} onCancel={() => store.cancelExport()} />
       ) : (
         <button
           type="button"
@@ -125,14 +137,17 @@ export function ExportBox() {
           ref={zipButton}
           data-testid="export-zip"
           disabled={blocked !== null}
-          title={blocked ?? 'Cover, base, funnel and model, with a README for printing and pouring, in one ZIP named after the model.'}
+          title={blocked ?? (twoPart ? `The two halves, base, funnel${params.clamshell.fastener === 'clips' ? ', clips' : ''} and model, with a README for printing and pouring, in one ZIP named after the model.` : 'Cover, base, funnel and model, with a README for printing and pouring, in one ZIP named after the model.')}
           onClick={() => void store.exportFile('zip')}
         >
           Export ZIP
         </button>
       )}
       <div class="singles">
-        {SINGLES.map(({ want, label, title }) => {
+        {SINGLES.map(({ want, label: oneLabel, title: oneTitle }) => {
+          // MP5: on the two-part cover the Cover button saves both halves.
+          const halves = want === 'cover' && twoPart;
+          const label = halves ? 'Halves' : oneLabel, title = halves ? 'The two halves of the cover, each as an STL in its print pose, in a ZIP.' : oneTitle;
           const reason = reasonFor(want);
           return (
             <button key={want} type="button" class="btn" data-testid={`export-${want}`} disabled={reason !== null} title={reason ?? title} onClick={() => void store.exportFile(want)}>
@@ -177,7 +192,7 @@ export function ExportBox() {
       ) : null}
       {state.phase === 'failed' ? (
         <p class="export-note error" data-testid="export-outcome">
-          The {WHAT[state.want]} could not be exported. {units(state.message)}
+          The {whatOf(state.want, twoPart)} could not be exported. {units(state.message)}
         </p>
       ) : null}
       {found.map((d) => (

@@ -11,7 +11,6 @@ import { SECTION_PARAMS } from '../../src/ui/layout';
 import { DEFAULT_PLANE } from '../../src/workers/fieldStages';
 import { inProcessField, inProcessSolid } from '../fixtures/inProcessWorker';
 import { exampleBytes, EXAMPLE_FILES, skipWithout } from '../fixtures/loadExamples';
-import { disableMoldType, enableMoldType } from '../../src/core/mold/types';
 
 /** A project that differs from the defaults only in t, so steps can be told apart. */
 function project(t: number): Project {
@@ -547,12 +546,10 @@ describe('MT: switching the mold type on the store', () => {
   const pipelines: Pipeline[] = [];
   afterEach(() => {
     pipelines.splice(0).forEach((p) => p.dispose());
-    disableMoldType('clamshell');
   });
   const store = (): Store => {
     const p = new Pipeline({ spawnField: inProcessField, spawnSolid: inProcessSolid, frozen: true });
     pipelines.push(p);
-    enableMoldType('clamshell');
     let now = 0;
     // Each change a second apart, so none joins the one before.
     return new Store(p, () => (now += 1000));
@@ -575,6 +572,29 @@ describe('MT: switching the mold type on the store', () => {
     s.requestSwitch('clamshell');
     s.requestSwitch('box');
     expect(s.history.depth.undo).toBe(1);
+  });
+
+  it('MP5: the removed vents go with the switch, in its one step, as their ids name other high points in the other type; a pin stays; Undo brings both back', () => {
+    const s = store();
+    s.pipeline.setRemoved(['b0:vent:0']);
+    s.pipeline.setPins([{ id: 'b0:pour:0', kind: 'pour', x: 1, y: 2 }]);
+    expect(s.removedBack('clamshell')).toBe('The vent you removed comes back, as the Two-part cover places its own.');
+    s.requestSwitch('clamshell');
+    expect(s.pipeline.project().removed).toEqual([]);
+    expect(s.pipeline.project().pins).toEqual([{ id: 'b0:pour:0', kind: 'pour', x: 1, y: 2 }]);
+    // With no window to say so, a notice does.
+    expect(s.fileNotice.value).toEqual({ severity: 'info', message: 'Switched to the Two-part cover.', notes: [{ severity: 'info', message: 'The vent you removed comes back, as the Two-part cover places its own.' }] });
+    expect(s.history.undoLabel).toBe('switching to Two-part cover');
+    s.undo();
+    expect(s.pipeline.params.mold.type).toBe('one-piece');
+    expect(s.pipeline.project().removed).toEqual(['b0:vent:0']);
+  });
+
+  it('MP5: with the window, its lead says the removed vents come back; with none removed, nothing is said', () => {
+    const s = store();
+    expect(s.removedBack('clamshell')).toBeNull();
+    s.pipeline.setRemoved(['b0:vent:0', 'b0:vent:1']);
+    expect(s.removedBack('clamshell')).toBe('The 2 vents you removed come back, as the Two-part cover places its own.');
   });
 
   it('a changed setting opens the window; Cancel records nothing; Transfer and Discard are one step each, which Undo takes back whole', () => {

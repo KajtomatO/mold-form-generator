@@ -16,6 +16,11 @@ attribute vec3 slope;
 #endif
 varying float vHeight;
 varying vec3 vNormal;
+#ifdef SIDE
+// MP5: a half's side field, drawn in its pull's frame by the mesh's matrix: its cavity is where h stands past the seam's.
+uniform float floorH;
+varying float vMoldZ;
+#endif
 #include <clipping_planes_pars_vertex>
 
 #ifndef CPU_HEIGHTS
@@ -32,15 +37,28 @@ void main() {
 #else
   ivec2 ij = ivec2(position.xy + 0.5);
   float h = heightAt(ij);
+#ifdef SIDE
+  float hl = max(heightAt(ij - ivec2(1, 0)), floorH), hr = max(heightAt(ij + ivec2(1, 0)), floorH);
+  float hd = max(heightAt(ij - ivec2(0, 1)), floorH), hu = max(heightAt(ij + ivec2(0, 1)), floorH);
+#else
   // The surface is drawn trimmed at z = 0, so its slope comes from the trimmed heights too.
   float hl = max(heightAt(ij - ivec2(1, 0)), 0.0), hr = max(heightAt(ij + ivec2(1, 0)), 0.0);
   float hd = max(heightAt(ij - ivec2(0, 1)), 0.0), hu = max(heightAt(ij + ivec2(0, 1)), 0.0);
+#endif
   vec3 n = vec3(hl - hr, hd - hu, 2.0 * lattice.z);
 #endif
+#ifdef SIDE
+  // Trimmed at the seam, where the other half's silicone starts, and lit in the mold's frame.
+  vHeight = max(h - floorH, -1.0);
+  vNormal = mat3(modelMatrix) * n;
+  vec3 world = vec3(lattice.x + position.x * lattice.z, lattice.y + position.y * lattice.z, max(h, floorH));
+  vMoldZ = (modelMatrix * vec4(world, 1.0)).z;
+#else
   // Outside the cavity a field may hold any negative value, and a varying must not interpolate an infinity.
   vHeight = max(h, -1.0);
   vNormal = n;
   vec3 world = vec3(lattice.x + position.x * lattice.z, lattice.y + position.y * lattice.z, max(h, 0.0));
+#endif
   vec4 mvPosition = modelViewMatrix * vec4(world, 1.0);
   gl_Position = projectionMatrix * mvPosition;
   #include <clipping_planes_vertex>
@@ -54,6 +72,9 @@ uniform vec3 colour;
 uniform float opacity;
 varying float vHeight;
 varying vec3 vNormal;
+#ifdef SIDE
+varying float vMoldZ;
+#endif
 #include <clipping_planes_pars_fragment>
 
 void main() {
@@ -65,6 +86,10 @@ void main() {
 #endif
   // G7: the silicone is shown trimmed at z = 0, where the base plate closes it.
   if (vHeight <= 0.0) discard;
+#ifdef SIDE
+  // A half's prism rows reach into the rebate, under z = 0, where the base is.
+  if (vMoldZ < 0.0) discard;
+#endif
   vec3 n = normalize(vNormal);
   if (!gl_FrontFacing) n = -n;
   float sun = max(dot(n, normalize(vec3(0.35, -0.6, 0.72))), 0.0);
@@ -85,16 +110,21 @@ export class HeightPreview {
   private size = '';
   private field: Field | null = null;
 
-  constructor(renderer: THREE.WebGLRenderer, forceCpu = false) {
+  /**
+   * `side` (MP5): a half of the two-part cover, its side field drawn in its pull's frame by `setFrame`, trimmed at the
+   * seam's h and at the mold's z = 0.
+   */
+  constructor(renderer: THREE.WebGLRenderer, forceCpu = false, side = false) {
     this.mode = !forceCpu && renderer.capabilities.maxVertexTextures > 0 ? 'gpu' : 'cpu';
     const material = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
-      defines: this.mode === 'cpu' ? { CPU_HEIGHTS: '' } : {},
+      defines: { ...(this.mode === 'cpu' ? { CPU_HEIGHTS: '' } : {}), ...(side ? { SIDE: '' } : {}) },
       uniforms: {
         heights: { value: null },
         lattice: { value: new THREE.Vector3() },
         colour: { value: new THREE.Color(LAYER_COLOURS.silicone) },
         opacity: { value: 1 },
+        ...(side ? { floorH: { value: 0 } } : {}),
       },
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
@@ -123,6 +153,14 @@ export class HeightPreview {
     }
     if (this.mode === 'gpu') this.upload(field);
     else this.fill(field);
+  }
+
+  /** MP5: a half's frame, column by column from the field's (u, v, h) to the mold's (x, y, z), and the seam's h in it. */
+  setFrame(matrix: number[], floor: number): void {
+    this.mesh.matrixAutoUpdate = false;
+    this.mesh.matrix.fromArray(matrix);
+    this.mesh.matrixWorldNeedsUpdate = true;
+    this.mesh.material.uniforms.floorH.value = floor;
   }
 
   style(style: LayerStyle, wireframe: boolean): void {

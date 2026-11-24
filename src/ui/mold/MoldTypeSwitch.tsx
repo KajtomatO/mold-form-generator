@@ -1,6 +1,7 @@
 import { Fragment } from 'preact';
 import { useRef } from 'preact/hooks';
 import { NOT_BUILT_YET } from '../../core/mold/types';
+import { savingText, savingTitle, typeSaving } from '../../app/derived';
 import { useStore } from '../context';
 import { moldTypeTiles } from './moldTypeUi';
 import { MoldTypeIcon } from './MoldTypeIcon';
@@ -19,6 +20,9 @@ export function MoldTypeSwitch() {
   void store.tick.value;
   const current = store.moldType();
   const tiles = moldTypeTiles(store.moldTypes.value, store.moldTypeUi.value, store.typeContext());
+  // MP5: what the two-part cover saves on this model, from the reports job's estimate (G13.13).
+  const estimate = typeSaving(store.pipeline);
+  const saving = savingText(estimate), savingNote = savingTitle(estimate);
   const group = useRef<HTMLDivElement>(null);
   const move = (event: KeyboardEvent): void => {
     const keys: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
@@ -45,7 +49,7 @@ export function MoldTypeSwitch() {
               aria-pressed={tile.id === current}
               aria-disabled={tile.unavailable ? 'true' : undefined}
               aria-describedby={tile.unavailable ? `mold-tile-reason-${tile.id}` : undefined}
-              title={tile.unavailable ? `${tile.name}: ${tile.unavailable}.` : `${tile.name}: ${tile.blurb}`}
+              title={tile.unavailable ? `${tile.name}: ${tile.unavailable}.` : `${tile.name}: ${tile.blurb}${tile.id === 'clamshell' && savingNote ? ` ${savingNote}` : ''}`}
               onKeyDown={move}
               onClick={() => {
                 if (!tile.unavailable) store.requestSwitch(tile.id);
@@ -54,6 +58,12 @@ export function MoldTypeSwitch() {
               <MoldTypeIcon icon={tile.icon} />
               <span class="name">{tile.name}</span>
               {tile.unavailable ? <span class="why">{tile.unavailable === NOT_BUILT_YET ? NOT_BUILT_YET : 'Not for this model'}</span> : null}
+              {/* Its line stands empty until the estimate is in, so the sidebar never shifts under the pointer when it comes. */}
+              {!tile.unavailable && tile.id === 'clamshell' ? (
+                <span class="estimate" data-testid="two-part-estimate">
+                  {saving ?? '\u00a0'}
+                </span>
+              ) : null}
             </button>
             {/* Out of the button, so it is its description and not part of its name; absolute, so it takes no cell of the grid. */}
             {tile.unavailable ? (

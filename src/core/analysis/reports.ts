@@ -84,6 +84,35 @@ export function withoutDoubledVoids<T extends Diagnostic>(list: T[], reports: Pi
   return list.filter((d) => d.code !== 'shell-void');
 }
 
+/**
+ * MP5 (G13.5): S8's underside air on the two-part cover is let out by a vent on the seam whose bore lies within this
+ * across of the pocket's top, and no deeper than this under it.
+ */
+export const SEAM_AIR_REACH_MM = 5;
+
+/**
+ * MP5: S9 on the two-part cover, as the Diagnostics card, report.json and README.txt all give it: the underside pockets
+ * a vent on the seam lets out (SEAM_AIR_REACH_MM), or that the seam's own line names, left out, so each spot is listed
+ * once; and the verdict's words on sliding the silicone out of a cover given for halves that slide off it, by the verdict.
+ */
+export function onTheSeam(reports: GeometryReports, openings: readonly { kind: string; x: number; y: number; zb: number }[], own: readonly Diagnostic[]): GeometryReports {
+  const letsOut = ([x, y, z]: Vec3): boolean =>
+    openings.some((o) => o.kind === 'vent' && Math.hypot(o.x - x, o.y - y) <= SEAM_AIR_REACH_MM && o.zb <= z + SEAM_AIR_REACH_MM) ||
+    own.some((d) => d.code === 'air-underside' && d.at !== undefined && Math.hypot(d.at[0] - x, d.at[1] - y, d.at[2] - z) <= SEAM_AIR_REACH_MM);
+  const words: Partial<Record<Verdict, string>> = {
+    plausible: 'Demold estimate: once the halves are off, the model should pull out of the silicone.',
+    'jacket-out': 'Demold estimate: once the halves are off, stretch the silicone to free the model; the Demold report shows where it holds.',
+  };
+  const verdict = words[reports.demold.verdict];
+  return {
+    ...reports,
+    air: { ...reports.air, underside: reports.air.underside.filter((p) => !letsOut([p.x, p.y, p.z])) },
+    diagnostics: reports.diagnostics
+      .filter((d) => d.code !== 'air-underside' || !d.at || !letsOut(d.at))
+      .map((d) => (d.code === 'demold-verdict' && verdict ? { ...d, message: verdict } : d)),
+  };
+}
+
 /** The verdict as one row, a warning only when cutting is expected. The pipeline gives its Show every hint. */
 function verdictDiagnostic(demold: DemoldReport): Diagnostic {
   const first = demold.hints[0];

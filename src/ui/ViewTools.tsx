@@ -50,6 +50,11 @@ export function SectionTools() {
           <span class="value">{plane.at.toFixed(1)} mm</span>
         </label>
       ) : null}
+      {store.pipeline.field?.value.clam && shown.silicone.visible ? (
+        <p class="note" data-testid="section-two-part-note">
+          On the Two-part cover the cut through the silicone is left unfilled: each half's silicone is drawn from its own side field, which is no closed part in the view. The halves' cut is filled.
+        </p>
+      ) : null}
       {open && (shown.model.visible || shown.silicone.visible) ? (
         <p class="note" data-testid="section-open-note">
           The model's mesh has holes, so the cut through it and the silicone round it is left unfilled: only a closed part has an inside to fill.

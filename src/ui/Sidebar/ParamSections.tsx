@@ -1,4 +1,4 @@
-import { boltFigure, clampFigure, exportPitch, previewSilicone } from '../../app/derived';
+import { boltFigure, clampFigure, exportPitch, previewSilicone, seamHoldLine } from '../../app/derived';
 import { changedPaths } from '../../app/stages';
 import { effectiveParams, moldTypeOf } from '../../core/mold/types';
 import { PARAM_SCHEMA } from '../../core/params/schema';
@@ -78,6 +78,19 @@ function BoltAdviceFigure() {
   );
 }
 
+/** MP5 (G13.10.14, G13.10.19, G13.10.9): what holds the two-part cover's halves, against what the seam needs. */
+function SeamHoldFigure() {
+  const store = useStore();
+  const line = seamHoldLine(store.pipeline.field?.value.clam ?? null);
+  // A failed preview has no fine pair to read, which Diagnostics says why.
+  const failed = store.pipeline.status().error !== null;
+  return (
+    <p class="figure" data-testid="seam-hold" title="What the seam needs is twice the larger of the silicone's push on either half and the push of a film of it over the seam's face, and never less than 10 N.">
+      {line ?? (failed ? 'What holds the halves together is not worked out: see Diagnostics.' : 'Working out what holds the halves together…')}
+    </p>
+  );
+}
+
 /** Plan: tape that holds max(2 x lift, 10 N), in strips of Tape strip holds each, and enough of them to press the seal all round. */
 export function CoverSection() {
   const store = useStore();
@@ -94,13 +107,18 @@ export function CoverSection() {
   // Headed by their schema groups' titles, the names the switch window and README.txt give them too.
   const twoPart = SECTION_PARAMS.cover.filter((path) => path.startsWith('clamshell.') && type.applies(path));
   const clips = SECTION_PARAMS.cover.filter((path) => path.startsWith('clips.') && params.clamshell.fastener === 'clips' && type.applies(path));
+  // MP5 (G13.10.13): with Seam fasteners Bolts the shared bolt rows show under "Seam bolts", with no toggle, as the
+  // type holds the corner bolts off; fit_test/README.txt names them "under Two-part cover, Seam bolts".
+  const twoPartType = type.id === 'clamshell';
+  const seamBolts = twoPartType && params.clamshell.fastener === 'bolts' ? SECTION_PARAMS.cover.filter((path) => path.startsWith('bolts.') && path !== 'bolts.enabled') : [];
+  const shownBolts = twoPartType ? bolts.filter((path) => path === 'bolts.enabled') : bolts;
   return (
     <Section id="cover" title="Cover & joint" reset={SECTION_PARAMS.cover}>
       {joint.map((path) => (
         <ParamRow key={path} path={path} />
       ))}
       <h3 data-testid="bolts-group">Bolts</h3>
-      {bolts.map((path) => (
+      {shownBolts.map((path) => (
         <ParamRow key={path} path={path} />
       ))}
       {twoPart.length > 0 ? (
@@ -111,16 +129,25 @@ export function CoverSection() {
           ))}
         </>
       ) : null}
+      {seamBolts.length > 0 ? (
+        <>
+          <h4 data-testid="seam-bolts-group">Seam bolts</h4>
+          {seamBolts.map((path) => (
+            <ParamRow key={path} path={path} />
+          ))}
+        </>
+      ) : null}
       {clips.length > 0 ? (
         <>
-          <h3 data-testid="clips-group">{GROUP_TITLES.clips}</h3>
+          <h4 data-testid="clips-group">{GROUP_TITLES.clips}</h4>
           {clips.map((path) => (
             <ParamRow key={path} path={path} />
           ))}
         </>
       ) : null}
+      {store.pipeline.modelName && twoPartType ? <SeamHoldFigure /> : null}
       {store.pipeline.modelName && on ? <BoltAdviceFigure /> : null}
-      {store.pipeline.modelName && !on ? (
+      {store.pipeline.modelName && !on && !twoPartType ? (
         <p
           class="figure"
           data-testid="clamp-advice"

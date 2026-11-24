@@ -10,6 +10,8 @@ export const LAYER_COLOURS: Record<LayerName, number> = {
   cover: 0xc7ccd3,
   base: 0x6b7280,
   funnel: 0x94a3b8,
+  // MP5: a step darker than the base's grey, so the small clips stand out on the cover's ends.
+  clips: 0x4b5563,
 };
 
 /** Selection colours: yellow for what the pointer is over, orange for what is chosen or shown. */
@@ -31,6 +33,10 @@ export const FLANGE_OUTLINE_COLOUR = 0x475569;
 /** The light band under each of the flange circle's dashes (slate 200). */
 export const FLANGE_CASING_COLOUR = 0xe2e8f0;
 
+/** MP5: the two-part cover's split plane P, a faint see-through quad in the openings' blue, as it is what they move along. */
+export const SEAM_PLANE_COLOUR = 0x3ea6ff;
+export const SEAM_PLANE_OPACITY = 0.12;
+
 /** Drawn after the solid parts, outermost last, so each see-through layer blends over what it encloses. */
 /** The view's lights, which the gallery's thumbnails are drawn under too, so they look as the model does on screen. */
 export function addViewLights(scene: THREE.Scene): void {
@@ -40,7 +46,7 @@ export function addViewLights(scene: THREE.Scene): void {
   scene.add(sun);
 }
 
-export const LAYER_ORDER: Record<LayerName, number> = { model: 0, base: 0, funnel: 0, silicone: 1, cover: 2 };
+export const LAYER_ORDER: Record<LayerName, number> = { model: 0, base: 0, funnel: 0, silicone: 1, cover: 2, clips: 2 };
 
 /**
  * U2: a part that rests against another part's face draws a hair behind it, so where the two lie in one

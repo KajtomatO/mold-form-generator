@@ -749,6 +749,7 @@ export function describeProblem(problem: HardProblem, kind: OpeningKind): string
     case 'off-cavity': return 'it runs off the cavity';
     case 'land': return 'it is too close to another opening';
     case 'flange': return kind === 'vent' ? "a funnel's flange would rest on it and close it" : "its funnel's flange would rest on a vent and close it";
+    case 'seam-room': return "the seam's seal beside it has no room there";
     default: return 'it is too close to the edge of the top';
   }
 }
@@ -863,6 +864,8 @@ export interface SeamPlacementInput {
 export interface SeamOpening extends PlacedOpening {
   /** A hidden leaf's vent: from its own run's ceiling up through the more of S above it to the top (G13.5). */
   hidden: boolean;
+  /** MP5: a hidden leaf's vent's run top, H_top from the rows at or under which its space reads (hiddenSpace). */
+  under?: number;
 }
 
 export interface SeamPlacement {
@@ -1130,7 +1133,7 @@ function placeHiddenVent(work: SeamWork, index: number, id: string): void {
     const zb = seamCheck(work, space, 'vent', b, work.keepPins);
     if (zb === null || !work.model.clear(b, r, zb - BELOW_CEILING, work.room.Zt)) continue;
     if (!seamLeavesCovered(tree, b, r, zb, settings.coverDrop).has(index)) continue;
-    seamAdd(work, seamSpot(work.axis, work.xs, 'vent', b), space, zb, id, 'leaf', true);
+    seamAdd(work, seamSpot(work.axis, work.xs, 'vent', b), space, zb, id, 'leaf', true).under = leaf.height;
     return;
   }
   work.diagnostics.push(hiddenAirWarning(work, leaf));
@@ -1232,7 +1235,8 @@ function planSeam(input: SeamPlacementInput, significant: readonly SeamLeaf[], p
     const rank = pin.kind === 'vent' ? significant.findIndex((_, k) => seamLeafVentId(k) === pin.id) : -1;
     const hidden = rank >= 0 && significant[rank].hidden;
     const own = hidden ? hiddenSpace(input, significant[rank]) : space;
-    seamAdd(work, spot, own, discMinimum(own.field, spot.x, spot.y, boreRadius(own.sizes, pin.kind)), pin.id, 'pinned', hidden, true);
+    const added = seamAdd(work, spot, own, discMinimum(own.field, spot.x, spot.y, boreRadius(own.sizes, pin.kind)), pin.id, 'pinned', hidden, true);
+    if (hidden) added.under = significant[rank].height;
   }
   const plateau = placeSeamPour(work);
   let refused = new Set<number>();
@@ -1286,7 +1290,8 @@ export function placeSeamOpenings(input: SeamPlacementInput): SeamPlacement {
     const own = work.spaces.get(opening)!;
     const check = checkOpening(own, opening, work.openings);
     const b = seamBOf(axis, opening);
-    const room = seamRoomFits(input.room, own.sizes, opening.kind, b, check.zb, false);
+    // Clear of the pins' sockets where the seal keeps them, as the plan placed every opening and a drop on main checks it.
+    const room = seamRoomFits(input.room, own.sizes, opening.kind, b, check.zb, work.keepPins);
     opening.valid = check.valid && room;
     opening.zb = check.zb;
     opening.boreLength = boreLength(own, opening);

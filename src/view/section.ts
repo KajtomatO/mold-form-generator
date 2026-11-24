@@ -198,6 +198,11 @@ export class SectionCaps {
     entry.cap.visible = sources.length > 0;
   }
 
+  /** How many solids a part's cut is counted from, as last set: two for the two-part cover's halves (MP5). */
+  sourceCount(part: CapPart): number {
+    return this.entries.get(part)!.sources.length;
+  }
+
   /** Which parts get a filled cut, as last set. */
   capped(): CapPart[] {
     return CAP_PARTS.filter((part) => this.entries.get(part)!.sources.length > 0);

@@ -180,6 +180,20 @@ The silicone in the cover is your finished mold. Turn it over: the cover's flat 
 
 To make the same mold again, open the STL in the app, then open the export ZIP or its `project.json`: the settings, the base face and the openings come back as they were.
 
+## The Two-part cover
+
+Choose **Two-part cover** in the Mold type block at the top of the sidebar for a model that would take a lot of silicone under a one-piece cover, such as a statue whose sides overhang: the cover is split down the middle by one upright plane into two halves that slide off sideways, so their ceilings follow the model's sides and the silicone stays a jacket round it. The app places the split for the least silicone among those whose halves fit your bed (Bed X, Y and Z under Advanced, Printer), and its tile says what it saves against a One-piece cover on this model. It makes one model, so a file of several bodies keeps the One-piece cover, and the Two-part cover holds the grid at 1 x 1. Its own settings are under Cover & joint, Two-part cover: the split's axis and place, the Ceiling slope each half's ceilings keep down to the seam so air runs to the openings on it, the seam's land and pins, and Seam fasteners.
+
+What holds the halves together, by Seam fasteners:
+
+- **Bolts** (the default): M3 countersunk screws through printed lugs on the two end faces, one half holding the heads and the other the nuts. Their settings are the bolts' own, under Seam bolts; the fit test's seam bolt coupon checks them on your printer. README.txt lists the screws and nuts to buy.
+- **Clips:** printed tapered clips that slide into dovetail sockets in a pair of ears, one on each half, and draw them together: nothing to buy. Print them at 100 percent infill, standing on their heads as `clips.stl` lays them out, and set Clip clearance under Seam clips from the fit test's clip coupon first. Keep Vaseline off them, and do not warm a PLA mold above 40 C to speed the cure.
+- **None:** two clamps across the two back faces, each through a flat board on each face, or tape belts round all four walls.
+
+On halves wider than 100 mm, with bolts or clips, put one clamp across the two back faces at the middle of the seam, 10 mm under the top; README.txt says so when yours are.
+
+Each half prints on its back, seam face up, with no supports. Print at least 1.2 mm of top layers, as the seam face is the last, and check each seam face on a flat surface before use. To assemble, on the table: lay the base tape strips sticky side up, stand the base on them, slide each half onto the base's shelf from its own side, its groove guided by the ridge bars, press the tongue into the groove, then fasten the seam, the bottom first, and press the tape up the walls. Seal it as for the pour for the leak test in step 5: Vaseline in the base groove and the seam groove, a thin film on the seam faces, and a bead along both halves' bottom seam edges; watch the seam's bottom corners and the top under the funnel. Seat the funnel only once the seam is fastened, with a ring of Vaseline under its flange across the seam line. To demold, cut the sprues and any vent rod README.txt names, fold the tape down, take the fasteners out, pry at the V pockets at the top of the seam and slide the halves apart; the silicone is then off the plastic, and only the model is left to free from it.
+
 ## What only you can find out
 
 The app measures the geometry: the silicone thickness, the closed cavity, the openings at the high points, the parts that need no supports. Some things depend on your printer, your silicone and your hands, and only a test can tell:
