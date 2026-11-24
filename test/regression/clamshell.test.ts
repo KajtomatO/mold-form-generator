@@ -10,14 +10,14 @@ import { halfPose, inversePose, poseToStl } from '../../src/core/parts/poses';
 import { grooveSolid, ridgeBars } from '../../src/core/parts/joint';
 import { auditOverhang } from '../../src/core/report/overhang';
 import { Arena } from '../../src/core/solid/arena';
-import { clamCase, defaultOpenings, seamOpening, siliconeSolid, type ClamCase } from '../fixtures/clamshell';
+import { clamCase, seamOpening, seamOpenings, siliconeSolid, type ClamCase } from '../fixtures/clamshell';
 import { loadManifold, skipWithout } from '../fixtures/loadExamples';
 import { CLAMSHELL_PARTS_GOLDEN } from './golden';
 
 /**
- * MP2: G13.7 to G13.9 and G13.12 on real models, built with Seam fasteners None, a pour hand-placed on P where its bore
- * stands highest and a vent beside it (docs/PLAN.md, MP2's checks; defaultOpenings in test/fixtures/clamshell.ts). The gallery's cube, sphere and cone and the Goddess Statue always,
- * VIS-35 where it is in this checkout.
+ * MP2: G13.7 to G13.9 and G13.12 on real models, built with Seam fasteners None and the openings MP4 places on P (docs/PLAN.md,
+ * MP2's and MP4's checks; seamOpenings in test/fixtures/clamshell.ts). The gallery's cube, sphere and cone and the Goddess
+ * Statue always, VIS-35 where it is in this checkout.
  */
 const SLOW = 900_000;
 /** What a boolean of touching solids may leave as volume, in mm3: the plan's bound. */
@@ -136,7 +136,7 @@ describe('MP2: G4 for each half', () => {
     const c = caseOf('sphere');
     const split = { axis: c.fine.axis, xs: c.fine.xs };
     // The openings read again from each build's own fields, as their zb is the lowest ceiling at that build's margin.
-    const plain = clamshellG4(arena, c.model.mesh, c.params, split, c.model.solid, { openingsFor: defaultOpenings });
+    const plain = clamshellG4(arena, c.model.mesh, c.params, split, c.model.solid, { openingsFor: seamOpenings });
     expect(plain.raisedBy).toBe(0);
     expect(plain.first).toBeNull();
     expect(plain.diagnostics).toEqual([]);
@@ -144,7 +144,7 @@ describe('MP2: G4 for each half', () => {
     // An error that leaves the least gap 0.2 mm short of t, as a decimated model's would: one rebuild, raised by the
     // shortfall and G4_RAISE_EXTRA, at the same split, the first build held meanwhile, and the one-piece export's line.
     const error = Math.min(...plain.gaps) - c.params.silicone.t + 0.2;
-    const raised = clamshellG4(arena, c.model.mesh, c.params, split, c.model.solid, { openingsFor: defaultOpenings, error });
+    const raised = clamshellG4(arena, c.model.mesh, c.params, split, c.model.solid, { openingsFor: seamOpenings, error });
     expect(raised.raisedBy).toBeCloseTo(0.2 + G4_RAISE_EXTRA, 9);
     expect(raised.first).not.toBeNull();
     expect([raised.fine.axis, raised.fine.xs]).toEqual([split.axis, split.xs]);

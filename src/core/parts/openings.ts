@@ -59,6 +59,11 @@ export interface VentOpening {
   y: number;
   zb: number;
   diameter: number;
+  /**
+   * G13.5: a hidden leaf's vent on the two-part cover's seam, whose bore runs up through more of the cavity, so its rod
+   * is cut at demold (README.txt's line, MP5). The cutters ignore it.
+   */
+  hidden?: boolean;
 }
 
 /** G11: a straight hole with a small mouth chamfer, so the first layer does not close it. */

@@ -265,9 +265,10 @@ export function topRowClear(field: Field, hStop: number): boolean {
 /**
  * G13.4's H_top, the clamshell's own top-down map, from G+- by a running maximum down each b-column: at (a, b) on the
  * + side, the highest z whose row reaches a. Nodes on the export's lattice of a and b at the field's cell; 0 where
- * no row reaches. x is the map's first axis, as every Field's.
+ * no row reaches. x is the map's first axis, as every Field's. With `zCap` (MP4), only the rows at or under it count, so
+ * a hidden leaf's own run reads its ceiling under the more of S above it (G13.5).
  */
-export function topMap(plus: Field, minus: Field, bounds: Bounds, axis: SeamAxis, xs: number): Field {
+export function topMap(plus: Field, minus: Field, bounds: Bounds, axis: SeamAxis, xs: number, zCap = Infinity): Field {
   const cell = plus.cell;
   const pp = pullOf(axis, 1), pm = pullOf(axis, -1);
   // b over the union of both fields' u, a over the model's extent with the dilation's reach.
@@ -291,7 +292,7 @@ export function topMap(plus: Field, minus: Field, bounds: Bounds, axis: SeamAxis
       // The a nodes on this side, from P outward, and their h in this frame.
       let ia = sign > 0 ? Math.ceil(xs / cell - 1e-9) - i0 : Math.ceil(xs / cell - 1e-9) - 1 - i0;
       let R = -Infinity;
-      for (let j = f.ny - 1; j >= jFloor; j--) {
+      for (let j = Math.min(f.ny - 1, jFloor + Math.floor(zCap / cell + 1e-9)); j >= jFloor; j--) {
         const g = f.values[i + j * f.nx];
         if (g > R) R = g;
         if (R <= hs) continue;

@@ -435,9 +435,10 @@ export const CLAMSHELL_GOLDEN = {
 
 /**
  * MP2's golden, which MP3 must keep (docs/PLAN.md, MP2's exit): the Goddess Statue as a two-part cover with Seam fasteners
- * None, at the two-part defaults otherwise, fine fields at the export cell, a pour hand-placed on P where its bore stands
- * highest and a vent beside it (test/fixtures/clamshell.ts, clamCase and defaultOpenings). The split, each part's volume
- * in mm3 (1%), and the SHA-256 of each half's STL in its print pose (G13.12), byte for byte.
+ * None, at the two-part defaults otherwise, fine fields at the export cell, and the openings on P (test/fixtures/clamshell.ts,
+ * clamCase). The split, each part's volume in mm3 (1%), and the SHA-256 of each half's STL in its print pose (G13.12),
+ * byte for byte. Taken again in MP4, whose placement puts the vent beside the pour on the side of it whose ceiling stands
+ * higher, as G11 places one off the seam, where MP2's hand-placed vent took the + side; the pour is where MP2 put it.
  */
 export interface ClamshellPartsGolden {
   axis: 'x' | 'y';
@@ -452,20 +453,21 @@ export const CLAMSHELL_PARTS_GOLDEN = {
   goddess: {
     axis: 'y',
     xs: 152.5,
-    neg: 371689.7,
-    pos: 247824.6,
+    neg: 371659.7,
+    pos: 247834.4,
     base: 22392.1,
-    sha256: { neg: '8adc54aa2a88697cde9b5bc1fa6b1c49f3384e159894514d5d7d2214fac4849f', pos: '2686ea0ef0636872e095b4aa5860fef0bf0ba4c2e0be127afe9ddf14d55d1757' },
+    sha256: { neg: 'a992e6981b0d8158844a3e02456f593b3703412130ae4da330939db032f4038c', pos: 'dd4e987a22262ac01e5bf48d85836a7a80b87d89921c52ac50f2cd27686b2d55' },
   },
 } satisfies Partial<Record<ClamshellModelId, ClamshellPartsGolden>>;
 
 /**
  * MP3's halves, which MP3b must keep (docs/PLAN.md, MP3b's exit): the Goddess Statue and the sphere as MP2's golden is
  * built, with Seam fasteners Bolts at their defaults (M3, auto length), the SHA-256 of each half's STL in its print pose,
- * taken at MP3's commit (2f28149), byte for byte.
+ * taken at MP3's commit (2f28149), byte for byte; Goddess's taken again in MP4 with its vent beside the pour moved, as
+ * MP2's golden's is, and the sphere's, whose openings MP4 places where MP2 put them by hand, as at MP3.
  */
 export const CLAMSHELL_BOLTS_GOLDEN = {
-  goddess: { axis: 'y', xs: 152.5, sha256: { neg: '55f59685ecafe667c9a69c06b35e637c41c6187ed56c2dabc49425142c83a719', pos: '85ef9a081d451c154fb2035d3ca33a043897949d4c0f3189b5089120b49755cc' } },
+  goddess: { axis: 'y', xs: 152.5, sha256: { neg: '6aabaa7122c9ae24b38eaddf87393df1fc18e8edf404fbb2ad8bd5e5b880a2ae', pos: '828e54581a658877f2f4a5ac6a87f8788d4a48713c4916b093e3c72189211dec' } },
   sphere: { axis: 'x', xs: -1.75, sha256: { neg: 'bbdb8fd05597a186f12a9ab1517feb3ddfbf7887f0c8b2f324dd97714418c722', pos: '28988a8d4fa4015403addfeac1c9fc4515cde58debc635892bec67ac4ccde929' } },
 } satisfies Partial<Record<ClamshellModelId, Pick<ClamshellPartsGolden, 'axis' | 'xs' | 'sha256'>>>;
 

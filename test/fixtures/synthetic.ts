@@ -188,6 +188,33 @@ function cuboid(api: ManifoldToplevel, keep: <T extends Manifold>(m: T) => T, mi
   return keep(keep(api.Manifold.cube(size)).translate(min));
 }
 
+/**
+ * MP4's T, 12 mm wide in x about x = 0: a stem 8 mm along y and 40 mm tall, an arm 6 mm thick on top of it running along
+ * y from -30 out to `armTo`, and a post under the arm's end, y 18 to 28 and 15 mm tall, joined to the stem by a foot 3 mm
+ * high.
+ * A seam at x = 0 crosses the arm, and on it the post's top is a hidden leaf under the arm's run of S.
+ */
+export function tShape(api: ManifoldToplevel, armTo: number): WeldedMesh {
+  return meshOf((keep) => {
+    const stem = cuboid(api, keep, [-6, -4, 0], [6, 4, 40]);
+    const arm = cuboid(api, keep, [-6, -30, 39], [6, armTo, 46]);
+    const foot = cuboid(api, keep, [-6, 0, 0], [6, 28, 3]);
+    const post = cuboid(api, keep, [-6, 18, 0], [6, 28, 15]);
+    return keep(api.Manifold.union([stem, arm, foot, post]));
+  });
+}
+
+/**
+ * MP4's 1D plateau: a box 20 mm in x about x = 0, 60 mm along y about y = 0 and 20 mm tall at y = 0, its top tilted by
+ * `deg` along y, rising toward +y.
+ */
+export function tiltedBox(deg: number): WeldedMesh {
+  const mesh = box([-10, -30, 0], [10, 30, 20]);
+  const rise = Math.tan((deg * Math.PI) / 180);
+  for (let v = 4; v < 8; v++) mesh.positions[v * 3 + 2] = 20 + mesh.positions[v * 3 + 1] * rise;
+  return mesh;
+}
+
 /** A person's two legs: two feet on z=0, joined above, so one shell has two footprints. */
 export function arch(api: ManifoldToplevel): WeldedMesh {
   return meshOf((keep) => {

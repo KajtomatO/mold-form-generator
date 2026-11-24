@@ -300,11 +300,27 @@ export function lugSolid(arena: Arena, layout: SeamBoltLayout, options: LugOptio
  * untouched, so the screw's preload reaches the seal through the lugs' roots.
  */
 export function lugRelief(arena: Arena, layout: SeamBoltLayout): Manifold[] {
-  const { xs, relief: r, p, height: hL } = layout;
+  const { xs, relief: r, p } = layout;
+  return reliefEnds(layout).map(({ face, z0, z1 }) => prismAW(arena, layout.axis, face, [[xs - r, 0], [xs + r, 0], [xs + r, p + PAST], [xs - r, p + PAST]], z0, z1));
+}
+
+/** lugRelief's slabs: one per end face with lugs, out p + PAST from it, over one z span from the lowest lug to the highest. */
+function reliefEnds(layout: SeamBoltLayout): { face: { b: number; out: 1 | -1 }; z0: number; z1: number }[] {
   if (layout.spots.length === 0) return [];
+  const hL = layout.height;
   const z0 = Math.min(...layout.zs) - hL / 2 - PAST, z1 = Math.max(...layout.zs) + hL / 2 + PAST;
   const ends = (['b0', 'b1'] as const).flatMap((end) => layout.spots.filter((spot) => spot.end === end).slice(0, 1));
-  return ends.map((spot) => prismAW(arena, layout.axis, endFace(layout, spot), [[xs - r, 0], [xs + r, 0], [xs + r, p + PAST], [xs - r, p + PAST]], z0, z1));
+  return ends.map((spot) => ({ face: endFace(layout, spot), z0, z1 }));
+}
+
+/**
+ * lugRelief's slabs on P, in (b, z), which hold the lugs too: G13.5's room rule keeps the openings' bands out of them.
+ */
+export function lugReliefBoxes(layout: SeamBoltLayout): { b0: number; b1: number; z0: number; z1: number }[] {
+  return reliefEnds(layout).map(({ face, z0, z1 }) => {
+    const far = face.b + face.out * (layout.p + PAST);
+    return { b0: Math.min(face.b, far), b1: Math.max(face.b, far), z0, z1 };
+  });
 }
 
 /** A spot's axis in a half's pull frame (u, v), v = z_k. */

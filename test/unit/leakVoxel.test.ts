@@ -171,7 +171,7 @@ function onePiece(): Mold {
 }
 
 /**
- * The two-part coupon or model: MP2's halves with Seam fasteners None, the pour and any vent on P (defaultOpenings in
+ * The two-part coupon or model: MP2's halves with Seam fasteners None, the openings MP4 places on P (seamOpenings in
  * test/fixtures/clamshell.ts; the coupon has room for no vent clear of the flange), the funnel on the pour's seat.
  */
 function twoPart(c: ClamCase, extraCut: Manifold[] = []): Mold {

@@ -121,9 +121,10 @@ export interface SeamSeal {
  * cutter's bottom to Zt + 1); E_in = offset(R_sil, seamLand) with J = [D.b0 - e1, D.b1 + e1] x [-1, rh + gx], holes
  * filled; the band = offset(E_in, gw) - E_in, clipped to z >= rh + gx and to O across the pull, so at z = rh + gx its legs
  * land on the base groove's ring, [D + e1, D + e4] as gw = e4 - e1, and `legs` under them. Two pins at the top corners, outside the band with
- * BAND_ROOM to spare, clear of the pry chamfers, or none with an info line.
+ * BAND_ROOM to spare, clear of the pry chamfers, or none with an info line: where they have no room there, or where S7c
+ * placed the openings without keeping clear of them (`pinsKept` false, G13.5).
  */
-export function seamSeal(arena: Arena, rim: ClamRim, S: CrossSection, openings: readonly CutOpening[], params: Params): SeamSeal {
+export function seamSeal(arena: Arena, rim: ClamRim, S: CrossSection, openings: readonly CutOpening[], params: Params, pinsKept = true): SeamSeal {
   const { axis, xs, D, O, Zt, e1 } = rim;
   const j = params.joint;
   const zr = j.ridgeHeight + j.grooveExtraDepth;
@@ -148,18 +149,27 @@ export function seamSeal(arena: Arena, rim: ClamRim, S: CrossSection, openings: 
   const pins: [number, number][] = [];
   if (params.clamshell.pins) {
     const socket = PIN_RADIUS + SOCKET_CLEARANCE;
-    const [b0, b1] = bRange(axis, O);
-    const v = Zt - PIN_WALL - socket;
-    const spots: [number, number][] = [b0 + PRY_LEG + PIN_WALL + socket, b1 - PRY_LEG - PIN_WALL - socket].map((b) => [uOfB(axis, b), v]);
+    const spots: [number, number][] = seamPinSpots(rim).map(([b, v]) => [uOfB(axis, b), v]);
     const keep = round(arena, outer, BAND_ROOM);
     const fits = spots.every(([u, vv]) => arena.track(keep.intersect(circle(arena, u, vv, socket))).isEmpty());
-    if (fits && v - socket > zr) {
+    if (pinsKept && fits && spots[0][1] - socket > zr) {
       pins.push(...spots);
     } else {
       diagnostics.push({ code: 'seam-pins-dropped', severity: 'info', message: `The registration pins were left out, as the seam's top corners have no room for them clear of its seal, so the tongue alone keeps the halves in line, to within ${j.grooveClearance.toFixed(2)} mm.` });
     }
   }
   return { axis, xs, frame: seamFrame(axis, xs), zr, gw, Zt, S, Rsil, Ein, band, legs, outer, pins, diagnostics };
+}
+
+/**
+ * G13.8 step 7: where the pins stand on P, in the mold's (b, z): at the top corners, PIN_WALL under the top face and
+ * past the pry chamfers on the end faces. G13.5's room rule keeps the openings' bands clear of their sockets.
+ */
+export function seamPinSpots(rim: Pick<ClamRim, 'axis' | 'O' | 'Zt'>): [number, number][] {
+  const socket = PIN_RADIUS + SOCKET_CLEARANCE;
+  const [b0, b1] = bRange(rim.axis, rim.O);
+  const v = rim.Zt - PIN_WALL - socket;
+  return [b0 + PRY_LEG + PIN_WALL + socket, b1 - PRY_LEG - PIN_WALL - socket].map((b) => [b, v]);
 }
 
 function circle(arena: Arena, u: number, v: number, r: number): CrossSection {

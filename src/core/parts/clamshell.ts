@@ -26,7 +26,7 @@ import { lugRelief, lugSolid, placeSeamBolts, seamBoltCuts, seamBoltDiagnostics,
 
 /**
  * A pour or a vent on P at b, centred on the seam, its zb by G11's rule: the lowest ceiling over its disc, read from
- * H_top. MP4 places the openings on P; until then the tests place them by hand with this.
+ * H_top. MP4 places the openings on P (placeSeam in field/clamshell.ts); the tests place one by hand with this.
  */
 export function seamOpening(prep: ClamshellPrep, fine: Pick<FineSplit, 'axis' | 'xs' | 'plus' | 'minus'>, kind: 'pour' | 'vent', b: number): CutOpening {
   const sizes = openingSizes(prep.params);
@@ -61,6 +61,12 @@ export interface ClamshellBuild {
 export interface ClamshellBuildOptions {
   /** The openings on P, cut from both halves. */
   openings?: CutOpening[];
+  /**
+   * S7c's choice (SeamPlacement.pinsKept): false where the openings' bands were placed without keeping clear of the
+   * pins' sockets, so the seal leaves the pins out with its seam-pins-dropped line. By default the pins are kept where
+   * the seal has room for them.
+   */
+  pinsKept?: boolean;
   /** Tests only: the seal changed before its solids are cut, for the negative controls. */
   seal?: (seal: SeamSeal, rim: ClamRim, params: Params) => SeamSeal;
   /** Tests only: G10's whole ridge ring for the bars, a negative control. */
@@ -114,7 +120,7 @@ export function buildClamshell(arena: Arena, prep: ClamshellPrep, fine: FineSpli
   const meshes = sides.map((side) => buildToolMesh(side.field, { raise: prep.ctx.raise, tol: settings.tinTol, seam: { hs: side.hs, eps } })) as [ToolMesh, ToolMesh];
   const tools = meshes.map((mesh, k) => orientSolid(arena, toolSolid(arena, mesh), frameInverse(sides[k].side.frame))) as [Manifold, Manifold];
   const S = seamSection(arena, rim.axis, rim.xs, tools);
-  const made = seamSeal(arena, rim, S, openings, params);
+  const made = seamSeal(arena, rim, S, openings, params, options.pinsKept ?? true);
   const seal = options.seal ? options.seal(made, rim, params) : made;
   const bolts = clamBolts(params, fine);
   const clips = clamClips(params, fine);

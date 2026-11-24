@@ -11,7 +11,7 @@ import { defaultParams } from '../../src/core/params/defaults';
 import { orientedSolid } from '../../src/core/parts/base';
 import { withArena } from '../../src/core/solid/arena';
 import { buildToolMesh, toolSolid } from '../../src/core/solid/tool';
-import { buildClamshell, chooseFor, fineSplit, prepareClamshell, seamOpening, highestOnSeam } from '../fixtures/clamshell';
+import { buildClamshell, chooseFor, fineSplit, placeSeam, prepareClamshell } from '../fixtures/clamshell';
 import { gapSearch } from '../../src/core/parts/clamshell';
 import { resolveAuto } from '../../src/core/params/defaults';
 import { loadExample, loadManifold, skipWithout } from '../fixtures/loadExamples';
@@ -117,7 +117,7 @@ describe.runIf(MEASURE)('G13.16 spike, VIS-35 at cellFinal', () => {
           const prep = prepareClamshell(oriented.mesh, p);
           const at = xs ?? chooseFor(prep, p.clamshell.ceilingDeg).xs;
           const fine = fineSplit(prep, axis, at, p.quality.cellFinal);
-          const build = buildClamshell(arena, prep, fine, { openings: [seamOpening(prep, fine, 'pour', highestOnSeam(prep, fine))] });
+          const build = buildClamshell(arena, prep, fine, { openings: placeSeam(prep, fine).openings.filter((o) => o.kind === 'pour') });
           const s1 = performance.now();
           const gaps = build.halves.map((half) => model.minGap(half, gapSearch(p)));
           lines.push(`xs ${at}: fields and halves ${(s1 - s0).toFixed(0)} ms (TINs ${build.meshes.map((m) => m.tinTriangles).join(' and ')}), two minGap ${(performance.now() - s1).toFixed(0)} ms, gaps ${gaps.map((g) => g.toFixed(3)).join(' and ')} mm`);

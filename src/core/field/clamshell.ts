@@ -1,10 +1,15 @@
+import { placementSettings, placeSeamOpenings, seamCutOpenings, type OpeningPin, type SeamBox, type SeamPlacement, type SeamRoom } from '../analysis/placement';
+import { modelStrip, seamTree, type SeamTree } from '../analysis/seam';
+import { boreRadius, openingSizes, placementSpace } from '../analysis/validate';
 import { clipBelow } from '../mesh/clip';
 import { meshBounds, type Bounds, type WeldedMesh } from '../mesh/weld';
 import { resolveAuto } from '../params/defaults';
 import type { Params } from '../params/schema';
-import { clamVertices, deriveClamRim, moldBounds, seamJointTop, sideBounds, type ClamRim, type ClamVertices, type MoldBounds } from '../parts/rim';
+import type { CutOpening } from '../parts/openings';
+import { BAND_ROOM, clamVertices, deriveClamRim, moldBounds, PRY_LEG, seamJointTop, sideBounds, type ClamRim, type ClamVertices, type MoldBounds } from '../parts/rim';
 import { clipNeeds, placeClips, SPARES, type ClipLayout } from '../parts/clips';
-import { placeSeamBolts, seamBoltNeeds, type SeamBoltLayout } from '../parts/seamBolts';
+import { PIN_RADIUS, SOCKET_CLEARANCE, seamPinSpots } from '../parts/seam';
+import { lugReliefBoxes, placeSeamBolts, PRY_RUN, seamBoltNeeds, type SeamBoltLayout } from '../parts/seamBolts';
 import { clipAdvice, fillLevel, filmPush, halfForces, halvesTape, seamBoltAdvice, seamHoldN, topSpanOf, wedgeN, type ClipAdvice, type HalfForces, type SeamBoltAdvice } from '../report/clamp';
 import type { Rect } from '../solid/rect';
 import { fieldSettings, type Field, type FieldSettings } from './grid';
@@ -27,6 +32,7 @@ import {
   sideRows,
   sideTop,
   splitAxes,
+  topMap,
   turnMesh,
   type Pull,
   type SeamAxis,
@@ -40,7 +46,8 @@ import { volumeAbovePlane } from './silicone';
 /**
  * MP1: the two-part cover's core run, as MP5 joins it to the pipeline: the model cut at z = 0, the coarse side fields of
  * G13.2 step 8, G13.3's choice, G13.6's rim at the split, the two fine fields, and from them the silicone, G13.9's
- * forces and G13.10's seam bolts or seam clips. The tests and the measurement read this run.
+ * forces and G13.10's seam bolts or seam clips; MP4: S7c, the openings on P (G13.5). The tests and the measurement read
+ * this run.
  */
 
 export interface ClamshellPrep {
@@ -201,4 +208,76 @@ export function clipHold(prep: ClamshellPrep, fine: FineSplit): ClipHold {
 export function exactFootprint(prep: ClamshellPrep, fine: Pick<FineSplit, 'rim' | 'axis' | 'xs'>, fastener = prep.params.clamshell.fastener): { width: number; length: number; depth: number; fits: boolean } {
   const fp = bedFootprint(fine.rim, fine.axis, fine.xs, fastenerGrowth(prep.params, fastener));
   return { width: fp.width, length: fp.length, depth: Math.max(...fp.depths), fits: fitsBed(fp, prep.params.print) };
+}
+
+export interface SeamStage {
+  /** H_top at the split (G13.4), which placement, the funnel check and the view's markers read. */
+  top: Field;
+  tree: SeamTree;
+  room: SeamRoom;
+  placement: SeamPlacement;
+  /** The openings as the halves cut them, each with its own zb. */
+  openings: CutOpening[];
+}
+
+export interface SeamStageOptions {
+  pins?: OpeningPin[];
+  removed?: readonly string[];
+}
+
+/**
+ * G13.5's room on P at a split: O across the pull, the band past an opening's top radius, the pry chamfers, the seam
+ * bolts' lugs and relief or the clip ears where this fastener has them, and the pins' sockets where the pins are on.
+ */
+export function seamRoom(params: Params, fine: Pick<FineSplit, 'rim' | 'axis' | 'xs' | 'holdN'>): SeamRoom {
+  const { rim, axis, xs } = fine;
+  const { O, Zt } = rim;
+  const [o0, o1] = axis === 'x' ? [O.y0, O.y1] : [O.x0, O.x1];
+  const j = params.joint;
+  const keepOut: SeamBox[] = [
+    { b0: o0, b1: o0 + PRY_LEG, z0: Zt - PRY_RUN, z1: Zt },
+    { b0: o1 - PRY_LEG, b1: o1, z0: Zt - PRY_RUN, z1: Zt },
+  ];
+  if (params.clamshell.fastener === 'bolts') {
+    keepOut.push(...lugReliefBoxes(placeSeamBolts(seamBoltNeeds(params), rim, axis, xs, fine.holdN)));
+  } else if (params.clamshell.fastener === 'clips') {
+    // Each ear pair, its length out from O's end face, over its own height.
+    const clips = placeClips(clipNeeds(params), rim, axis, xs, fine.holdN);
+    for (const z of clips.zs) {
+      const [z0, z1] = [z - clips.height / 2, z + clips.height / 2];
+      keepOut.push({ b0: o0 - clips.earLength, b1: o0, z0, z1 }, { b0: o1, b1: o1 + clips.earLength, z0, z1 });
+    }
+  }
+  const pins = params.clamshell.pins ? seamPinSpots(rim).map(([b, z]) => ({ b, z, r: PIN_RADIUS + SOCKET_CLEARANCE })) : [];
+  return { o0, o1, Zt, band: params.clamshell.seamLand + j.ridgeWidth + 2 * j.grooveClearance + BAND_ROOM, keepOut, pins };
+}
+
+/**
+ * S7c (G13.5, MP4): the openings on P at a fine split, from H_top, S and its merge tree, the room rule and S8's columns
+ * along P, with the pins at (xs, pin.b) and the removed vents left out.
+ */
+export function placeSeam(prep: ClamshellPrep, fine: FineSplit, options: SeamStageOptions = {}): SeamStage {
+  const { params, mesh } = prep;
+  const { rim, axis, xs, plus, minus } = fine;
+  const bounds = meshBounds(mesh.positions);
+  const top = topMap(plus.field, minus.field, prep.bounds, axis, xs);
+  const sizes = openingSizes(params);
+  const space = placementSpace(top, rim, [[0, 0]], sizes);
+  const tree = seamTree(seamMask(plus.field, minus.field, prep.bounds, axis, xs));
+  const room = seamRoom(params, fine);
+  const model = modelStrip(mesh, axis, xs, boreRadius(sizes, 'vent') + 1, params.quality.analysisCell);
+  const placement = placeSeamOpenings({
+    axis,
+    xs,
+    space,
+    tree,
+    topUnder: (z) => topMap(plus.field, minus.field, prep.bounds, axis, xs, z),
+    room,
+    model,
+    settings: placementSettings(params, bounds),
+    pins: options.pins,
+    removed: options.removed,
+    centre: [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2],
+  });
+  return { top, tree, room, placement, openings: seamCutOpenings(placement.openings, sizes) };
 }

@@ -11,7 +11,10 @@ import { Arena } from '../../src/core/solid/arena';
 import { clamCase, seamOpening, type ClamCase } from '../fixtures/clamshell';
 import { loadManifold } from '../fixtures/loadExamples';
 
-/** MP2: G13.8's seal on the gallery's sphere and cube, with a pour and a vent on P (docs/PLAN.md, MP2's checks). */
+/**
+ * MP2: G13.8's seal on the gallery's sphere and cube, with the openings MP4 places on P (docs/PLAN.md, MP2's and MP4's
+ * checks); a pour placed by hand where a case needs that spot.
+ */
 
 let api: ManifoldToplevel;
 let arena: Arena;
@@ -20,10 +23,8 @@ const cases: ClamCase[] = [];
 beforeAll(async () => {
   api = await loadManifold();
   arena = new Arena(api);
-  for (const id of ['sphere', 'cube']) {
-    // The pour at the seam's top, and a vent beside it, as MP4 will place them on P.
-    cases.push(clamCase(arena, id, () => {}, { openings: (prep, fine) => [seamOpening(prep, fine, 'pour', 0), seamOpening(prep, fine, 'vent', 12)] }));
-  }
+  // The openings MP4 places on P (clamCase's default, placeSeam's), with the placement's choice on the pins.
+  for (const id of ['sphere', 'cube']) cases.push(clamCase(arena, id));
 }, 120_000);
 afterAll(() => arena.dispose());
 
@@ -126,7 +127,7 @@ describe('G13.8 step 7: pins with no room', () => {
     // The same pour with the pins turned off: no line, as nothing was dropped.
     const off = clamCase(arena, 'cube', (p) => (p.clamshell.pins = false), { openings: (prep, fine) => [seamOpening(prep, fine, 'pour', -17.6)] });
     expect(off.build.diagnostics.some((d) => d.code === 'seam-pins-dropped')).toBe(false);
-    // And with the pour at the seam's middle the cube keeps both.
+    // And with the openings placed on P the cube keeps both.
     expect(cases[1].build.seal.pins.length).toBe(2);
   });
 });
