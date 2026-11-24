@@ -10,12 +10,14 @@
       h1 { font-size: 18px; margin: 0 0 12px; }
       p { max-width: 640px; color: #93a1b0; }
       #out { display: flex; flex-wrap: wrap; gap: 12px; }
+      #stage canvas { display: block; }
       #out img { background: repeating-conic-gradient(#1f262e 0 25%, #171c22 0 50%) 0 0 / 16px 16px; }
     </style>
   </head>
   <body>
     <h1>Media</h1>
-    <p>Draws the gallery's thumbnails, which <code>npm run media -- thumbs</code> saves into <code>public/gallery/thumbs/</code>.</p>
+    <p>Draws the gallery's thumbnails, which <code>npm run media -- thumbs</code> saves into <code>public/gallery/thumbs/</code>, and the help's explode animations, which <code>npm run media -- explode</code> saves into <code>public/help/</code>.</p>
+    <div id="stage"></div>
     <div id="out"></div>
     <script type="module" src="/src/diag/mediaPage.ts"></script>
   </body>

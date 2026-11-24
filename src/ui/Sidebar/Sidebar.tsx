@@ -40,7 +40,7 @@ export function Sidebar() {
       {collapsed ? (
         <button
           type="button"
-          class="mold-rail"
+          class="mold-rail pull"
           data-testid="mold-rail"
           aria-label={`Mold type: ${store.moldTypeName(store.moldType())}. Show settings`}
           title={`Mold type: ${store.moldTypeName(store.moldType())}. Click to show the settings.`}

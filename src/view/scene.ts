@@ -57,6 +57,8 @@ export interface SceneOptions {
   interactive?: boolean;
   /** The height preview's fallback path, even where vertex textures work, so a test can draw with it. */
   cpuHeights?: boolean;
+  /** HB: no background, so what is drawn can be saved with a transparent one, as the help's animations are. */
+  transparent?: boolean;
 }
 
 /** S2's help for the model's cut: the triangles less the void shells, or null with none, and the air the plate seals. */
@@ -192,9 +194,10 @@ export class PreviewScene {
     private readonly canvas: HTMLCanvasElement,
     private readonly options: SceneOptions = {},
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true, preserveDrawingBuffer: true });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true, preserveDrawingBuffer: true, alpha: options.transparent ?? false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.scene.background = new THREE.Color(DARK_BACKGROUND);
+    this.scene.background = options.transparent ? null : new THREE.Color(DARK_BACKGROUND);
+    if (options.transparent) this.renderer.setClearColor(0x000000, 0);
     this.camera.up.set(0, 0, 1);
     this.ortho.up.set(0, 0, 1);
     addViewLights(this.scene);
@@ -255,6 +258,7 @@ export class PreviewScene {
   }
 
   setBackground(colour: number): void {
+    if (!this.scene.background) return;
     (this.scene.background as THREE.Color).set(colour);
     this.requestRender();
   }
@@ -617,6 +621,15 @@ export class PreviewScene {
     }
     this.placeClips();
     this.showModel();
+  }
+
+  /** HB: the box round the parts and the model as they are drawn now, wherever the explode has moved them. */
+  partsBox(): THREE.Box3 {
+    const box = new THREE.Box3();
+    for (const mesh of this.meshes.values()) box.expandByObject(mesh);
+    if (this.clips) box.expandByObject(this.clips.mesh);
+    if (this.model && this.modelGroup.visible) box.expandByObject(this.model);
+    return box;
   }
 
   /** How far each part is moved in z now, for tests. */

@@ -1,0 +1,23 @@
+{
+  "model": "sphere",
+  "modelSha256": "32f3a21797966d1bc1b9404df6a715e6f32c4baa0a5fa20502996799e1f6593a",
+  "frames": 20,
+  "grid": [
+    5,
+    4
+  ],
+  "size": [
+    480,
+    360
+  ],
+  "scale": 2,
+  "fps": 20,
+  "types": {
+    "one-piece": {
+      "partsSha256": "4cd4180db66c028ff7a93a6a82affddf2d01201eb84348ec65ceadae95904e17"
+    },
+    "clamshell": {
+      "partsSha256": "c3f3bbaaa6900d0d2f3b251b7f55baf4f160d885080efece185d5b50ed1b91fa"
+    }
+  }
+}

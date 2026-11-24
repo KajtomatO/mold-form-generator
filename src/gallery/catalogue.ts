@@ -74,7 +74,14 @@ export const GALLERY: readonly GalleryEntry[] = [
   { id: 'cone', file: 'cone.stl', title: 'Cone', thumbnail: 'cone.webp', heightMm: 40, triangles: 254, bytes: 12_784, twoPart: false, own: true, licence: 'CC0-1.0' },
 ];
 
-/** The model a plain page load opens (D29), and the one the help's animations show. */
+/**
+ * HB: the ids GALLERY lists, as a type, for a constant that must name one of its models, such as HELP_MODEL
+ * (src/help/config.ts). test/unit/help.test.ts holds GALLERY_IDS to GALLERY's ids.
+ */
+export const GALLERY_IDS = ['sphere', 'cube', 'cylinder', 'cone'] as const;
+export type GalleryId = (typeof GALLERY_IDS)[number];
+
+/** The model a plain page load opens (D29). The help's animations show HELP_MODEL (src/help/config.ts). */
 export const DEFAULT_GALLERY_MODEL = 'sphere';
 
 /** The `?model=` value that keeps the page empty. */

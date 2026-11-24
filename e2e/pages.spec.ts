@@ -11,7 +11,9 @@ import type { TestHooks } from '../src/app/testHooks';
 import { missingExampleFiles } from '../test/fixtures/loadExamples';
 import { app, canDraw, checkLayout, dropAndWait, type PageWatch } from './appHarness';
 import { NO_FIREFOX_WEBGL } from './firefox';
+import { MOLD_TYPE_IDS } from '../src/core/mold/types';
 import { GALLERY } from '../src/gallery/catalogue';
+import { explodeFile, HELP_THEMES } from '../src/help/media';
 
 /**
  * R1: the GitHub Pages layout, as scripts/build-pages.sh makes it and as the site serves it, under
@@ -52,6 +54,16 @@ async function checkGallery(page: Page, base: string): Promise<void> {
     const response = await page.request.get(`${base}gallery/${file}`);
     expect(response.status(), file).toBe(200);
     expect(Buffer.from(await response.body()).equals(readFileSync(join(root, 'public', 'gallery', file))), file).toBe(true);
+  }
+}
+
+/** HB: the help's explode animations and explode.json answer 200 under a site's prefix, with the bytes in public/help/. */
+async function checkHelp(page: Page, base: string): Promise<void> {
+  const files = [...MOLD_TYPE_IDS.flatMap((type) => HELP_THEMES.map((theme) => explodeFile(type, theme))), 'explode.json'];
+  for (const file of files) {
+    const response = await page.request.get(`${base}help/${file}`);
+    expect(response.status(), file).toBe(200);
+    expect(Buffer.from(await response.body()).equals(readFileSync(join(root, 'public', 'help', file))), file).toBe(true);
   }
 }
 
@@ -294,6 +306,7 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     expect(title).toBe(`Mold Form Generator ${pkg.version}\nThe released version, built from the code of ${site.date} (commit ${site.commit}).`);
     expect(await robots(page, site.url)).toEqual([[], [], [], [], []]);
     await checkGallery(page, site.url);
+    await checkHelp(page, site.url);
 
     // A model previews, which loads field.worker, solid.worker and the WebAssembly from the sub-path.
     await dropAndWait(page, 'jersey-barrier.stl');
@@ -338,6 +351,7 @@ test.describe('the GitHub Pages site under /mold-form-generator/', () => {
     for (const id of ['app-version', 'beta-chip']) expect(await page.getByTestId(id).getAttribute('title'), id).toBe(title);
     expect(await robots(page, beta)).toEqual([['noindex'], ['noindex'], ['noindex'], ['noindex'], ['noindex']]);
     await checkGallery(page, beta);
+    await checkHelp(page, beta);
     expect(await page.locator('meta[name="robots"]').getAttribute('content')).toBe('noindex');
     // With a model open the header holds the most it ever does, in both themes: the brand in its order, the
     // version in the muted ink, the chip in the warning colours, still 48 px and nothing clipped.

@@ -2059,6 +2059,19 @@ li + li > .candidate {
   color: var(--ink-2);
 }
 
+/* HB: the heading's row, its "?" at the right. */
+.mold-type-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.mold-type .mold-type-head h2 {
+  margin: 0;
+}
+
 /* More types wrap with no change: each tile is at least 96 px, and the tiles there are share the row. */
 .mold-tiles {
   display: grid;
@@ -2104,6 +2117,8 @@ li + li > .candidate {
 .mold-tile .mold-icon {
   width: 28px;
   height: 28px;
+  /* Lighter than the icons' 1.8 at this size, as MT drew it, so the cover's outline stands clear of the silicone. */
+  stroke-width: 1.6;
 }
 
 .mold-tile .name {
@@ -2268,4 +2283,189 @@ li + li > .candidate {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* ----- HB: the help (R46): the pictograms, the hint card, the "?" and its popover ----- */
+
+/*
+ * Each part of a pictogram that comes away moves by its own --dx and --dy while the element round it marked .pull is
+ * hovered or has the keyboard's focus: a tile, the rail, a figure in the help. In SVG a CSS pixel is a unit of the
+ * drawing's 24 unit grid.
+ */
+.pictogram .part {
+  transition: transform 250ms ease-out;
+}
+
+.pull:hover .pictogram .part,
+.pull:focus-visible .pictogram .part {
+  transform: translate(var(--dx), var(--dy));
+}
+
+.pictogram .ghost {
+  display: none;
+}
+
+.help-button {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.help-button:hover,
+.help-button[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A sprite sheet's frame, its size and place set by HelpAnimation. */
+.help-anim {
+  flex: none;
+  background-repeat: no-repeat;
+}
+
+/* In the top layer, placed by HelpHint beside its tile; it takes no pointer, so it never hides what it is beside. */
+.help-hint {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: 266px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.help-hint p {
+  margin: 8px 0 0;
+}
+
+.help-hint .help-note {
+  margin-top: 4px;
+  color: var(--ink-2);
+}
+
+/* In the top layer too, placed by HelpPopover under its "?", and scrolled within the window's height. */
+.help-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 14px 16px 16px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.help-popover .help-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.help-popover p {
+  margin: 6px 0 0;
+}
+
+.help-popover .help-summary {
+  color: var(--ink-2);
+}
+
+.help-topics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.help-topic h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.help-topic h5 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.help-media {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.help-replay {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.help-replay:hover {
+  border-color: var(--accent);
+}
+
+.help-topic.depth-2 {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.help-figure .pictogram {
+  display: block;
+  width: 56px;
+  height: 56px;
+}
+
+/*
+ * Reduced motion, once for all help: a pictogram's parts stay still and a thin outline shows where each goes, and an
+ * animation shows its last frame, the parts apart (HelpAnimation), playing only when Replay is clicked.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .pictogram .part {
+    transition: none;
+  }
+
+  .pull:hover .pictogram .part,
+  .pull:focus-visible .pictogram .part {
+    transform: none;
+  }
+
+  .pull:hover .pictogram .ghost,
+  .pull:focus-visible .pictogram .ghost {
+    display: inline;
+    transform: translate(var(--dx), var(--dy));
+    /* Dashed and faint, so it reads as where the part goes and not as the drawing again. */
+    stroke-width: 0.8;
+    stroke-dasharray: 1.2 1;
+    opacity: 0.7;
+  }
 }
