@@ -56,7 +56,7 @@ const boltsOf = (c: ClamCase): SeamBoltLayout => c.build.bolts!;
 /** The halves again from the case's tools and seal, with the lugs or cuts changed: the negative controls. */
 function rebuilt(c: ClamCase, options: Pick<ClamshellBuildOptions, 'lugs' | 'cuts'>, bolts = boltsOf(c)): [Manifold, Manifold] {
   const { rim, tools, seal, openings } = c.build;
-  return buildHalves(arena, rim, tools, seal, c.params, openings, bolts, options).halves;
+  return buildHalves(arena, rim, tools, seal, c.params, openings, bolts, null, options).halves;
 }
 
 /** O's box over the cover's height, a hair past it each way, its end faces moved in by `inset` along b. */

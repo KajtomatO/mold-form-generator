@@ -12,6 +12,7 @@ import { openingCutters, OPENING_SEGMENTS, type CutOpening } from '../../src/cor
 import { rebateOutset, type ClamRim } from '../../src/core/parts/rim';
 import { bRange, openingTopRadius, rectSection, seamGroove, uSpan, type SeamSeal } from '../../src/core/parts/seam';
 import { seamBoltCuts } from '../../src/core/parts/seamBolts';
+import { socketCutters } from '../../src/core/parts/clips';
 import { Arena } from '../../src/core/solid/arena';
 import { clamCase, siliconeSolid, type ClamCase } from '../fixtures/clamshell';
 import { and, andNot, barrierExits, columnZone, count, emptyBits, firstCell, flangeZone, grow6, leastFlangeCrossing, opened, or, outsideOf, voxelGrid, voxelize, type Bits, type VoxelGrid } from '../fixtures/leakVoxels';
@@ -69,7 +70,7 @@ interface Mold {
   liquid: Manifold[];
   /** K4's and K5's cutters. */
   grooves: Manifold[];
-  /** The seam bolts' cutters, whose empty cells must all lie in the outside (MP3). */
+  /** The seam bolts' cutters, or the seam clips' sockets, whose empty cells must all lie in the outside (MP3, MP3b). */
   cuts: Manifold[];
 
   pour: CutOpening;
@@ -187,7 +188,10 @@ function twoPart(c: ClamCase, extraCut: Manifold[] = []): Mold {
     // The cutters as cut: the seam groove's starts 0.3 mm short of P, so the rounded edges of neg's face in front of its
     // mouth, which open into it, are K5 too.
     grooves: [clamGrooveSolid(arena, rim, rim.axis), seamGroove(arena, seal)],
-    cuts: build.bolts && build.bolts.spots.length > 0 ? [-1, 1].flatMap((sign) => seamBoltCuts(arena, build.bolts!, sign as 1 | -1)) : [],
+    cuts: [
+      ...(build.bolts && build.bolts.spots.length > 0 ? [-1, 1].flatMap((sign) => seamBoltCuts(arena, build.bolts!, sign as 1 | -1)) : []),
+      ...(build.clips && build.clips.zs.length > 0 ? [-1, 1].flatMap((sign) => socketCutters(arena, build.clips!, sign as 1 | -1)) : []),
+    ],
     pour,
     exits: build.openings.map((o) => ({ x: o.x, y: o.y, r: openingTopRadius(o) + params.clamshell.seamLand + seal.gw + EXIT_SPARE, vent: o.kind === 'vent' })),
     Zt: rim.Zt,
@@ -293,6 +297,27 @@ describe.runIf(FULL)('MP2: the leak voxel test', () => {
   it('the two-part sphere with seam bolts: the least crossing of the flange\'s contact is still at least the one-piece coupon\'s', () => {
     const reading = leak(twoPart(boltedSphere()));
     console.log(`two-part sphere with seam bolts: least flange crossing ${reading.crossing} cells against ${baseline().crossing}`, reading.cells);
+    expect(reading.crossing).toBeGreaterThanOrEqual(baseline().crossing);
+  }, SLOW);
+
+  // MP3b: the same with the seam clips' ears and sockets, which lie wholly outside O (G13.10.16), on the sphere only.
+  let clipped: ClamCase | null = null;
+  const clippedSphere = (): ClamCase => (clipped ??= clamCase(arena, 'sphere', merged((p) => (p.clamshell.fastener = 'clips'))));
+
+  it('the two-part sphere with seam clips, the flange sealed: still no way out, and every socket\'s cell in the outside, none joining the liquid\'s side', () => {
+    const c = clippedSphere();
+    expect(c.build.clips!.placed.length).toBe(2);
+    const reading = leak(twoPart(c), true);
+    console.log('two-part sphere with seam clips, the flange sealed:', reading.cutCells, 'cells of sockets,', reading.cutsInside, 'past the outside', reading.cells);
+    expect(reading.crossing).toBe(Infinity);
+    expect(reading.exits, `K4 or K5 opens to the air at ${reading.exitAt}`).toBe(0);
+    expect(reading.cutCells).toBeGreaterThan(1000);
+    expect(reading.cutsInside).toBe(0);
+  }, SLOW);
+
+  it('the two-part sphere with seam clips: the least crossing of the flange\'s contact is still at least the one-piece coupon\'s', () => {
+    const reading = leak(twoPart(clippedSphere()));
+    console.log(`two-part sphere with seam clips: least flange crossing ${reading.crossing} cells against ${baseline().crossing}`, reading.cells);
     expect(reading.crossing).toBeGreaterThanOrEqual(baseline().crossing);
   }, SLOW);
 

@@ -78,3 +78,53 @@ test('@smoke the Two-part cover\'s fit test holds the two seam bolt coupons with
   expect(coupons(await fitFromApp(page))).toEqual([]);
   expect(watch.errors).toEqual([]);
 });
+
+// MP3b (docs/PLAN.md, G13.10.19): with Seam fasteners Clips the fit test holds the clip coupon's block and keys, and the
+// Clips rows show under Seam clips; with Bolts neither, and back on Clips the values set are kept; in the One-piece cover the
+// rows hide, with Clips kept, and they come back with their values on switching back.
+test('the Two-part cover\'s fit test holds the clip coupon with Seam fasteners Clips, whose rows show only then', async ({ page }) => {
+  test.skip(!canDraw(page), NO_FIREFOX_WEBGL);
+  const watch = await openApp(page, '&model=cube');
+  await expect.poll(() => app(page, (a) => a.store.pipeline.modelName)).toBe('cube.stl');
+  await idle(page);
+  const clip = ['fit_test/clip_coupon_block.stl', 'fit_test/clip_coupon_keys.stl'];
+  const coupons = (files: Record<string, Uint8Array>): string[] => Object.keys(files).filter((name) => name.includes('_coupon')).sort();
+  const clearance = page.locator('.sidebar [data-param="clips.clearance"]');
+
+  await hooks(page, (h) => h.enableMoldType('clamshell'));
+  await hooks(page, (h) => h.setParam('silicone.t', 3));
+  await page.locator('.mold-tile[data-type="clamshell"]').click();
+  await expect(clearance).toHaveCount(0);
+  await page.locator('.sidebar [data-param="clamshell.fastener"]').getByRole('button', { name: 'Clips' }).click();
+  expect(await hooks(page, (h) => [h.params().mold.type, h.params().clamshell.fastener])).toEqual(['clamshell', 'clips']);
+  await expect(clearance).toHaveCount(1);
+  await expect(page.getByTestId('clips-group')).toHaveText('Seam clips');
+  await hooks(page, (h) => h.setParam('clips.clearance', 0.25));
+
+  const clipped = await fitFromApp(page);
+  expect(coupons(clipped)).toEqual(clip);
+  const readme = new TextDecoder().decode(clipped['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');
+  expect(readme).toContain('at a Clip clearance of 0.15, 0.25 and 0.35 mm per side');
+  expect(readme).toContain('Push the clip with 2 notches into the socket');
+  expect(readme).toContain('Set Clip clearance under Two-part cover, Seam clips to 0.25 mm, the value of the clip with 2 notches');
+  for (const name of clip) expect(clipped[name].length).toBeGreaterThan(84 + 50 * 30);
+
+  await page.locator('.sidebar [data-param="clamshell.fastener"]').getByRole('button', { name: 'Bolts' }).click();
+  await expect(clearance).toHaveCount(0);
+  expect(coupons(await fitFromApp(page))).toEqual(['fit_test/seam_bolt_coupon_neg.stl', 'fit_test/seam_bolt_coupon_pos.stl']);
+  await page.locator('.sidebar [data-param="clamshell.fastener"]').getByRole('button', { name: 'Clips' }).click();
+  expect(await hooks(page, (h) => h.params().clips.clearance)).toBe(0.25);
+  // In the one-piece type the Clips rows hide, with Seam fasteners Clips kept; back on the Two-part cover they return.
+  await page.locator('.mold-tile[data-type="one-piece"]').click();
+  expect(await hooks(page, (h) => [h.params().mold.type, h.params().clamshell.fastener])).toEqual(['one-piece', 'clips']);
+  await expect(clearance).toHaveCount(0);
+  await expect(page.getByTestId('clips-group')).toHaveCount(0);
+  // Clip clearance is yours, so the switch window opens on it, with 0.25 kept: Transfer brings it back.
+  await page.locator('.mold-tile[data-type="clamshell"]').click();
+  await expect(page.getByTestId('switch-dialog').locator('tr[data-param="clips.clearance"]').getByTestId('switch-yours')).toHaveText('0.25 mm');
+  await page.getByTestId('switch-transfer').click();
+  await expect(clearance).toHaveCount(1);
+  await expect(clearance.locator('input.num')).toHaveValue('0.25');
+  expect(await hooks(page, (h) => [h.params().mold.type, h.params().clamshell.fastener, h.params().clips.clearance])).toEqual(['clamshell', 'clips', 0.25]);
+  expect(watch.errors).toEqual([]);
+});

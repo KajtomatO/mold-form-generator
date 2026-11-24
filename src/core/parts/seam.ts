@@ -163,7 +163,7 @@ export function seamSeal(arena: Arena, rim: ClamRim, S: CrossSection, openings: 
 }
 
 function circle(arena: Arena, u: number, v: number, r: number): CrossSection {
-  return arena.track(arena.api.CrossSection.circle(r, OPENING_SEGMENTS).translate([u, v]));
+  return arena.track(arena.track(arena.api.CrossSection.circle(r, OPENING_SEGMENTS)).translate([u, v]));
 }
 
 /** A solid drawn in the seam frame, back in the mold's. */
@@ -210,8 +210,8 @@ export function seamTongue(arena: Arena, seal: SeamSeal, params: Params): Manifo
 export function seamPins(arena: Arena, seal: SeamSeal): Manifold[] {
   const { Manifold } = arena.api;
   return seal.pins.map(([u, v]) => {
-    const body = arena.track(Manifold.cylinder(PIN_HEIGHT - PIN_LEAD + OVER, PIN_RADIUS, PIN_RADIUS, OPENING_SEGMENTS).translate([u, v, -OVER]));
-    const lead = arena.track(Manifold.cylinder(PIN_LEAD, PIN_RADIUS, PIN_RADIUS - PIN_LEAD, OPENING_SEGMENTS).translate([u, v, PIN_HEIGHT - PIN_LEAD]));
+    const body = arena.track(arena.track(Manifold.cylinder(PIN_HEIGHT - PIN_LEAD + OVER, PIN_RADIUS, PIN_RADIUS, OPENING_SEGMENTS)).translate([u, v, -OVER]));
+    const lead = arena.track(arena.track(Manifold.cylinder(PIN_LEAD, PIN_RADIUS, PIN_RADIUS - PIN_LEAD, OPENING_SEGMENTS)).translate([u, v, PIN_HEIGHT - PIN_LEAD]));
     return toMold(arena, seal, arena.track(body.add(lead)));
   });
 }
@@ -219,5 +219,5 @@ export function seamPins(arena: Arena, seal: SeamSeal): Manifold[] {
 /** G13.8 step 7: the sockets in pos, SOCKET_CLEARANCE wider than the pins and SOCKET_DEEPER deeper, so the seam faces touch first. */
 export function seamSockets(arena: Arena, seal: SeamSeal): Manifold[] {
   const r = PIN_RADIUS + SOCKET_CLEARANCE;
-  return seal.pins.map(([u, v]) => toMold(arena, seal, arena.track(arena.api.Manifold.cylinder(PIN_HEIGHT + SOCKET_DEEPER + OVER, r, r, OPENING_SEGMENTS).translate([u, v, -OVER]))));
+  return seal.pins.map(([u, v]) => toMold(arena, seal, arena.track(arena.track(arena.api.Manifold.cylinder(PIN_HEIGHT + SOCKET_DEEPER + OVER, r, r, OPENING_SEGMENTS)).translate([u, v, -OVER]))));
 }

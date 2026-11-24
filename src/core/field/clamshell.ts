@@ -3,8 +3,9 @@ import { meshBounds, type Bounds, type WeldedMesh } from '../mesh/weld';
 import { resolveAuto } from '../params/defaults';
 import type { Params } from '../params/schema';
 import { clamVertices, deriveClamRim, moldBounds, seamJointTop, sideBounds, type ClamRim, type ClamVertices, type MoldBounds } from '../parts/rim';
+import { clipNeeds, placeClips, SPARES, type ClipLayout } from '../parts/clips';
 import { placeSeamBolts, seamBoltNeeds, type SeamBoltLayout } from '../parts/seamBolts';
-import { fillLevel, filmPush, halfForces, halvesTape, seamBoltAdvice, seamHoldN, topSpanOf, wedgeN, type HalfForces, type SeamBoltAdvice } from '../report/clamp';
+import { clipAdvice, fillLevel, filmPush, halfForces, halvesTape, seamBoltAdvice, seamHoldN, topSpanOf, wedgeN, type ClipAdvice, type HalfForces, type SeamBoltAdvice } from '../report/clamp';
 import type { Rect } from '../solid/rect';
 import { fieldSettings, type Field, type FieldSettings } from './grid';
 import { exteriorMesh } from './sealed';
@@ -39,7 +40,7 @@ import { volumeAbovePlane } from './silicone';
 /**
  * MP1: the two-part cover's core run, as MP5 joins it to the pipeline: the model cut at z = 0, the coarse side fields of
  * G13.2 step 8, G13.3's choice, G13.6's rim at the split, the two fine fields, and from them the silicone, G13.9's
- * forces and G13.10's seam bolts. The tests and the measurement read this run.
+ * forces and G13.10's seam bolts or seam clips. The tests and the measurement read this run.
  */
 
 export interface ClamshellPrep {
@@ -179,6 +180,21 @@ export function seamHold(prep: ClamshellPrep, fine: FineSplit): SeamHold {
   const tape = halvesTape([fine.forces[0].liftN, fine.forces[1].liftN], params.print.tapeStrip, box, fine.axis);
   const advice = seamBoltAdvice(bolts, fine.holdN, wedgeN(tape, params.joint.taperDeg), topSpanOf(fine.rim, fine.axis));
   return { bolts, advice };
+}
+
+export interface ClipHold {
+  clips: ClipLayout;
+  advice: ClipAdvice;
+}
+
+/** G13.10.17's seam clips at a split, with the base tape's wedge on the bottom rows and the top span. */
+export function clipHold(prep: ClamshellPrep, fine: FineSplit): ClipHold {
+  const { params } = prep;
+  const clips = placeClips(clipNeeds(params), fine.rim, fine.axis, fine.xs, fine.holdN);
+  const box: [number, number] = [fine.rim.O.x1 - fine.rim.O.x0, fine.rim.O.y1 - fine.rim.O.y0];
+  const tape = halvesTape([fine.forces[0].liftN, fine.forces[1].liftN], params.print.tapeStrip, box, fine.axis);
+  const advice = clipAdvice(clips, fine.holdN, tape, params.joint.taperDeg, topSpanOf(fine.rim, fine.axis), SPARES);
+  return { clips, advice };
 }
 
 /** The bed outcome of the exact rim at a split, with this fastener's growth. */

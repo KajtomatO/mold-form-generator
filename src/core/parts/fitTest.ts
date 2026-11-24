@@ -15,6 +15,7 @@ import { basePose, coverPose, halfPose, poseToStl } from './poses';
 import { deriveRim, type Rim } from './rim';
 import type { Rect } from '../solid/rect';
 import { headThickness, LUG_OVERLAP, lugRelief, lugSolid, seamBoltCuts, seamBoltNeeds, slotFace, type SeamBoltLayout } from './seamBolts';
+import { clipNeeds, earSolids, keyHead, keySolid, PLATE_GAP, socketCutters, type ClipLayout, type ClipSpot, type EarOptions } from './clips';
 
 const TOOL_SIDE = 20;
 const TOOL_HEIGHT = 6;
@@ -176,6 +177,78 @@ export function buildSeamBoltCoupon(arena: Arena, params: Params, options: Pick<
   return { bolts, O, halves: [half(-1), half(1)] };
 }
 
+/** G13.10.19: the clip coupon's block stands for a corner of a half, its end wall this thick along b, in mm. */
+export const CLIP_BLOCK_WALL = 8;
+/** G13.10.19: the block's height over the ear's, in mm, half of it above and half below. */
+export const CLIP_BLOCK_OVER = 4;
+/** G13.10.19: the trio's keys stand this far apart in Clip clearance, in mm, within the setting's range. */
+export const CLIP_TRIO_STEP = 0.1;
+
+/** G13.10.19's clip coupon: a corner of each half with one ear and its socket, and the trio of keys. */
+export interface ClipCoupon {
+  /** One ear pair on the end face at b = 0 of an x seam at xs = 0, centred in the block's height. */
+  clips: ClipLayout;
+  spot: ClipSpot;
+  /** The block's box for the + half, which stands for O: a in [0, earDepth], the wall on y in [-wall, 0]. */
+  O: Rect;
+  /** The + half's block, the one printed twice, and the - half's, built by the same functions, which it equals turned over. */
+  block: Manifold;
+  negBlock: Manifold;
+  /** The trio's clearances, 1, 2 and 3 notches on the head, and the keys standing on their heads in a row PLATE_GAP apart. */
+  trio: [number, number, number];
+  keys: Manifold;
+}
+
+/** G13.10.19: clips.clearance - 0.1, the set value and + 0.1, held inside the setting's range of 0 to 0.5. */
+export function clipTrio(clearance: number): [number, number, number] {
+  const mid = Math.min(0.5 - CLIP_TRIO_STEP, Math.max(CLIP_TRIO_STEP, clearance));
+  const round = (v: number): number => Math.round(v * 100) / 100;
+  return [round(mid - CLIP_TRIO_STEP), round(mid), round(mid + CLIP_TRIO_STEP)];
+}
+
+/**
+ * G13.10.19: the fit test's clip coupon, from the halves' own functions. The block: b in [-CLIP_BLOCK_WALL, 0], a in
+ * [0, the ear's depth], z in [0, h_e + CLIP_BLOCK_OVER], with one ear and its socket centred in z on its end face; as the
+ * ear's depth is its corbel's foot, the corbel lands on the bed in the halves' pose. The ear and socket are symmetric
+ * about the ear's middle in z, so the block turned over about b is the - half's, and one file printed twice is the pair.
+ * The keys: keySolid at the trio's clearances, with 1, 2 and 3 notches. `ears` are the tests' negative controls.
+ */
+export function buildClipCoupon(arena: Arena, params: Params, ears: EarOptions = {}): ClipCoupon {
+  const needs = clipNeeds(params);
+  const depth = needs.earDepth;
+  const top = needs.height + CLIP_BLOCK_OVER;
+  const spot: ClipSpot = { end: 'b1', z: top / 2 };
+  const clips: ClipLayout = {
+    ...needs,
+    axis: 'x',
+    xs: 0,
+    depths: [depth, depth],
+    ends: [-CLIP_BLOCK_WALL, 0],
+    zLow: 0,
+    zHigh: top,
+    most: 1,
+    placed: [{ kind: 'bottom', z: spot.z }],
+    zs: [spot.z],
+    count: 2,
+    clipsHoldN: 0,
+    holdN: 0,
+    heldBack: false,
+    lowered: false,
+    diagnostics: [],
+  };
+  const O: Rect = { x0: -depth, y0: -CLIP_BLOCK_WALL, x1: depth, y1: 0 };
+  const { Manifold } = arena.api;
+  const half = (sign: 1 | -1): Manifold => {
+    const stub = sign > 0 ? boxAt(arena, 0, O.y0, 0, depth, 0, top) : boxAt(arena, -depth, O.y0, 0, 0, 0, top);
+    const eared = arena.track(Manifold.union([stub, ...earSolids(arena, clips, sign, ears, [spot])]));
+    return checked(arena.track(Manifold.difference([eared, ...socketCutters(arena, clips, sign, ears, [spot])])), sign > 0 ? 'The clip coupon\'s block' : 'The clip coupon\'s other block');
+  };
+  const trio = clipTrio(needs.clearance);
+  const head = keyHead(needs);
+  const keys = trio.map((clearance, k) => arena.track(keySolid(arena, needs, { clearance, notches: k + 1 }).translate([(k - 1) * (2 * head.x + PLATE_GAP), 0, 0])));
+  return { clips, spot, O, block: half(1), negBlock: half(-1), trio, keys: arena.track(Manifold.union(keys)) };
+}
+
 function boxAt(arena: Arena, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): Manifold {
   const { track } = arena;
   return track(track(arena.api.Manifold.cube([x1 - x0, y1 - y0, z1 - z0])).translate([x0, y0, z0]));
@@ -320,6 +393,28 @@ function seamBoltLines(coupon: SeamBoltCoupon, params: Params): string[] {
   return out;
 }
 
+function clipLines(coupon: ClipCoupon): string[] {
+  const out: string[] = ['', 'Clip coupon:'];
+  const step = (n: number, text: string): void => {
+    out.push(...wrap(text, `${n}. `, '   '));
+  };
+  const item = (text: string): void => {
+    out.push(...wrap(text, '- ', '  '));
+  };
+  const mm = (v: number): string => v.toFixed(2);
+  const [low, mid, high] = coupon.trio;
+  // MP5 draws the Seam clips rows under Two-part cover; these steps name the row there.
+  const row = 'Clip clearance under Two-part cover, Seam clips';
+  out.push(...wrap(`clip_coupon_block.stl is a corner of a half with one clip ear and its socket, cut as the real halves' are, and clip_coupon_keys.stl holds three clips, the printed keys that slide into the sockets, at a Clip clearance of ${mm(low)}, ${mm(mid)} and ${mm(high)} mm per side, told apart by 1, 2 and 3 notches on the head. Each clip has a double line across its sides, with single marks 1 mm apart on either side of it; the double line shows how far the clip went in. Print the block twice, like the halves, at 5 percent infill or less with at least 3 walls, and the clips at 100 percent infill, standing on their heads as the file lays them out, in PLA or PETG. Then:`));
+  step(1, 'Stand the two blocks on a flat table, seam faces together, one of them turned upside down, so their ears meet side by side and their sockets make one.');
+  step(2, 'Push the clip with 2 notches into the socket, narrow end first, head out, by hand until it stops, then give its head two light taps with a screwdriver handle. Its double line should end level with the tip of the ears, within one mark, and the seam faces should be closed.');
+  step(3, `Set ${row} to ${mm(mid)} mm, the value of the clip with 2 notches, plus 0.05 mm for each mark its double line stops outside the tip of the ears, or minus 0.05 mm for each mark it goes in past it. If the clip goes in to its head with the seam still open, try the clip with 1 notch and set Clip clearance to its value. If even the clip with 3 notches stops more than 2 marks out, set Clip clearance to its value plus 0.1 mm; if that would be over 0.5 mm, your printer is printing well over size: check its flow and first-layer squish, then print the coupon again. Clip clearance never goes below 0 or above 0.5 mm.`);
+  step(4, 'Try to pull the blocks apart by hand, with well over the 40 N each clip is counted at: they should not move. Then lever the clip out whole with a flat screwdriver between its head and the ears.');
+  out.push('', 'Clips:');
+  coupon.trio.forEach((value, k) => item(`${k + 1} notch${k > 0 ? 'es' : ''} on the head: Clip clearance ${mm(value)} mm`));
+  return out;
+}
+
 /** Everything in the fit-test ZIP, by path, in print pose. The caller zips it, so core needs no zip library. */
 export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultParams()): Record<string, Uint8Array> {
   const variants = fitVariants(params);
@@ -348,6 +443,15 @@ export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultPara
       files['fit_test/seam_bolt_coupon_neg.stl'] = poseToStl(api, coupon.halves[0], halfPose(coupon, 'x', -1));
       files['fit_test/seam_bolt_coupon_pos.stl'] = poseToStl(api, coupon.halves[1], halfPose(coupon, 'x', 1));
       readme.push(...seamBoltLines(coupon, params));
+    });
+  }
+  // G13.10.19: the clip coupon with Seam fasteners Clips only, the block in the halves' pose and the keys as they stand.
+  if (clamshell && params.clamshell.fastener === 'clips') {
+    withArena(api, (arena) => {
+      const coupon = buildClipCoupon(arena, params);
+      files['fit_test/clip_coupon_block.stl'] = poseToStl(api, coupon.block, halfPose(coupon, 'x', 1));
+      files['fit_test/clip_coupon_keys.stl'] = poseToStl(api, coupon.keys, { rotation: [1, 0, 0, 0, 1, 0, 0, 0, 1], translation: [0, 0, 0] });
+      readme.push(...clipLines(coupon));
     });
   }
   // Plain ASCII in CRLF lines for Notepad, and core has no TextEncoder without the DOM types.

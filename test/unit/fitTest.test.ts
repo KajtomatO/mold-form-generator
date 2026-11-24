@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
 import type { Manifold, ManifoldToplevel } from 'manifold-3d';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { orientSolid } from '../../src/core/base/orient';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
-import { buildSeamBoltCoupon, fitTestFiles, type SeamBoltCoupon } from '../../src/core/parts/fitTest';
+import { buildClipCoupon, buildSeamBoltCoupon, clipTrio, fitTestFiles, type SeamBoltCoupon } from '../../src/core/parts/fitTest';
+import { keySolid } from '../../src/core/parts/clips';
+import { countHandles } from '../fixtures/handles';
 import { halfPose, inversePose } from '../../src/core/parts/poses';
 import { onSeamBoltBridge, seamBoltBridges } from '../../src/core/parts/seamBolts';
 import { auditOverhang } from '../../src/core/report/overhang';
@@ -11,11 +14,13 @@ import { Arena } from '../../src/core/solid/arena';
 import { parseStl } from '../../src/core/stl/parse';
 import { loadManifold } from '../fixtures/loadExamples';
 import { boxAW, cutsAsBuilt, cutWalls, readCuts, slotSection } from '../fixtures/seamBolts';
-import { readPart } from '../fixtures/solidChecks';
+import { readPart, unpose } from '../fixtures/solidChecks';
+import { CLAMSHELL_FIT_GOLDEN } from '../regression/golden';
 
 /**
  * MP3: G13.10.12's seam bolt coupons, built from the halves' own functions, read as the halves are
  * (test/regression/seamBolts.test.ts), and the fit-test ZIP that holds them only for the two-part cover with seam bolts.
+ * MP3b: G13.10.19's clip coupon, its block and its trio of keys, and the ZIP that holds it only with seam clips.
  */
 
 let api: ManifoldToplevel;
@@ -169,5 +174,164 @@ describe('MP3: the seam bolt coupon', () => {
     ]) expect(readme).toContain(line);
     expect(readme).not.toContain('keeps plastic over its countersink');
     expect(new TextDecoder().decode(fitTestFiles(api, defaultParams())['fit_test/README.txt'])).not.toContain('Seam bolt coupon');
+  });
+});
+
+describe('MP3b: the clip coupon', () => {
+  const clipped = (change: (p: Params) => void = () => {}): Params => clamParams((p) => {
+    p.clamshell.fastener = 'clips';
+    change(p);
+  });
+  const steep = (solid: Manifold, pose: Parameters<typeof orientSolid>[2] | null): number => {
+    const mesh = (pose ? orientSolid(arena, solid, pose) : solid).getMesh();
+    return auditOverhang({ positions: mesh.vertProperties, indices: mesh.triVerts }).steepArea;
+  };
+
+  it('the block: one valid shell, its ear and socket centred on its end face, its corbel on the bed, and turned over about b it is the other half\'s', () => {
+    const coupon = buildClipCoupon(arena, clipped());
+    const { block, negBlock, clips, spot, O } = coupon;
+    for (const half of [block, negBlock]) {
+      expect(half.status()).toBe('NoError');
+      expect(half.decompose().length).toBe(1);
+    }
+    const box = block.boundingBox();
+    expect([box.min[0], box.max[0]]).toEqual([0, clips.earDepth]);
+    expect(box.min[1]).toBeCloseTo(O.y0, 9);
+    expect(box.max[1]).toBeCloseTo(clips.earLength, 9);
+    expect([box.min[2], box.max[2]]).toEqual([0, clips.height + 4]);
+    expect(spot.z).toBeCloseTo((clips.height + 4) / 2, 12);
+    // The corbel's foot meets the back face at the end face: its last 0.5 mm over the bed is a 45 degree wedge of the ear.
+    const foot = arena.track(block.intersect(arena.track(arena.track(api.Manifold.cube([0.5, 30, 30])).translate([clips.earDepth - 0.5, 0, -1]))));
+    expect(foot.volume()).toBeCloseTo((0.5 * 0.5 * clips.height) / 2, 4);
+    // Turned 180 degrees about b, the line x = 0, z = the ear's middle: (x, y, z) to (-x, y, 2 zc - z).
+    const turned = orientSolid(arena, block, { rotation: [-1, 0, 0, 0, 1, 0, 0, 0, -1], translation: [0, 0, 2 * spot.z] });
+    const apart = arena.track(turned.subtract(negBlock)).volume() + arena.track(negBlock.subtract(turned)).volume();
+    expect(apart).toBeLessThanOrEqual(1e-3);
+    // The pair as printed, the second one turned over, stands seam to seam with its ears 2r apart and the key through both.
+    expect(arena.track(block.intersect(negBlock)).volume()).toBeLessThanOrEqual(1e-3);
+    expect(xSpan(arena.track(negBlock.intersect(arena.track(arena.track(api.Manifold.cube([40, 20, 40])).translate([-20, 0.01, -5])))))[1]).toBeCloseTo(-clips.relief, 6);
+  });
+
+  it('the keys: the trio of the set clearance and 0.1 either side, kept in 0 to 0.5, each the mold\'s keySolid with its notches, standing on its head', () => {
+    expect(clipTrio(0.1)).toEqual([0, 0.1, 0.2]);
+    expect(clipTrio(0.25)).toEqual([0.15, 0.25, 0.35]);
+    expect(clipTrio(0.05)).toEqual([0, 0.1, 0.2]);
+    expect(clipTrio(0)).toEqual([0, 0.1, 0.2]);
+    expect(clipTrio(0.45)).toEqual([0.3, 0.4, 0.5]);
+    expect(clipTrio(0.5)).toEqual([0.3, 0.4, 0.5]);
+    const params = clipped((p) => (p.clips.clearance = 0.25));
+    const coupon = buildClipCoupon(arena, params);
+    const keys = coupon.keys.decompose();
+    keys.forEach((key) => arena.track(key));
+    expect(keys.length).toBe(3);
+    keys.sort((p, q) => p.boundingBox().min[0] - q.boundingBox().min[0]);
+    coupon.trio.forEach((clearance, k) => {
+      const one = keySolid(arena, coupon.clips, { clearance, notches: k + 1 });
+      expect(keys[k].volume()).toBeCloseTo(one.volume(), 6);
+      expect(keys[k].boundingBox().min[2]).toBeCloseTo(0, 9);
+    });
+    // A looser key is a smaller one, and each notch takes a little off the head.
+    expect(keys[0].volume()).toBeGreaterThan(keys[1].volume());
+    expect(keys[1].volume()).toBeGreaterThan(keys[2].volume());
+  });
+
+  it('in their poses nothing is steeper than the limit, with no allowed set; a corbel at 50 degrees, a flare at 50 and a male dovetail each are', () => {
+    const params = clipped();
+    const coupon = buildClipCoupon(arena, params);
+    expect(steep(coupon.block, halfPose(coupon, 'x', 1))).toBe(0);
+    expect(steep(coupon.keys, null)).toBe(0);
+    for (const ears of [{ corbelDeg: 50 }, { flareDeg: 50 }, { male: true }]) {
+      const bad = buildClipCoupon(arena, params, ears);
+      expect(steep(bad.block, halfPose(bad, 'x', 1)), JSON.stringify(ears)).toBeGreaterThan(10);
+    }
+  });
+
+  it('the fit-test ZIP lists the two clip files only for the two-part cover with seam clips, and its README how to read them', () => {
+    const clip = ['fit_test/clip_coupon_block.stl', 'fit_test/clip_coupon_keys.stl'];
+    const names = (params: Params): string[] => Object.keys(fitTestFiles(api, params));
+    const files = fitTestFiles(api, clipped());
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(clip));
+    expect(Object.keys(files).filter((name) => name.includes('bolt_coupon'))).toEqual([]);
+    for (const params of [clamParams(), clamParams((p) => (p.clamshell.fastener = 'none')), defaultParams(), (() => {
+      const p = defaultParams();
+      p.clamshell.fastener = 'clips';
+      return p;
+    })()]) expect(names(params).filter((name) => name.includes('clip_coupon'))).toEqual([]);
+    for (const name of clip) {
+      expect(readPart(files[name]).audit, name).toMatchObject({ openEdges: 0, nonManifoldEdges: 0, misorientedEdges: 0 });
+      const p = parseStl(files[name]).positions;
+      let min = Infinity;
+      for (let k = 2; k < p.length; k += 3) min = Math.min(min, p[k]);
+      expect(min).toBeCloseTo(0, 5);
+    }
+    // The block's pose undone is the block.
+    const coupon = buildClipCoupon(arena, clipped());
+    const back = unpose(arena, files['fit_test/clip_coupon_block.stl'], halfPose(coupon, 'x', 1));
+    expect(arena.track(back.subtract(coupon.block)).volume() + arena.track(coupon.block.subtract(back)).volume()).toBeLessThan(1e-2);
+    const readme = new TextDecoder().decode(files['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');
+    for (const line of [
+      'clip_coupon_block.stl is a corner of a half with one clip ear and its socket',
+      'and clip_coupon_keys.stl holds three clips',
+      'Each clip has a double line across its sides, with single marks 1 mm apart on either side of it; the double line shows how far the clip went in.',
+      'at a Clip clearance of 0.00, 0.10 and 0.20 mm per side, told apart by 1, 2 and 3 notches on the head.',
+      'Print the block twice, like the halves, at 5 percent infill or less with at least 3 walls, and the clips at 100 percent infill, standing on their heads',
+      'Push the clip with 2 notches into the socket, narrow end first, head out',
+      'Its double line should end level with the tip of the ears, within one mark, and the seam faces should be closed.',
+      'Set Clip clearance under Two-part cover, Seam clips to 0.10 mm, the value of the clip with 2 notches, plus 0.05 mm for each mark its double line stops outside the tip of the ears, or minus 0.05 mm for each mark it goes in past it.',
+      'if that would be over 0.5 mm, your printer is printing well over size: check its flow and first-layer squish, then print the coupon again.',
+      'Clip clearance never goes below 0 or above 0.5 mm.',
+      'Try to pull the blocks apart by hand, with well over the 40 N each clip is counted at: they should not move.',
+      '1 notch on the head: Clip clearance 0.00 mm',
+      '3 notches on the head: Clip clearance 0.20 mm',
+    ]) expect(readme).toContain(line);
+    expect(readme).not.toContain('Seam bolt coupon');
+    expect(new TextDecoder().decode(fitTestFiles(api, clamParams())['fit_test/README.txt'])).not.toContain('Clip coupon');
+    expect(/[^\x20-\x7e\r\n]/.test(new TextDecoder().decode(files['fit_test/README.txt']))).toBe(false);
+  });
+
+  // The trio is held inside 0 to 0.5, so at either end the clip with 2 notches is not at the setting: step 3 reads from its own value.
+  it('at Clip clearance 0 and 0.5 the README sets Clip clearance from the clip with 2 notches, not from the setting', () => {
+    for (const [clearance, mid, trio] of [[0, '0.10', '0.00, 0.10 and 0.20'], [0.5, '0.40', '0.30, 0.40 and 0.50']] as const) {
+      const readme = new TextDecoder().decode(fitTestFiles(api, clipped((p) => (p.clips.clearance = clearance)))['fit_test/README.txt']).replace(/\r\n\s*/g, ' ');
+      expect(readme, String(clearance)).toContain(`at a Clip clearance of ${trio} mm per side`);
+      expect(readme, String(clearance)).toContain(`Set Clip clearance under Two-part cover, Seam clips to ${mid} mm, the value of the clip with 2 notches, plus 0.05 mm for each mark`);
+      expect(readme, String(clearance)).not.toContain('raise Clip clearance');
+    }
+  });
+
+  // Off the usual settings the coupon still builds: the clearance at both ends, a 0.8 mm nozzle, 0.3 mm layers.
+  for (const [name, change] of [
+    ['Clip clearance 0', (p: Params) => (p.clips.clearance = 0)],
+    ['Clip clearance 0.5', (p: Params) => (p.clips.clearance = 0.5)],
+    ['a 0.8 mm nozzle', (p: Params) => (p.print.nozzle = 0.8)],
+    ['0.3 mm layers', (p: Params) => (p.print.layerHeight = 0.3)],
+  ] as const) {
+    it(`${name}: the coupon builds, its block and keys valid and nothing steep`, () => {
+      const coupon = buildClipCoupon(arena, clipped(change));
+      for (const solid of [coupon.block, coupon.negBlock, coupon.keys]) expect(solid.status()).toBe('NoError');
+      expect(coupon.block.decompose().length).toBe(1);
+      expect(steep(coupon.block, halfPose(coupon, 'x', 1))).toBe(0);
+      expect(steep(coupon.keys, null)).toBe(0);
+    });
+  }
+
+  it('the fit test with seam clips frees every handle', async () => {
+    const counted = await loadManifold();
+    const ledger = countHandles(counted);
+    fitTestFiles(counted, clipped());
+    expect(ledger.created()).toBeGreaterThan(20);
+    expect(ledger.live()).toEqual([]);
+  });
+});
+
+// G13.10.20's Coupon check: Seam fasteners Clips leaves the Bolts and None fit tests as MP3 made them, byte for byte.
+describe('MP3b keeps MP3\'s fit test', () => {
+  const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+  it('with Bolts the seam bolt coupons and the README, and with None the file list and the README, are 2f28149\'s', () => {
+    const bolted = fitTestFiles(api, clamParams((p) => (p.clamshell.fastener = 'bolts')));
+    for (const [name, hash] of Object.entries(CLAMSHELL_FIT_GOLDEN.bolts)) expect(sha(bolted[name]), name).toBe(hash);
+    const none = fitTestFiles(api, clamParams((p) => (p.clamshell.fastener = 'none')));
+    expect(Object.keys(none)).toEqual(CLAMSHELL_FIT_GOLDEN.none.files);
+    expect(sha(none['fit_test/README.txt'])).toBe(CLAMSHELL_FIT_GOLDEN.none['fit_test/README.txt']);
   });
 });

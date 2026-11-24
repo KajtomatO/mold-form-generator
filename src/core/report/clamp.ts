@@ -1,7 +1,8 @@
 import type { Field } from '../field/grid';
 import type { Params } from '../params/schema';
 import { lengthFits, type BoltLayout } from '../parts/bolts';
-import { BOLT_HOLD_N } from '../parts/fasteners';
+import type { ClipLayout } from '../parts/clips';
+import { BOLT_HOLD_N, CLIP_HOLD_N } from '../parts/fasteners';
 import type { Rim } from '../parts/rim';
 import type { SeamBoltLayout } from '../parts/seamBolts';
 import type { Diagnostic } from './diagnostics';
@@ -310,6 +311,52 @@ export function seamBoltAdvice(layout: SeamBoltLayout, holdN: number, wedge: num
   const topClamp = topSpan > SEAL_SPACING_MM + 1e-9;
   if (topClamp) diagnostics.push(topSpanNote(topSpan));
   return { size: layout.size, length: layout.length, count: layout.count, perEnd: layout.perEnd, holdN, boltsHoldN, wedgeN: wedge, bottomHoldN, topSpan, topClamp, lengthFits: layout.lengthFits, diagnostics };
+}
+
+/** G13.10.17: the friction the taper wedge's second figure is read at, PLA on PLA. */
+export const WEDGE_MU = 0.2;
+
+/** The taper wedge with friction mu on the taper's faces: the tape's pull times (1 - mu tan) / (tan + mu). */
+export function wedgeWithFriction(tape: Pick<ClampAdvice, 'holdN'>, taperDeg: number, mu: number): number {
+  const t = Math.tan((taperDeg * Math.PI) / 180);
+  return (tape.holdN * (1 - mu * t)) / (t + mu);
+}
+
+/** G13.10.17's hold with seam clips: what the keys count against what the seam needs, the wedge on the bottom, and the top span. */
+export interface ClipAdvice {
+  rows: number;
+  count: number;
+  spares: number;
+  /** CLIP_HOLD_N a key, the keys together, and holdN_seam. */
+  clipHoldN: number;
+  clipsHoldN: number;
+  holdN: number;
+  /** The bottom row's keys, with the second bottom row's where it fits, at CLIP_HOLD_N each. */
+  bottomHoldN: number;
+  /** The taper wedge, frictionless and at WEDGE_MU. */
+  wedgeN: { frictionless: number; mu02: number };
+  topSpan: number;
+  topClamp: boolean;
+  diagnostics: Diagnostic[];
+}
+
+/**
+ * G13.10.17's checks on placed clips: `clips-wedge` where the frictionless wedge is over half what the bottom's keys are
+ * counted at (4 keys with the second bottom row, 2 without), and `seam-top-span` past the spacing. `spares` is the
+ * plate's (SPARES in parts/clips.ts).
+ */
+export function clipAdvice(layout: Pick<ClipLayout, 'placed' | 'count'>, holdN: number, tape: Pick<ClampAdvice, 'holdN'>, taperDeg: number, topSpan: number, spares: number): ClipAdvice {
+  const rows = layout.placed.length;
+  const bottomKeys = rows === 0 ? 0 : layout.placed.some((row) => row.kind === 'second') ? 4 : 2;
+  const bottomHoldN = bottomKeys * CLIP_HOLD_N;
+  const wedge = { frictionless: wedgeN(tape, taperDeg), mu02: wedgeWithFriction(tape, taperDeg, WEDGE_MU) };
+  const diagnostics: Diagnostic[] = [];
+  if (rows > 0 && wedge.frictionless > bottomHoldN / 2 + 1e-9) {
+    diagnostics.push({ code: 'clips-wedge', severity: 'info', also: ['clamshell.fastener'], message: `Taping the base pushes the halves apart at the bottom with up to ${wedge.frictionless.toFixed(0)} N, over half the ${bottomHoldN} N the ${bottomKeys} bottom clips are counted at: after taping, check that the seam is closed at the bottom edge, or set Seam fasteners to Bolts.` });
+  }
+  const topClamp = topSpan > SEAL_SPACING_MM + 1e-9;
+  if (topClamp) diagnostics.push(topSpanNote(topSpan));
+  return { rows, count: layout.count, spares, clipHoldN: CLIP_HOLD_N, clipsHoldN: layout.count * CLIP_HOLD_N, holdN, bottomHoldN, wedgeN: wedge, topSpan, topClamp, diagnostics };
 }
 
 /** G13.10.7's info line on a wide half, with bolts or clips alike. */

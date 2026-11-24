@@ -124,16 +124,22 @@ export function pryChamfers(arena: Arena, rim: ClamRim, sign: 1 | -1): Manifold[
   });
 }
 
-/** What G13.7 step 3 adds to and cuts from one half besides its tool: the seal's solids, and the seam bolts' relief and cuts. */
+/**
+ * What G13.7 step 3 adds to and cuts from one half besides its tool: the seal's solids, and the seam bolts' relief and
+ * cuts. With seam clips, the ears and their sockets, which lie wholly outside O, so they go on last.
+ */
 export interface HalfFeatures {
   add: Manifold[];
   cut: Manifold[];
+  ears?: Manifold[];
+  sockets?: Manifold[];
 }
 
 /**
  * G13.7 steps 3 to 5, one half: the shared block trimmed at P, less its tool, with the seal's solids (pos: less the
  * groove and the sockets; neg: with the tongue and the pins), then less the openings' cutters, centred on P and cut from
- * both halves, and the pry chamfers.
+ * both halves, and the pry chamfers. With seam clips, (half with its ears) less their sockets after that (G13.10.16):
+ * inside O the half is the one with no fasteners.
  */
 export function buildClamHalf(arena: Arena, rim: ClamRim, common: Manifold, tool: Manifold, sign: 1 | -1, features: HalfFeatures, openings: CutOpening[]): Manifold {
   const { Manifold: M } = arena.api;
@@ -141,5 +147,7 @@ export function buildClamHalf(arena: Arena, rim: ClamRim, common: Manifold, tool
   let half = arena.track(M.difference([trimHalf(arena, common, rim.axis, rim.xs, sign), tool, ...features.cut]));
   if (features.add.length > 0) half = arena.track(M.union([half, ...features.add]));
   const cutters = openings.flatMap((opening) => openingCutters(arena, rim, opening));
-  return checked(arena.track(M.difference([half, ...cutters, ...pryChamfers(arena, rim, sign)])), what);
+  const done = arena.track(M.difference([half, ...cutters, ...pryChamfers(arena, rim, sign)]));
+  if (!features.ears || features.ears.length === 0) return checked(done, what);
+  return checked(arena.track(M.difference([arena.track(M.union([done, ...features.ears])), ...(features.sockets ?? [])])), what);
 }

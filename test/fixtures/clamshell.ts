@@ -23,7 +23,7 @@ import { loadGallery } from './loadGallery';
  * measurement call as MP5 will; this adds the gallery's models, oriented as fieldRuns.ts orients the test models, and
  * MP2's cases, each a model with its halves.
  */
-export { chooseFor, coarseRows, exactFootprint, exactRim, fineSplit, prepareClamshell, seamHold, sideField, type ClamshellPrep, type FineSplit, type SeamHold } from '../../src/core/field/clamshell';
+export { chooseFor, clipHold, coarseRows, exactFootprint, exactRim, fineSplit, prepareClamshell, seamHold, sideField, type ClamshellPrep, type ClipHold, type FineSplit, type SeamHold } from '../../src/core/field/clamshell';
 
 const galleryCache = new Map<string, WeldedMesh>();
 

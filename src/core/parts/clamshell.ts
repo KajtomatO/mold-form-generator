@@ -10,16 +10,18 @@ import type { Diagnostic } from '../report/diagnostics';
 import { checked, type Arena } from '../solid/arena';
 import { buildToolMesh, toolSolid, type ToolMesh } from '../solid/tool';
 import { buildBaseBody } from './base';
-import { buildClamCommon, buildClamHalf, trimHalf } from './cover';
+import { buildClamCommon, buildClamHalf, trimHalf, type HalfFeatures } from './cover';
 import type { CutOpening } from './openings';
 import type { ClamRim } from './rim';
 import { seamGroove, seamPins, seamSeal, seamSection, seamSockets, seamTongue, type SeamSeal } from './seam';
+import { clipDiagnostics, clipNeeds, earSolids, placeClips, socketCutters, type ClipLayout, type EarOptions } from './clips';
 import { lugRelief, lugSolid, placeSeamBolts, seamBoltCuts, seamBoltDiagnostics, seamBoltNeeds, type LugOptions, type SeamBoltCutOptions, type SeamBoltLayout } from './seamBolts';
 
 /**
  * MP2: the two-part cover's parts, G13.7 to G13.9, at a fine split from src/core/field/clamshell.ts: the tools, the seal,
  * the halves and the base, the silicone's solid for the 1% check, and G4 for each half with its one rebuild; MP3: the
- * seam bolts' lugs and cuts (G13.10). The field code stays free of Manifold, so this lives with the parts.
+ * seam bolts' lugs and cuts (G13.10); MP3b: the seam clips' ears and sockets (G13.10.16). The field code stays free of
+ * Manifold, so this lives with the parts.
  */
 
 /**
@@ -51,6 +53,8 @@ export interface ClamshellBuild {
   openings: CutOpening[];
   /** G13.10's seam bolts with Seam fasteners Bolts, with no lugs where there is no room for one; null with Clips or None. */
   bolts: SeamBoltLayout | null;
+  /** G13.10.16's seam clips with Seam fasteners Clips, with no rows where there is no room for one; null with Bolts or None. */
+  clips: ClipLayout | null;
   diagnostics: Diagnostic[];
 }
 
@@ -64,6 +68,8 @@ export interface ClamshellBuildOptions {
   /** Tests only: the lugs and the bolt cuts changed, for the negative controls. */
   lugs?: LugOptions;
   cuts?: SeamBoltCutOptions;
+  /** Tests only: the ears and sockets changed, for the negative controls. */
+  ears?: EarOptions;
 }
 
 /** G13.10.6: the seam bolts at this split with Seam fasteners Bolts, placed for the hold the fields give; null otherwise. */
@@ -71,25 +77,33 @@ export function clamBolts(params: Params, fine: Pick<FineSplit, 'rim' | 'axis' |
   return params.clamshell.fastener === 'bolts' ? placeSeamBolts(seamBoltNeeds(params), fine.rim, fine.axis, fine.xs, fine.holdN) : null;
 }
 
+/** G13.10.17: the seam clips at this split with Seam fasteners Clips, placed for the hold the fields give; null otherwise. */
+export function clamClips(params: Params, fine: Pick<FineSplit, 'rim' | 'axis' | 'xs' | 'holdN'>): ClipLayout | null {
+  return params.clamshell.fastener === 'clips' ? placeClips(clipNeeds(params), fine.rim, fine.axis, fine.xs, fine.holdN) : null;
+}
+
 /**
  * G13.7 steps 2 to 5 from the tools and the seal: the shared block, with the seam bolts' lugs where `bolts` has any, and
  * the halves, pos less the groove and the sockets and neg with the tongue and the pins, each less the lugs' relief and
- * its own bolt cuts in the same batch.
+ * its own bolt cuts in the same batch; with seam clips where `clips` has rows, each half with its own ears, less their
+ * sockets, last (G13.10.16).
  */
-export function buildHalves(arena: Arena, rim: ClamRim, tools: readonly [Manifold, Manifold], seal: SeamSeal, params: Params, openings: CutOpening[], bolts: SeamBoltLayout | null, options: Pick<ClamshellBuildOptions, 'lugs' | 'cuts'> = {}): { common: Manifold; halves: [Manifold, Manifold] } {
+export function buildHalves(arena: Arena, rim: ClamRim, tools: readonly [Manifold, Manifold], seal: SeamSeal, params: Params, openings: CutOpening[], bolts: SeamBoltLayout | null, clips: ClipLayout | null, options: Pick<ClamshellBuildOptions, 'lugs' | 'cuts' | 'ears'> = {}): { common: Manifold; halves: [Manifold, Manifold] } {
   const lugged = bolts !== null && bolts.spots.length > 0 ? bolts : null;
+  const clipped = clips !== null && clips.zs.length > 0 ? clips : null;
   const common = buildClamCommon(arena, rim, undefined, lugged ? lugSolid(arena, lugged, options.lugs) : []);
   const relief = lugged && options.lugs?.relief !== false ? lugRelief(arena, lugged) : [];
   const fastened = (sign: 1 | -1): Manifold[] => (lugged ? [...relief, ...seamBoltCuts(arena, lugged, sign, options.cuts)] : []);
-  const neg = buildClamHalf(arena, rim, common, tools[0], -1, { add: [seamTongue(arena, seal, params), ...seamPins(arena, seal)], cut: fastened(-1) }, openings);
-  const pos = buildClamHalf(arena, rim, common, tools[1], 1, { add: [], cut: [seamGroove(arena, seal), ...seamSockets(arena, seal), ...fastened(1)] }, openings);
+  const eared = (sign: 1 | -1): Pick<HalfFeatures, 'ears' | 'sockets'> => (clipped ? { ears: earSolids(arena, clipped, sign, options.ears), sockets: socketCutters(arena, clipped, sign, options.ears) } : {});
+  const neg = buildClamHalf(arena, rim, common, tools[0], -1, { add: [seamTongue(arena, seal, params), ...seamPins(arena, seal)], cut: fastened(-1), ...eared(-1) }, openings);
+  const pos = buildClamHalf(arena, rim, common, tools[1], 1, { add: [], cut: [seamGroove(arena, seal), ...seamSockets(arena, seal), ...fastened(1)], ...eared(1) }, openings);
   return { common, halves: [neg, pos] };
 }
 
 /**
  * G13.7 steps 1 to 5 and 7 at a fine split: the two tools (G13.2 step 7's seam held clear of P), the seal from the
- * cavity on P, the seam bolts with Seam fasteners Bolts, the shared block, the halves and the base. The handles belong
- * to `arena`.
+ * cavity on P, the seam bolts with Seam fasteners Bolts or the seam clips with Clips, the shared block, the halves and
+ * the base. The handles belong to `arena`.
  */
 export function buildClamshell(arena: Arena, prep: ClamshellPrep, fine: FineSplit, options: ClamshellBuildOptions = {}): ClamshellBuild {
   const { params, settings } = prep;
@@ -103,10 +117,11 @@ export function buildClamshell(arena: Arena, prep: ClamshellPrep, fine: FineSpli
   const made = seamSeal(arena, rim, S, openings, params);
   const seal = options.seal ? options.seal(made, rim, params) : made;
   const bolts = clamBolts(params, fine);
-  const { common, halves } = buildHalves(arena, rim, tools, seal, params, openings, bolts, options);
+  const clips = clamClips(params, fine);
+  const { common, halves } = buildHalves(arena, rim, tools, seal, params, openings, bolts, clips, options);
   const base = buildBaseBody(arena, rim, options.ridgeRing ? {} : { ridgeBars: rim.axis });
-  const diagnostics = [...rim.diagnostics, ...meshes.flatMap((mesh) => mesh.diagnostics), ...seal.diagnostics, ...(bolts ? seamBoltDiagnostics(bolts) : [])];
-  return { rim, meshes, tools, seal, common, halves, base, openings, bolts, diagnostics };
+  const diagnostics = [...rim.diagnostics, ...meshes.flatMap((mesh) => mesh.diagnostics), ...seal.diagnostics, ...(bolts ? seamBoltDiagnostics(bolts) : []), ...(clips ? clipDiagnostics(clips) : [])];
+  return { rim, meshes, tools, seal, common, halves, base, openings, bolts, clips, diagnostics };
 }
 
 /**

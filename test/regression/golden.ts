@@ -397,7 +397,7 @@ export const BOLT_GOLDEN: Record<ExampleId, BoltGolden> = {
 };
 
 /**
- * MP1 numbers for the two-part cover (docs/PLAN.md, G13), with MP3's seam bolts, keyed by test model or gallery id as the tables above are by
+ * MP1 numbers for the two-part cover (docs/PLAN.md, G13), with MP3's seam bolts and MP3b's seam clips, keyed by test model or gallery id as the tables above are by
  * example: clamshell defaults (beta 20, base layer 0, M3 seam bolts) on the app's 220 x 220 x 250 bed, fine fields at the
  * export cell 0.125. Silicone in ml is both halves' cavity with the TIN's raise, less the model above the plane and
  * sealed air as FIELD_GOLDEN takes them (neither model has sealed air past the filter), with no openings (MP4 adds them).
@@ -417,14 +417,20 @@ export interface ClamshellGolden {
    * footprint across and along with the lugs (G13.10.8). Exact on the count and the length, 1% on the rest.
    */
   bolts: { count: number; length: number; tn: number; tp: number; bed: [number, number] };
+  /**
+   * MP3b: with Seam fasteners Clips at the same split, the rows per end face, the keys in all, the ears' length and the
+   * halves' bed footprint across and along with the ears (G13.10.18). Exact on the rows, the count and the length, 1% on
+   * the footprint.
+   */
+  clips: { rows: number; count: number; earLength: number; bed: [number, number] };
 }
 
 /** The keys the clamshell table may take: a test model's, or a gallery model's (src/gallery/catalogue.ts). */
 export type ClamshellModelId = ExampleId | 'sphere' | 'cube' | 'cylinder' | 'cone';
 
 export const CLAMSHELL_GOLDEN = {
-  goddess: { silicone: 58.49, axis: 'y', xs: 152.5, Zt: 114.027, holdN: 12.01, push: [4.89, 4.31], boltsPerEnd: 2, bolts: { count: 4, length: 10, tn: 3.881, tp: 6.819, bed: [112.299, 117.827] } },
-  vis35: { silicone: 270.45, axis: 'y', xs: 219, Zt: 192.693, holdN: 23.22, push: [8.4, 8.69], boltsPerEnd: 3, bolts: { count: 6, length: 10, tn: 3.975, tp: 6.725, bed: [82.637, 196.493] } },
+  goddess: { silicone: 58.49, axis: 'y', xs: 152.5, Zt: 114.027, holdN: 12.01, push: [4.89, 4.31], boltsPerEnd: 2, bolts: { count: 4, length: 10, tn: 3.881, tp: 6.819, bed: [112.299, 117.827] }, clips: { rows: 3, count: 6, earLength: 10, bed: [113.259, 117.827] } },
+  vis35: { silicone: 270.45, axis: 'y', xs: 219, Zt: 192.693, holdN: 23.22, push: [8.4, 8.69], boltsPerEnd: 3, bolts: { count: 6, length: 10, tn: 3.975, tp: 6.725, bed: [82.637, 196.493] }, clips: { rows: 4, count: 8, earLength: 10, bed: [83.597, 196.493] } },
 } satisfies Partial<Record<ClamshellModelId, ClamshellGolden>>;
 
 /**
@@ -452,3 +458,48 @@ export const CLAMSHELL_PARTS_GOLDEN = {
     sha256: { neg: '8adc54aa2a88697cde9b5bc1fa6b1c49f3384e159894514d5d7d2214fac4849f', pos: '2686ea0ef0636872e095b4aa5860fef0bf0ba4c2e0be127afe9ddf14d55d1757' },
   },
 } satisfies Partial<Record<ClamshellModelId, ClamshellPartsGolden>>;
+
+/**
+ * MP3's halves, which MP3b must keep (docs/PLAN.md, MP3b's exit): the Goddess Statue and the sphere as MP2's golden is
+ * built, with Seam fasteners Bolts at their defaults (M3, auto length), the SHA-256 of each half's STL in its print pose,
+ * taken at MP3's commit (2f28149), byte for byte.
+ */
+export const CLAMSHELL_BOLTS_GOLDEN = {
+  goddess: { axis: 'y', xs: 152.5, sha256: { neg: '55f59685ecafe667c9a69c06b35e637c41c6187ed56c2dabc49425142c83a719', pos: '85ef9a081d451c154fb2035d3ca33a043897949d4c0f3189b5089120b49755cc' } },
+  sphere: { axis: 'x', xs: -1.75, sha256: { neg: 'bbdb8fd05597a186f12a9ab1517feb3ddfbf7887f0c8b2f324dd97714418c722', pos: '28988a8d4fa4015403addfeac1c9fc4515cde58debc635892bec67ac4ccde929' } },
+} satisfies Partial<Record<ClamshellModelId, Pick<ClamshellPartsGolden, 'axis' | 'xs' | 'sha256'>>>;
+
+/**
+ * MP3's fit test for the two-part cover, which MP3b must keep (G13.10.20's Coupon check): defaultParams('clamshell')
+ * with Seam fasteners Bolts and with None, the SHA-256 of the seam bolt coupons and of README.txt, and None's file list,
+ * taken at MP3's commit (2f28149), byte for byte. The fit pieces are the one-piece's, which export.test.ts pins (M9).
+ */
+export const CLAMSHELL_FIT_GOLDEN = {
+  bolts: {
+    'fit_test/seam_bolt_coupon_neg.stl': 'abbc5db7c66f70f5a64cace3ce1dd19f5e4fdcfeec4f550716b2d8d20c8603af',
+    'fit_test/seam_bolt_coupon_pos.stl': 'ed070fe40bbf5276b66768425755dc9af9086aad31da48f9afc00d75b9efacba',
+    'fit_test/README.txt': 'afba03e3564c8071dad270dd3dc5220b646486dc1b69c575c01355616c76f1b7',
+  },
+  none: {
+    files: [
+      'fit_test/taper-0.10_cover.stl',
+      'fit_test/taper-0.10_base.stl',
+      'fit_test/taper-0.20_cover.stl',
+      'fit_test/taper-0.20_base.stl',
+      'fit_test/taper-0.30_cover.stl',
+      'fit_test/taper-0.30_base.stl',
+      'fit_test/taper-0.40_cover.stl',
+      'fit_test/taper-0.40_base.stl',
+      'fit_test/groove-0.25-taper-0.10_cover.stl',
+      'fit_test/groove-0.25-taper-0.10_base.stl',
+      'fit_test/groove-0.35-taper-0.10_cover.stl',
+      'fit_test/groove-0.35-taper-0.10_base.stl',
+      'fit_test/groove-0.45-taper-0.10_cover.stl',
+      'fit_test/groove-0.45-taper-0.10_base.stl',
+      'fit_test/groove-0.55-taper-0.10_cover.stl',
+      'fit_test/groove-0.55-taper-0.10_base.stl',
+      'fit_test/README.txt',
+    ],
+    'fit_test/README.txt': 'cc2bedb13778d88c3392de582aa2a1f4dfe72e155c4e7530738c2b03515b2f84',
+  },
+};

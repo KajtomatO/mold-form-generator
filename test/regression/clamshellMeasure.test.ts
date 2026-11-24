@@ -6,7 +6,7 @@ import { meshBounds, type WeldedMesh } from '../../src/core/mesh/weld';
 import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { GALLERY } from '../../src/gallery/catalogue';
-import { chooseFor, coarseRows, exactFootprint, fineSplit, orientedGallery, prepareClamshell, seamHold, type FineSplit } from '../fixtures/clamshell';
+import { chooseFor, clipHold, coarseRows, exactFootprint, fineSplit, orientedGallery, prepareClamshell, seamHold, type FineSplit } from '../fixtures/clamshell';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { EXAMPLE_IDS } from '../fixtures/loadExamples';
 import { FIELD_GOLDEN, GOLDEN } from './golden';
@@ -15,7 +15,7 @@ import { FIELD_GOLDEN, GOLDEN } from './golden';
  * MP1's measurement, the design's MP0 (docs/PLAN.md, MP1): every test model and gallery model by G13.17's method at
  * cellFinal, the bed applied (the app's 220 x 220 x 250 and the user's 250 x 210 x 220), at beta 0, 20, 30 and 45, with
  * M3 lugs, with clip ears and with neither. It prints the table G13.17, G13.10.6, G13.10.8, G13.10.18 and G13.12 were
- * corrected from, and checks nothing: run it with CFG_MEASURE=1.
+ * corrected from, and MP3b's clip rows for G13.10.17's, and checks nothing: run it with CFG_MEASURE=1.
  */
 const MEASURE = process.env.CFG_MEASURE === '1';
 const BETAS = [0, 20, 30, 45];
@@ -60,13 +60,14 @@ describe.runIf(MEASURE)('MP1 measurement', () => {
             const at = (100 * (choice.xs - prep.bounds.min[a])) / (prep.bounds.max[a] - prep.bounds.min[a]);
             const fp = exactFootprint(prep, split, fastener);
             const hold = fastener === 'bolts' ? seamHold(prep, split) : null;
+            const clips = fastener === 'clips' ? clipHold(prep, split) : null;
             lines.push(
-              `| ${model.id} | ${beta} | ${bed} | ${fastener} | ${split.siliconeMl.toFixed(1)} (${(100 * (split.siliconeMl / one - 1)).toFixed(0)}%) | ${choice.axis} ${at.toFixed(0)}% | ${split.rim.Zt.toFixed(1)} | ${fp.width.toFixed(1)} x ${fp.length.toFixed(1)}, ${fp.depth.toFixed(1)} | ${choice.fitted ? 'fits' : `misses${choice.fitsAtBeta !== null ? `, beta <= ${choice.fitsAtBeta}` : ''}${choice.fitsWith ? `, ${choice.fitsWith}` : ''}`} | ${split.forces[0].sideN.toFixed(1)}/${split.forces[1].sideN.toFixed(1)} (film ${split.filmN.toFixed(1)}) | ${split.forces[0].liftN.toFixed(2)}/${split.forces[1].liftN.toFixed(2)} | ${hold ? `${hold.bolts.perEnd} (${hold.bolts.length} mm, wedge ${hold.advice.wedgeN.toFixed(0)} N, span ${hold.advice.topSpan.toFixed(0)})` : ''} |`,
+              `| ${model.id} | ${beta} | ${bed} | ${fastener} | ${split.siliconeMl.toFixed(1)} (${(100 * (split.siliconeMl / one - 1)).toFixed(0)}%) | ${choice.axis} ${at.toFixed(0)}% | ${split.rim.Zt.toFixed(1)} | ${fp.width.toFixed(1)} x ${fp.length.toFixed(1)}, ${fp.depth.toFixed(1)} | ${choice.fitted ? 'fits' : `misses${choice.fitsAtBeta !== null ? `, beta <= ${choice.fitsAtBeta}` : ''}${choice.fitsWith ? `, ${choice.fitsWith}` : ''}`} | ${split.forces[0].sideN.toFixed(1)}/${split.forces[1].sideN.toFixed(1)} (film ${split.filmN.toFixed(1)}) | ${split.forces[0].liftN.toFixed(2)}/${split.forces[1].liftN.toFixed(2)} | ${hold ? `${hold.bolts.perEnd} (${hold.bolts.length} mm, wedge ${hold.advice.wedgeN.toFixed(0)} N, span ${hold.advice.topSpan.toFixed(0)})` : ''}${clips ? `${clips.clips.placed.length} rows: ${clips.clips.placed.map((row) => row.kind).join(', ')} (${clips.clips.count} keys, ${clips.clips.clipsHoldN} N against ${split.holdN.toFixed(1)}, bottom ${clips.advice.bottomHoldN} N against a wedge of ${clips.advice.wedgeN.frictionless.toFixed(0)})` : ''} |`,
             );
           }
         }
       }
-      console.log(`${model.id}: one-piece ${one.toFixed(1)} ml, sealed air ${(sealedAir / 1000).toFixed(2)} ml\n| model | beta | bed | fastener | silicone ml | split | Zt | pose WxL, depth | bed | side push N | net lift N | seam bolts per end |\n${lines.join('\n')}`);
+      console.log(`${model.id}: one-piece ${one.toFixed(1)} ml, sealed air ${(sealedAir / 1000).toFixed(2)} ml\n| model | beta | bed | fastener | silicone ml | split | Zt | pose WxL, depth | bed | side push N | net lift N | seam bolts per end, or clip rows |\n${lines.join('\n')}`);
     }, 1_800_000);
   }
 });

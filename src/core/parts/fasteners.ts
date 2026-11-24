@@ -67,6 +67,12 @@ export const BRIDGE_LIMIT = 10;
  */
 export const BOLT_HOLD_N = 50;
 
+/**
+ * G13.10.17: what one printed seam clip's key is counted on to hold, in N: an estimate kept far under what a printed key
+ * carries (its neck and the ear's walls each about 700 N), about 1/15 of it, as printed plastic creeps under a steady load.
+ */
+export const CLIP_HOLD_N = 40;
+
 /** The thread the screw must pass the nut by, in mm. */
 export function threadPast(fastener: Fastener): number {
   return THREAD_PAST_PITCHES * fastener.pitch;

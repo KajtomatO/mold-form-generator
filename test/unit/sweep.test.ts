@@ -5,7 +5,7 @@ import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { hmaxClam, sideBounds, sideBoundsFast } from '../../src/core/parts/rim';
 import type { Rect } from '../../src/core/solid/rect';
-import { chooseFor, coarseRows, exactFootprint, exactRim, fineSplit, prepareClamshell, seamHold, sideField, type ClamshellPrep } from '../fixtures/clamshell';
+import { chooseFor, clipHold, coarseRows, exactFootprint, exactRim, fineSplit, prepareClamshell, seamHold, sideField, type ClamshellPrep } from '../fixtures/clamshell';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { EXAMPLE_IDS, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { box, join } from '../fixtures/synthetic';
@@ -271,6 +271,14 @@ describe('MP1 goldens', () => {
       within(bed.width, g.bolts.bed[0]);
       within(bed.length, g.bolts.bed[1]);
       expect(bed.fits).toBe(true);
+      // MP3b: the clips at the same split, their rows, keys and ears, and the bed footprint with the ears.
+      const clips = clipHold(prep, fine).clips;
+      const eared = exactFootprint(prep, fine, 'clips');
+      expect([clips.placed.length, clips.count, clips.earLength]).toEqual([g.clips.rows, g.clips.count, g.clips.earLength]);
+      expect(clips.heldBack).toBe(false);
+      within(eared.width, g.clips.bed[0]);
+      within(eared.length, g.clips.bed[1]);
+      expect(eared.fits).toBe(true);
       // G13.6: at the export cell neither half's cavity at z <= zJ passes D_side, so it keeps off the joint.
       for (const side of [fine.plus, fine.minus]) {
         expect(sideOverrun(side.field, side.side.pull, prep.bounds, side.hs, side.side.plan.raise, fine.rim.Dside, fine.rim.zJ), side.side.pull).toBe(0);
