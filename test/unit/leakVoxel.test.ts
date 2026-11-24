@@ -11,6 +11,7 @@ import { clamGrooveSolid, grooveSolid } from '../../src/core/parts/joint';
 import { openingCutters, OPENING_SEGMENTS, type CutOpening } from '../../src/core/parts/openings';
 import { rebateOutset, type ClamRim } from '../../src/core/parts/rim';
 import { bRange, openingTopRadius, rectSection, seamGroove, uSpan, type SeamSeal } from '../../src/core/parts/seam';
+import { seamBoltCuts } from '../../src/core/parts/seamBolts';
 import { Arena } from '../../src/core/solid/arena';
 import { clamCase, siliconeSolid, type ClamCase } from '../fixtures/clamshell';
 import { and, andNot, barrierExits, columnZone, count, emptyBits, firstCell, flangeZone, grow6, leastFlangeCrossing, opened, or, outsideOf, voxelGrid, voxelize, type Bits, type VoxelGrid } from '../fixtures/leakVoxels';
@@ -68,6 +69,8 @@ interface Mold {
   liquid: Manifold[];
   /** K4's and K5's cutters. */
   grooves: Manifold[];
+  /** The seam bolts' cutters, whose empty cells must all lie in the outside (MP3). */
+  cuts: Manifold[];
 
   pour: CutOpening;
   /**
@@ -90,6 +93,9 @@ interface Reading {
   exitAt: [number, number, number] | null;
   /** The same cells in the exit zones, which the rule lets open: with none there, the rule would see nothing. */
   atExits: number;
+  /** The seam bolts' empty cells, and those of them the outside does not reach, which would join the liquid's side. */
+  cutCells: number;
+  cutsInside: number;
   cells: { liquid: number; barrier: number; contact: number };
 }
 
@@ -122,11 +128,13 @@ function leak(mold: Mold, sealed = false): Reading {
   const input = { occupied, liquid, barrier, flange, contact };
   // The open air: the outside opened by the rounding's ball, so the ducts a print's rounded edges leave along the seam's
   // edges and a groove's mouth, no wider than the ball, are cracks, as K1 is, and not openings.
-  const air = opened(g, outsideOf(g, input));
+  const outside = outsideOf(g, input);
+  const air = opened(g, outside);
   const open = barrierExits(g, grooves, air, allowed);
+  const cuts = mold.cuts.length > 0 ? andNot(or(...mold.cuts.map(cells)), occupied) : emptyBits(g);
   if (process.env.CFG_TRACE && count(open) > 0) console.log('K4 or K5 open to the air at', firstCell(g, open));
   const crossing = leastFlangeCrossing(g, input, process.env.CFG_TRACE ? (path) => console.log('path out, outside first:', path.map((p) => p.map((v) => v.toFixed(2)).join(',')).join(' ; ')) : undefined);
-  return { crossing, exits: count(open), exitAt: firstCell(g, open), atExits: count(and(and(grooves, grow6(g, air)), allowed)), cells: { liquid: count(liquid), barrier: count(barrier), contact: count(contact) } };
+  return { crossing, exits: count(open), exitAt: firstCell(g, open), atExits: count(and(and(grooves, grow6(g, air)), allowed)), cutCells: count(cuts), cutsInside: count(andNot(cuts, outside)), cells: { liquid: count(liquid), barrier: count(barrier), contact: count(contact) } };
 }
 
 const COUPON = (): ReturnType<typeof box> => box([-5, -5, 0], [5, 5, 10]);
@@ -153,6 +161,7 @@ function onePiece(): Mold {
     funnel,
     liquid: [track(mold.tool.trimByPlane([0, 0, 1], 0)), ...openingCutters(arena, rim, pour), track(funnelInside(params).translate([x, y, rim.Zt]))],
     grooves: [grooveSolid(arena, rim)],
+    cuts: [],
     pour,
     exits: [],
     Zt: rim.Zt,
@@ -178,6 +187,7 @@ function twoPart(c: ClamCase, extraCut: Manifold[] = []): Mold {
     // The cutters as cut: the seam groove's starts 0.3 mm short of P, so the rounded edges of neg's face in front of its
     // mouth, which open into it, are K5 too.
     grooves: [clamGrooveSolid(arena, rim, rim.axis), seamGroove(arena, seal)],
+    cuts: build.bolts && build.bolts.spots.length > 0 ? [-1, 1].flatMap((sign) => seamBoltCuts(arena, build.bolts!, sign as 1 | -1)) : [],
     pour,
     exits: build.openings.map((o) => ({ x: o.x, y: o.y, r: openingTopRadius(o) + params.clamshell.seamLand + seal.gw + EXIT_SPARE, vent: o.kind === 'vent' })),
     Zt: rim.Zt,
@@ -263,6 +273,28 @@ describe.runIf(FULL)('MP2: the leak voxel test', () => {
       expect(reading.crossing).toBeGreaterThanOrEqual(baseline().crossing);
     }, SLOW);
   }
+
+  // MP3: the same with the seam bolts' lugs and cuts, which lie outside O, on the dry side (G13.10.8). On the sphere only,
+  // as MP2's two-part cases are, since the test voxelizes the whole mold at 0.1 mm.
+  let bolted: ClamCase | null = null;
+  const boltedSphere = (): ClamCase => (bolted ??= clamCase(arena, 'sphere', merged((p) => (p.clamshell.fastener = 'bolts'))));
+
+  it('the two-part sphere with seam bolts, the flange sealed: still no way out, and every bolt cut\'s cell in the outside, none joining the liquid\'s side', () => {
+    const c = boltedSphere();
+    expect(c.build.bolts!.perEnd).toBe(2);
+    const reading = leak(twoPart(c), true);
+    console.log('two-part sphere with seam bolts, the flange sealed:', reading.cutCells, 'cells of bolt cuts,', reading.cutsInside, 'past the outside', reading.cells);
+    expect(reading.crossing).toBe(Infinity);
+    expect(reading.exits, `K4 or K5 opens to the air at ${reading.exitAt}`).toBe(0);
+    expect(reading.cutCells).toBeGreaterThan(1000);
+    expect(reading.cutsInside).toBe(0);
+  }, SLOW);
+
+  it('the two-part sphere with seam bolts: the least crossing of the flange\'s contact is still at least the one-piece coupon\'s', () => {
+    const reading = leak(twoPart(boltedSphere()));
+    console.log(`two-part sphere with seam bolts: least flange crossing ${reading.crossing} cells against ${baseline().crossing}`, reading.cells);
+    expect(reading.crossing).toBeGreaterThanOrEqual(baseline().crossing);
+  }, SLOW);
 
   it('negative controls on the coupon: a tongue stopping short of the base groove, and a V on the top face through the seat, each let the liquid out past every groove', () => {
     const short = clamCase(arena, COUPON(), merged(), { seal: (seal) => ({ ...seal, band: cross(seal.band.intersect(rectSection(arena, -1e3, 1e3, seal.zr + 1, seal.Zt + 2))) }) });

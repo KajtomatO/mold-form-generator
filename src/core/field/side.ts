@@ -8,6 +8,7 @@ import { lugBedGrowth, seamBoltNeeds } from '../parts/seamBolts';
 import type { Diagnostic } from '../report/diagnostics';
 import { conditionField } from './build';
 import { dilate } from './dilate';
+import { axisOf, pullOf, PULLS, signOf, sideFrame, type Pull } from './frames';
 import { MARGIN_CELLS, NODE_CAP, planField, type Field, type FieldPlan, type FieldSettings, type Grid } from './grid';
 import { rasterize } from './raster';
 import { LIFT_MAX } from './lift';
@@ -19,11 +20,7 @@ import { LIFT_MAX } from './lift';
  */
 
 export type { SeamAxis } from '../parts/rim';
-
-/** The four pulls: a half on the + side of P comes off along +a, one on the - side along -a. */
-export type Pull = '+x' | '-x' | '+y' | '-y';
-
-export const PULLS: readonly Pull[] = ['+x', '-x', '+y', '-y'];
+export { axisOf, frameInverse, halfFrame, pullOf, PULLS, seamFrame, sideFrame, signOf, type Pull } from './frames';
 
 /**
  * G13.10.16's ear length Le, out from an end face along b: the seam clips' ears, which widen each half's pose by 2 Le
@@ -43,45 +40,6 @@ export const REFINE_STEP = 0.25;
 export const TIE = 0.01;
 /** G13.2 step 8: the cell of the coarse fields that choose the split, in mm. */
 export const COARSE_CELL = 1;
-
-export const axisOf = (pull: Pull): SeamAxis => (pull[1] as SeamAxis);
-export const signOf = (pull: Pull): 1 | -1 => (pull[0] === '+' ? 1 : -1);
-export const pullOf = (axis: SeamAxis, sign: 1 | -1): Pull => `${sign > 0 ? '+' : '-'}${axis}` as Pull;
-
-const ROWS: Record<Pull, RigidTransform['rotation']> = {
-  '+x': [0, 1, 0, 0, 0, 1, 1, 0, 0],
-  '-x': [0, -1, 0, 0, 0, 1, -1, 0, 0],
-  '+y': [-1, 0, 0, 0, 0, 1, 0, 1, 0],
-  '-y': [1, 0, 0, 0, 0, 1, 0, -1, 0],
-};
-
-/**
- * G13.1's frame of a pull, from the model's bounds, so h >= 0 over the whole model: +x (y, z, x - xmin), -x (-y, z,
- * xmax - x), +y (-x, z, y - ymin), -y (x, z, ymax - y). Every one has determinant +1.
- */
-export function sideFrame(pull: Pull, bounds: Bounds): RigidTransform {
-  const a = axisOf(pull) === 'x' ? 0 : 1;
-  const translation: [number, number, number] = [0, 0, signOf(pull) > 0 ? -bounds.min[a] : bounds.max[a]];
-  return { rotation: ROWS[pull], translation };
-}
-
-/** The frame's inverse: back from (u, v, h) to the mold's (x, y, z). */
-export function frameInverse(frame: RigidTransform): RigidTransform {
-  const [a, b, c, d, e, f, g, h, i] = frame.rotation;
-  const [x, y, z] = frame.translation;
-  return {
-    rotation: [a, d, g, b, e, h, c, f, i],
-    translation: [-(a * x + d * y + g * z), -(b * x + e * y + h * z), -(c * x + f * y + i * z)],
-  };
-}
-
-/**
- * G13.8's frame of the seam: the + pull's turn, with h = a - xs, so P is h = 0 and (u, v) is the seam face, v = z and
- * u = b with an x seam, -b with a y seam (bOf). The seal's sections are drawn in (u, v) and extruded along h.
- */
-export function seamFrame(axis: SeamAxis, xs: number): RigidTransform {
-  return { rotation: ROWS[pullOf(axis, 1)], translation: [0, 0, -xs] };
-}
 
 /** The model turned into a pull's frame. The indices are the model's, as the turn is rigid. */
 export function turnMesh(mesh: WeldedMesh, frame: RigidTransform): WeldedMesh {

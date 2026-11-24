@@ -397,7 +397,7 @@ export const BOLT_GOLDEN: Record<ExampleId, BoltGolden> = {
 };
 
 /**
- * MP1 numbers for the two-part cover (docs/PLAN.md, G13), keyed by test model or gallery id as the tables above are by
+ * MP1 numbers for the two-part cover (docs/PLAN.md, G13), with MP3's seam bolts, keyed by test model or gallery id as the tables above are by
  * example: clamshell defaults (beta 20, base layer 0, M3 seam bolts) on the app's 220 x 220 x 250 bed, fine fields at the
  * export cell 0.125. Silicone in ml is both halves' cavity with the TIN's raise, less the model above the plane and
  * sealed air as FIELD_GOLDEN takes them (neither model has sealed air past the filter), with no openings (MP4 adds them).
@@ -412,14 +412,19 @@ export interface ClamshellGolden {
   holdN: number;
   push: [number, number];
   boltsPerEnd: number;
+  /**
+   * MP3: the seam bolts in all, their length, the - and + lugs' flat thicknesses Tn and Tp in mm, and the halves' bed
+   * footprint across and along with the lugs (G13.10.8). Exact on the count and the length, 1% on the rest.
+   */
+  bolts: { count: number; length: number; tn: number; tp: number; bed: [number, number] };
 }
 
 /** The keys the clamshell table may take: a test model's, or a gallery model's (src/gallery/catalogue.ts). */
 export type ClamshellModelId = ExampleId | 'sphere' | 'cube' | 'cylinder' | 'cone';
 
 export const CLAMSHELL_GOLDEN = {
-  goddess: { silicone: 58.49, axis: 'y', xs: 152.5, Zt: 114.027, holdN: 12.01, push: [4.89, 4.31], boltsPerEnd: 2 },
-  vis35: { silicone: 270.45, axis: 'y', xs: 219, Zt: 192.693, holdN: 23.22, push: [8.4, 8.69], boltsPerEnd: 3 },
+  goddess: { silicone: 58.49, axis: 'y', xs: 152.5, Zt: 114.027, holdN: 12.01, push: [4.89, 4.31], boltsPerEnd: 2, bolts: { count: 4, length: 10, tn: 3.881, tp: 6.819, bed: [112.299, 117.827] } },
+  vis35: { silicone: 270.45, axis: 'y', xs: 219, Zt: 192.693, holdN: 23.22, push: [8.4, 8.69], boltsPerEnd: 3, bolts: { count: 6, length: 10, tn: 3.975, tp: 6.725, bed: [82.637, 196.493] } },
 } satisfies Partial<Record<ClamshellModelId, ClamshellGolden>>;
 
 /**

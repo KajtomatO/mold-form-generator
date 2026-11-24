@@ -1,6 +1,6 @@
 import type { CrossSection, Manifold, SimplePolygon } from 'manifold-3d';
 import { orientSolid, type RigidTransform } from '../base/orient';
-import { frameInverse, seamFrame } from '../field/side';
+import { frameInverse, seamFrame } from '../field/frames';
 import type { Params } from '../params/schema';
 import type { Diagnostic } from '../report/diagnostics';
 import type { Arena } from '../solid/arena';

@@ -7,11 +7,14 @@ import { checked, withArena, type Arena } from '../solid/arena';
 import { TOOL_BOTTOM } from '../solid/tool';
 import { buildBaseBody } from './base';
 import { baseBoltCutters, boltNeeds, coverBoltCutters, type BoltLayout } from './bolts';
-import { buildCoverBody } from './cover';
-import { threadPast } from './fasteners';
+import type { ClamshellBuildOptions } from './clamshell';
+import { buildCoverBody, trimHalf } from './cover';
+import { standardLength, threadPast } from './fasteners';
 import { pourCutters, VENT_CHAMFER, ventCutters } from './openings';
-import { basePose, coverPose, poseToStl } from './poses';
+import { basePose, coverPose, halfPose, poseToStl } from './poses';
 import { deriveRim, type Rim } from './rim';
+import type { Rect } from '../solid/rect';
+import { headThickness, LUG_OVERLAP, lugRelief, lugSolid, seamBoltCuts, seamBoltNeeds, slotFace, type SeamBoltLayout } from './seamBolts';
 
 const TOOL_SIDE = 20;
 const TOOL_HEIGHT = 6;
@@ -116,6 +119,61 @@ export function buildBoltCoupon(arena: Arena, params: Params): BoltCoupon {
   const base = checked(arena.track(Manifold.difference([boxAt(arena, -half, -half, -Tb, half, half, 0), ...baseBoltCutters(arena, bolts)])), 'The bolt coupon base');
   const cover = checked(arena.track(Manifold.difference([boxAt(arena, -half, -half, 0, half, half, top), ...coverBoltCutters(arena, bolts)])), 'The bolt coupon cover');
   return { bolts, base, cover, top };
+}
+
+/** G13.10.12's coupon of the seam bolts: a stub of each half's end wall with one lug pair, cut as the halves' are. */
+export interface SeamBoltCoupon {
+  /** One pair on the end face at b = 0 of an x seam at xs = 0, its centre at z = 0. */
+  bolts: SeamBoltLayout;
+  /** The stub's box, which stands for the halves' O: the wall on y in [-wall, 0], each half as deep as its lug needs. */
+  O: Rect;
+  /** neg (the head side) first. */
+  halves: [Manifold, Manifold];
+}
+
+/**
+ * G13.10.12: with Seam fasteners Bolts, the fit test's two seam bolt coupons, from the same functions as the halves: a
+ * wall stub (w in [-wall, 0], z within hL/2 + 2 of the lug's centre, each half Hc deep) with the lug pair, less the relief
+ * and each half's cuts. Hc = T + p + LUG_OVERLAP rounded up to whole layers, T the half's flat thickness, so the gussets
+ * end on the back face; as each half's back face is a whole number of layers from P, so is the slot's face, as in the
+ * mold. `options` are the tests' negative controls.
+ */
+export function buildSeamBoltCoupon(arena: Arena, params: Params, options: Pick<ClamshellBuildOptions, 'lugs' | 'cuts'> = {}): SeamBoltCoupon {
+  const needs = seamBoltNeeds(params);
+  const { layer, p, height: hL, slotHeight, minWall, fastener } = needs;
+  const whole = (v: number): number => layer * Math.ceil(v / layer - 1e-9);
+  const f = slotFace(whole(needs.fMin), needs);
+  const tn = headThickness(needs.length, f, fastener);
+  const tp = f + slotHeight + minWall;
+  const depths: [number, number] = [whole(tn + p + LUG_OVERLAP), whole(tp + p + LUG_OVERLAP)];
+  const bolts: SeamBoltLayout = {
+    ...needs,
+    axis: 'x',
+    xs: 0,
+    depths,
+    f,
+    tn,
+    tp,
+    zBottom: 0,
+    zTop: 0,
+    perEnd: 1,
+    count: 2,
+    zs: [0],
+    spots: [{ end: 'b1', z: 0, b: needs.c }],
+    lugZone: [tn + p, tp + p],
+    lengthFits: tn >= needs.tnMin - 1e-9 && tn <= depths[0] - minWall + 1e-9,
+    shortest: null,
+    longest: null,
+    heldBack: false,
+    diagnostics: [],
+  };
+  const O: Rect = { x0: -depths[0], y0: -params.cover.wall, x1: depths[1], y1: 0 };
+  const { Manifold } = arena.api;
+  const stub = boxAt(arena, O.x0, O.y0, -(hL / 2 + 2), O.x1, O.y1, hL / 2 + 2);
+  const block = arena.track(Manifold.union([stub, ...lugSolid(arena, bolts, options.lugs)]));
+  const relief = options.lugs?.relief === false ? [] : lugRelief(arena, bolts);
+  const half = (sign: 1 | -1): Manifold => checked(arena.track(Manifold.difference([trimHalf(arena, block, 'x', 0, sign), ...relief, ...seamBoltCuts(arena, bolts, sign, options.cuts)])), sign > 0 ? 'The seam bolt coupon\'s nut side' : 'The seam bolt coupon\'s head side');
+  return { bolts, O, halves: [half(-1), half(1)] };
 }
 
 function boxAt(arena: Arena, x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): Manifold {
@@ -241,6 +299,27 @@ function boltLines(coupon: BoltCoupon, params: Params): string[] {
   return out;
 }
 
+function seamBoltLines(coupon: SeamBoltCoupon, params: Params): string[] {
+  const { bolts } = coupon;
+  const b = params.bolts;
+  const out: string[] = ['', 'Seam bolt coupon:'];
+  const step = (n: number, text: string): void => {
+    out.push(...wrap(text, `${n}. `, '   '));
+  };
+  out.push(...wrap(`seam_bolt_coupon_neg.stl and seam_bolt_coupon_pos.stl are a stub of each half's end wall with one pair of seam bolt lugs, cut as the real halves' are: the head side (neg) with an ${bolts.size} countersink and hole at a hole clearance of ${b.holeClearance} mm per side, and the nut side (pos) with a nut slot at a nut clearance of ${b.nutClearance} mm per side and its membrane. Print them as they are saved, on their backs, in the material and settings of the real mold. Then, with an ${bolts.size} x ${bolts.length} mm countersunk screw, an ${bolts.size} hex nut and a ${bolts.hexKey} mm hex key:`));
+  // MP5 draws the Seam bolts rows under Two-part cover; these steps name them there.
+  const rows = 'under Two-part cover, Seam bolts';
+  step(1, `Stand both coupons on their bottom ends, the nut side's slot opening at the top, as the halves stand in the mold. Drop the nut into the slot on the top of the nut side's lug, flats against the slot's sides: it should drop in by hand and seat at the bottom of the slot. If it will not go, raise Nut clearance per side ${rows}, by 0.05 mm.`);
+  step(2, `Assemble the two coupons on a flat table, seam faces together. Put the screw through the head side's lug from its outer side, through the hole and the membrane, the thin layer of plastic between the hole and the nut slot, which is meant to be pierced, and turn it into the nut with the key. It should pass the holes without binding; if it binds, raise Hole clearance per side ${rows}.`);
+  step(3, 'Stop at snug, when the stub faces close, then give it a quarter turn more. The lug faces must keep a visible gap while the stub faces close, and no lug may crack. If the lug faces touch, back the screw off to snug; if they still touch, your printer is printing over size: check its flow and first-layer squish. If the stub faces stay open, check that the table is flat and the screw straight. If a lug cracks, check in the slicer\'s preview that the mold\'s lugs print solid, and in the mold stop at snug.');
+  if (bolts.tn < bolts.tnMin - 1e-9) {
+    const shortest = standardLength(bolts.tnMin + bolts.f + bolts.fastener.nutHeight + threadPast(bolts.fastener));
+    out.push(...wrap(`An ${bolts.size} x ${bolts.length} mm screw leaves the head side's lug ${bolts.tn.toFixed(2)} mm thick, under the ${bolts.tnMin.toFixed(2)} mm that keeps plastic over its countersink: ${shortest !== null ? `use ${shortest} mm or longer` : 'no standard length is long enough'}, and save the fit test again.`));
+  }
+  out.push(...wrap(`The coupon's nut slot sits a whole number of layers from the seam face. The mold's is up to one layer nearer to it or further from it, as each half's back face is a whole number of layers from the seam, and the mold's head side's lug is that much thinner or thicker, so in the mold the same screw passes its nut by the same 2 threads.`));
+  return out;
+}
+
 /** Everything in the fit-test ZIP, by path, in print pose. The caller zips it, so core needs no zip library. */
 export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultParams()): Record<string, Uint8Array> {
   const variants = fitVariants(params);
@@ -253,12 +332,22 @@ export function fitTestFiles(api: ManifoldToplevel, params: Params = defaultPara
     });
   }
   const readme = readmeLines(variants, params);
-  if (params.bolts.enabled) {
+  // G13.10.12: the two-part cover holds its seam with its own bolts, so M10's coupon is not this type's.
+  const clamshell = params.mold.type === 'clamshell';
+  if (params.bolts.enabled && !clamshell) {
     withArena(api, (arena) => {
       const coupon = buildBoltCoupon(arena, params);
       files['fit_test/bolt_coupon_cover.stl'] = poseToStl(api, coupon.cover, coverPose({ Zt: coupon.top }));
       files['fit_test/bolt_coupon_base.stl'] = poseToStl(api, coupon.base, basePose({ Tb: params.base.thickness }));
       readme.push(...boltLines(coupon, params));
+    });
+  }
+  if (clamshell && params.clamshell.fastener === 'bolts') {
+    withArena(api, (arena) => {
+      const coupon = buildSeamBoltCoupon(arena, params);
+      files['fit_test/seam_bolt_coupon_neg.stl'] = poseToStl(api, coupon.halves[0], halfPose(coupon, 'x', -1));
+      files['fit_test/seam_bolt_coupon_pos.stl'] = poseToStl(api, coupon.halves[1], halfPose(coupon, 'x', 1));
+      readme.push(...seamBoltLines(coupon, params));
     });
   }
   // Plain ASCII in CRLF lines for Notepad, and core has no TextEncoder without the DOM types.

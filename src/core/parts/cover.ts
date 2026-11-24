@@ -79,10 +79,16 @@ export function toolDiagnostics(rim: Rim, tool: Pick<ToolMesh, 'domain' | 'clipp
 /**
  * G13.7 step 2, the shared block both halves are trimmed from: G9's box, rebate and groove, the box square, the groove
  * with its teardrop past D along the pull (clamGrooveSolid; the tests pass G9's own as a negative control). The pry
- * notches and the corner bolts are this type's locks, so the rim has none.
+ * notches and the corner bolts are this type's locks, so the rim has none. With seam bolts, the box takes their lugs
+ * (G13.10.3) before the rebate and the groove are cut, each cut to O's slab along a, so a gusset that would pass a back
+ * face stands on the bed there.
  */
-export function buildClamCommon(arena: Arena, rim: ClamRim, groove: Manifold = clamGrooveSolid(arena, rim, rim.axis)): Manifold {
-  return checked(arena.track(arena.api.Manifold.difference([blockSolid(arena, rim), rebateSolid(arena, rim), groove])), 'The two-part cover\'s block');
+export function buildClamCommon(arena: Arena, rim: ClamRim, groove: Manifold = clamGrooveSolid(arena, rim, rim.axis), lugs: Manifold[] = []): Manifold {
+  const { Manifold: M } = arena.api;
+  const [a0, a1] = rim.axis === 'x' ? [rim.O.x0, rim.O.x1] : [rim.O.y0, rim.O.y1];
+  const slab = (lug: Manifold): Manifold => arena.track(arena.track(lug.trimByPlane(along(rim.axis, 1), a0)).trimByPlane(along(rim.axis, -1), -a1));
+  const block = lugs.length > 0 ? arena.track(M.union([blockSolid(arena, rim), ...lugs.map(slab)])) : blockSolid(arena, rim);
+  return checked(arena.track(M.difference([block, rebateSolid(arena, rim), groove])), 'The two-part cover\'s block');
 }
 
 /** The unit vector along a. */
@@ -118,7 +124,7 @@ export function pryChamfers(arena: Arena, rim: ClamRim, sign: 1 | -1): Manifold[
   });
 }
 
-/** What G13.7 step 3 adds to and cuts from one half besides its tool: the seal's solids, and later the seam fasteners'. */
+/** What G13.7 step 3 adds to and cuts from one half besides its tool: the seal's solids, and the seam bolts' relief and cuts. */
 export interface HalfFeatures {
   add: Manifold[];
   cut: Manifold[];

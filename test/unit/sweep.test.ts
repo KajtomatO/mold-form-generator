@@ -5,7 +5,7 @@ import { defaultParams } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { hmaxClam, sideBounds, sideBoundsFast } from '../../src/core/parts/rim';
 import type { Rect } from '../../src/core/solid/rect';
-import { chooseFor, coarseRows, exactRim, fineSplit, prepareClamshell, seamHold, sideField, type ClamshellPrep } from '../fixtures/clamshell';
+import { chooseFor, coarseRows, exactFootprint, exactRim, fineSplit, prepareClamshell, seamHold, sideField, type ClamshellPrep } from '../fixtures/clamshell';
 import { orientedExample } from '../fixtures/fieldRuns';
 import { EXAMPLE_IDS, skipWithout, type ExampleId } from '../fixtures/loadExamples';
 import { box, join } from '../fixtures/synthetic';
@@ -263,6 +263,14 @@ describe('MP1 goldens', () => {
       within(fine.forces[1].sideN, g.push[1]);
       expect(hold.bolts.perEnd).toBe(g.boltsPerEnd);
       expect(hold.bolts.heldBack).toBe(false);
+      // MP3: the screws, their length, the lugs' flat thicknesses and the bed footprint with the lugs.
+      const bed = exactFootprint(prep, fine, 'bolts');
+      expect([hold.bolts.count, hold.bolts.length]).toEqual([g.bolts.count, g.bolts.length]);
+      within(hold.bolts.tn, g.bolts.tn);
+      within(hold.bolts.tp, g.bolts.tp);
+      within(bed.width, g.bolts.bed[0]);
+      within(bed.length, g.bolts.bed[1]);
+      expect(bed.fits).toBe(true);
       // G13.6: at the export cell neither half's cavity at z <= zJ passes D_side, so it keeps off the joint.
       for (const side of [fine.plus, fine.minus]) {
         expect(sideOverrun(side.field, side.side.pull, prep.bounds, side.hs, side.side.plan.raise, fine.rim.Dside, fine.rim.zJ), side.side.pull).toBe(0);

@@ -1,14 +1,19 @@
+import type { Manifold, Vec2 } from 'manifold-3d';
+import { orientSolid } from '../base/orient';
+import { frameInverse, halfFrame } from '../field/frames';
 import type { Params } from '../params/schema';
 import { SEAL_SPACING_MM } from '../report/clamp';
 import type { Diagnostic } from '../report/diagnostics';
+import type { Arena } from '../solid/arena';
+import { column, OVERLAP, PAST, slotOutline } from './bolts';
 import { BOLT_HOLD_N, BRIDGE_LIMIT, FASTENERS, longestLength, OVER_SINK_LAYERS, OVER_SINK_MM, standardLength, threadPast, type BoltSize, type Fastener } from './fasteners';
 import type { ClamRim, SeamAxis } from './rim';
 
 /**
  * G13.10: the two-part cover's seam bolts. M3 countersunk screws (ISO 10642 or DIN 7991) run along a through a pair of
  * printed lugs on each end face, one lug on each half, into an ISO 4032 hex nut held in a slot of the + half's lug:
- * heads always in the - half, nuts always in the + half. This file sizes them from M10's hardware and places them up
- * the end faces; the solids and their cuts are MP3's.
+ * heads always in the - half, nuts always in the + half. This file sizes them from M10's hardware, places them up the
+ * end faces (MP1), and builds the lugs, their relief and their cuts (MP3).
  */
 
 /** G13.10.2: the lug's height along z, at least, so about 73 mm2 of interlayer section stays across the slot's level at M3. */
@@ -247,4 +252,157 @@ export function placeSeamBolts(needs: SeamBoltNeeds, rim: Pick<ClamRim, 'O' | 'Z
     heldBack,
     diagnostics,
   };
+}
+
+// ----- MP3: the lugs, their relief and their cuts (G13.10.3, G13.10.4) -----
+
+/** A spot's end face, as the b of O's face there and the sign of w, outward from it along b. */
+function endFace(layout: Pick<SeamBoltLayout, 'c'>, spot: SeamBoltSpot): { b: number; out: 1 | -1 } {
+  return spot.end === 'b0' ? { b: spot.b + layout.c, out: -1 } : { b: spot.b - layout.c, out: 1 };
+}
+
+/** A prism over z0 to z1 of a polygon given in (a, w) at an end face, in mold coordinates. */
+function prismAW(arena: Arena, axis: SeamAxis, face: { b: number; out: 1 | -1 }, points: [number, number][], z0: number, z1: number): Manifold {
+  const plan = points.map(([a, w]) => {
+    const b = face.b + face.out * w;
+    return (axis === 'x' ? [a, b] : [b, a]) as [number, number];
+  });
+  // NonZero, so the winding a mirrored end face gives is filled all the same.
+  return arena.track(arena.extrude(arena.crossSection([plan], 'NonZero'), z1 - z0).translate([0, 0, z0]));
+}
+
+/** Tests only: negative controls of the audit and of the gap a pair keeps. */
+export interface LugOptions {
+  /** A lug with no gussets, square under its flat thicknesses. */
+  flat?: boolean;
+  /** False: no relief, so the lug faces of a pair touch in P. */
+  relief?: boolean;
+}
+
+/**
+ * G13.10.3: per lug pair, in mold coordinates, the prism over z_k -+ hL/2 of the trapezoid in (a, w) with corners
+ * (xs - Tn - p - LUG_OVERLAP, -LUG_OVERLAP), (xs - Tn, p), (xs + Tp, p), (xs + Tp + p + LUG_OVERLAP, -LUG_OVERLAP): both
+ * lugs of a pair as one solid, which the trim at P parts. Its slanted sides, the gussets, are at exactly 45 degrees, so
+ * each half's prints with no supports on its back. The shared block takes these before the trim, cut to O's slab along a.
+ */
+export function lugSolid(arena: Arena, layout: SeamBoltLayout, options: LugOptions = {}): Manifold[] {
+  const { xs, tn, tp, p, height: hL } = layout;
+  const e = LUG_OVERLAP;
+  const points: [number, number][] = options.flat
+    ? [[xs - tn, -e], [xs - tn, p], [xs + tp, p], [xs + tp, -e]]
+    : [[xs - tn - p - e, -e], [xs - tn, p], [xs + tp, p], [xs + tp + p + e, -e]];
+  return layout.spots.map((spot) => prismAW(arena, layout.axis, endFace(layout, spot), points, spot.z - hL / 2, spot.z + hL / 2));
+}
+
+/**
+ * G13.10.1: on each end face, the slab |a - xs| < r outside O (w > 0) over the lugs' heights, cut from both halves, so
+ * each lug's seam face lies one layer back from P and a pair keeps a 2r gap. Each half's own seam face, inside O, is
+ * untouched, so the screw's preload reaches the seal through the lugs' roots.
+ */
+export function lugRelief(arena: Arena, layout: SeamBoltLayout): Manifold[] {
+  const { xs, relief: r, p, height: hL } = layout;
+  if (layout.spots.length === 0) return [];
+  const z0 = Math.min(...layout.zs) - hL / 2 - PAST, z1 = Math.max(...layout.zs) + hL / 2 + PAST;
+  const ends = (['b0', 'b1'] as const).flatMap((end) => layout.spots.filter((spot) => spot.end === end).slice(0, 1));
+  return ends.map((spot) => prismAW(arena, layout.axis, endFace(layout, spot), [[xs - r, 0], [xs + r, 0], [xs + r, p + PAST], [xs - r, p + PAST]], z0, z1));
+}
+
+/** A spot's axis in a half's pull frame (u, v), v = z_k. */
+export function lugAxis(layout: Pick<SeamBoltLayout, 'axis' | 'xs'>, spot: SeamBoltSpot, sign: 1 | -1): [number, number] {
+  const { rotation: R, translation: t } = halfFrame(layout.axis, layout.xs, sign);
+  const [x, y, z] = layout.axis === 'x' ? [layout.xs, spot.b, spot.z] : [spot.b, layout.xs, spot.z];
+  return [R[0] * x + R[1] * y + R[2] * z + t[0], R[3] * x + R[4] * y + R[5] * z + t[1]];
+}
+
+/** Tests only: each a negative control of the cuts' reading, or of the audit. */
+export interface SeamBoltCutOptions {
+  /** False: the pos hole runs on into the slot, with no membrane. */
+  membrane?: boolean;
+  /** The slot stops this far short of the lug's top face. */
+  slotShort?: number;
+  /** The access bore ends this far past Tn, short of the gusset. */
+  boreTo?: number;
+  /** A counterbore of rk in place of the countersink's cone. */
+  counterbore?: boolean;
+  /** The slot leaving along -h: built from f toward P, so its ceiling is not the bridge listed. */
+  slotTowardSeam?: boolean;
+}
+
+/**
+ * G13.10.4: one half's cuts per lug, built in the half's pull frame (halfFrame) with h as Manifold's z, where M10's
+ * `column` applies, and turned back. neg (-1), the head side: the hole from the relieved face to the countersink, its
+ * 45 degree cone opening toward the back face, and the access bore on through the gusset, so a short 2 mm key reaches
+ * the head along -a. pos (+1), the nut side: the hole to a one-layer membrane under the slot's face at f, the slot over
+ * it leaving through the lug's top face (+z), and the hole on past the back face, so the screw never bottoms out.
+ */
+export function seamBoltCuts(arena: Arena, layout: SeamBoltLayout, sign: 1 | -1, options: SeamBoltCutOptions = {}): Manifold[] {
+  const back = frameInverse(halfFrame(layout.axis, layout.xs, sign));
+  const { relief: r, holeRadius: rh, sinkRadius: rk, sinkDepth, tn, f, layer, slotHeight, height: hL } = layout;
+  const depth = layout.depths[sign > 0 ? 1 : 0];
+  const cuts: Manifold[] = [];
+  // A column held to h in [r - PAST, depth + PAST], its radius taken along with it, and none where nothing is left: a
+  // length off its range (seam-bolt-short or seam-bolt-long) moves Tn past either end, and the halves still build.
+  const lo = r - PAST, hi = depth + PAST;
+  const add = (u: number, v: number, z0: number, z1: number, r0: number, r1: number): void => {
+    const at = (z: number): number => r0 + ((r1 - r0) * (z - z0)) / (z1 - z0);
+    const c0 = Math.max(z0, lo), c1 = Math.min(z1, hi);
+    if (c1 > c0 + OVERLAP) cuts.push(column(arena, u, v, c0, c1, at(c0), at(c1)));
+  };
+  for (const spot of layout.spots) {
+    const [u, v] = lugAxis(layout, spot, sign);
+    if (sign < 0) {
+      add(u, v, lo, tn - sinkDepth, rh, rh);
+      add(u, v, tn - sinkDepth, tn, options.counterbore ? rk : rh, rk);
+      add(u, v, tn, options.boreTo !== undefined ? tn + options.boreTo : hi, rk, rk);
+    } else {
+      add(u, v, lo, options.membrane === false ? f + OVERLAP : f - layer, rh, rh);
+      const slotRun = hL / 2 + PAST - (options.slotShort !== undefined ? options.slotShort + PAST : 0);
+      const outline = arena.crossSection([slotOutline(layout, { x: u, y: v, sx: 1, sy: 1, exit: 'y1', slotRun })]);
+      const from = options.slotTowardSeam ? f - slotHeight : f;
+      cuts.push(arena.track(arena.extrude(outline, slotHeight).translate([0, 0, from])));
+      add(u, v, f + slotHeight - OVERLAP, hi, rh, rh);
+    }
+  }
+  return cuts.map((cut) => orientSolid(arena, cut, back));
+}
+
+/** A nut slot's face toward P in the pos half, a bridge in its pose: at a = xs + f, its outline in (b, z). */
+export interface SeamBoltBridge {
+  a: number;
+  outline: Vec2[];
+  span: number;
+}
+
+/** G13.10.10: the bridges the audit lists in pos's pose, one per lug pair: each slot's face toward P. There are none in neg. */
+export function seamBoltBridges(layout: SeamBoltLayout): SeamBoltBridge[] {
+  return layout.spots.map((spot) => {
+    const [u, v] = lugAxis(layout, spot, 1);
+    const outline = slotOutline(layout, { x: u, y: v, sx: 1, sy: 1, exit: 'y1', slotRun: layout.height / 2 + PAST });
+    // Pos's frame has u = b with an x seam and -b with a y seam.
+    return { a: layout.xs + layout.f, outline: outline.map(([pu, pv]) => [layout.axis === 'x' ? pu : -pu, pv] as Vec2), span: layout.slotWidth };
+  });
+}
+
+/** Whether a point in mold coordinates lies on one of these bridges: within `tol` of its plane and inside its outline. */
+export function onSeamBoltBridge(bridges: readonly SeamBoltBridge[], axis: SeamAxis, x: number, y: number, z: number, tol = 1e-3): boolean {
+  const [a, b] = axis === 'x' ? [x, y] : [y, x];
+  return bridges.some((bridge) => Math.abs(a - bridge.a) <= tol && inside(b, z, bridge.outline));
+}
+
+function inside(px: number, py: number, polygon: readonly Vec2[]): boolean {
+  let hit = false;
+  for (let k = 0, j = polygon.length - 1; k < polygon.length; j = k++) {
+    const [xk, yk] = polygon[k], [xj, yj] = polygon[j];
+    if (yk > py !== yj > py && px < ((xj - xk) * (py - yk)) / (yj - yk) + xk) hit = !hit;
+  }
+  return hit;
+}
+
+/**
+ * The seam bolts' lines for the build: placeSeamBolts' own (G13.10.13's rules on the count, the length and the bridge).
+ * Every wall the cuts leave is minWall or more by e's rule (G13.10.2), whatever the size or the clearances, so none is
+ * checked here; test/regression/seamBolts.test.ts reads them off the cutters.
+ */
+export function seamBoltDiagnostics(layout: SeamBoltLayout): Diagnostic[] {
+  return layout.diagnostics;
 }
