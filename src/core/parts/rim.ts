@@ -314,3 +314,234 @@ export function maskOverrun(field: Field, D: Rect): number {
   }
   return worst;
 }
+
+// ----- G13.6: the two-part cover's bounds -----
+
+/** The seam plane's axis: P = {a = xs}, a being x or y, and b the other horizontal axis. */
+export type SeamAxis = 'x' | 'y';
+
+/**
+ * G13.6 and G13.8: the plastic the seam's groove keeps to O's face across the pull, in mm. The band needs O.b at least
+ * seamLand + rw + 2cG + BAND_ROOM past D3.b, which deriveClamRim adds up.
+ */
+export const BAND_ROOM = 0.8;
+
+/**
+ * G13.6, what the vertices give once, for both axes and any xs: the extremes the O(1) bounds read. The model is the
+ * oriented one cut at z = 0 (clipBelow), so every vertex is at z >= 0 and the cut's own corners are among them.
+ */
+export interface ClamVertices {
+  /** The clipped model's positions. */
+  positions: Float32Array;
+  /** Its extent along x and y. */
+  min: [number, number];
+  max: [number, number];
+  rEff: number;
+  tanDraft: number;
+  /** G13.6's zJ: rh + gx + seamLand + 0.5, the height D_side bounds the cavity up to. */
+  zJ: number;
+  /**
+   * How far over zJ + rEff + w a vertex still counts towards D_side: G13.6's filter, widened by the closing's width,
+   * which reaches that far along v, and SIDE_SLACK for the raster's half cell. Without it, a model that overhangs just
+   * over the joint (the wolf) had low nodes up to 0.8 mm past D_side.
+   */
+  zSlack: number;
+  /** Per axis, the relaxed D_side and D3 terms across and along the pull (see sideBoundsFast). */
+  axes: Record<SeamAxis, AxisExtremes>;
+  /** Hmax_clam's M+ and M- per axis and per tan(beta) + tan(alpha), worked out on first use. */
+  hmax: Map<string, [number, number]>;
+}
+
+interface AxisExtremes {
+  /** Over the vertices low enough for D_side at any xs: max of b + k a and b - k a, min of b - k a and b + k a, k = tan(alpha). */
+  sideB: [number, number, number, number];
+  /** The same over every vertex, for D3. */
+  allB: [number, number, number, number];
+  /** Along the pull: the least and most a of those vertices, and of all. */
+  sideA: [number, number];
+  allA: [number, number];
+}
+
+const AXIS = { x: 0, y: 1 } as const;
+const other = (axis: SeamAxis): 0 | 1 => (axis === 'x' ? 1 : 0);
+
+/** G13.6's zJ, from the joint and the seam land. */
+export function seamJointTop(params: Params): number {
+  return params.joint.ridgeHeight + params.joint.grooveExtraDepth + params.clamshell.seamLand + 0.5;
+}
+
+/** The extremes of the clipped model that every O(1) bound of G13.3 and G13.6 reads, for both axes. */
+export function clamVertices(clipped: WeldedMesh, rEff: number, draftDeg: number, zJ: number, closeWidth: number): ClamVertices {
+  const zSlack = closeWidth + SIDE_SLACK;
+  const p = clipped.positions;
+  const tanDraft = Math.tan(draftDeg * DEGREE);
+  const min: [number, number] = [Infinity, Infinity], max: [number, number] = [-Infinity, -Infinity];
+  for (let v = 0; v < p.length; v += 3) {
+    for (const k of [0, 1] as const) {
+      if (p[v + k] < min[k]) min[k] = p[v + k];
+      if (p[v + k] > max[k]) max[k] = p[v + k];
+    }
+  }
+  // A vertex counts towards D_side where z <= zJ + rEff + w, and w is largest at the far end of the extent.
+  const axes = {} as Record<SeamAxis, AxisExtremes>;
+  for (const axis of ['x', 'y'] as const) {
+    const a = AXIS[axis], b = other(axis);
+    const zLow = zJ + zSlack + rEff + (max[a] - min[a] + rEff) * tanDraft;
+    const sideB: [number, number, number, number] = [-Infinity, -Infinity, Infinity, Infinity];
+    const allB: [number, number, number, number] = [-Infinity, -Infinity, Infinity, Infinity];
+    const sideA: [number, number] = [Infinity, -Infinity], allA: [number, number] = [Infinity, -Infinity];
+    for (let v = 0; v < p.length; v += 3) {
+      const av = p[v + a], bv = p[v + b];
+      const plus = bv + tanDraft * av, minus = bv - tanDraft * av;
+      if (plus > allB[0]) allB[0] = plus;
+      if (minus > allB[1]) allB[1] = minus;
+      if (minus < allB[2]) allB[2] = minus;
+      if (plus < allB[3]) allB[3] = plus;
+      if (av < allA[0]) allA[0] = av;
+      if (av > allA[1]) allA[1] = av;
+      if (p[v + 2] > zLow) continue;
+      if (plus > sideB[0]) sideB[0] = plus;
+      if (minus > sideB[1]) sideB[1] = minus;
+      if (minus < sideB[2]) sideB[2] = minus;
+      if (plus < sideB[3]) sideB[3] = plus;
+      if (av < sideA[0]) sideA[0] = av;
+      if (av > sideA[1]) sideA[1] = av;
+    }
+    axes[axis] = { sideB, allB, sideA, allA };
+  }
+  return { positions: p, min, max, rEff, tanDraft, zJ, zSlack, axes, hmax: new Map() };
+}
+
+/** A rectangle from extents along a and b. */
+function rectOf(axis: SeamAxis, a0: number, a1: number, b0: number, b1: number): Rect {
+  return axis === 'x' ? { x0: a0, x1: a1, y0: b0, y1: b1 } : { x0: b0, x1: b1, y0: a0, y1: a1 };
+}
+
+/** What D_side and D3 add past a vertex, across the pull, besides w: rEff and G13.6's 0.5. */
+const SIDE_SLACK = 0.5;
+
+export interface SideBounds {
+  /** D_side: the cavity at z <= zJ, across the pull with the draft's w, along it clamped to include xs. */
+  side: Rect;
+  /** D3: the same terms with no z filter. */
+  all: Rect;
+}
+
+/**
+ * G13.6, exactly, in O(vertices): D_side counts a vertex where v.z <= zJ + zSlack + rEff + w(v), w(v) = (|v.a - xs| + rEff)
+ * tan(alpha); across the pull it reaches v.b +- (rEff + w(v)) + 0.5, along it v.a +- rEff + 0.5, clamped to include xs.
+ * D3 is the same with no z filter.
+ */
+export function sideBounds(vertices: ClamVertices, axis: SeamAxis, xs: number): SideBounds {
+  const { positions: p, rEff, tanDraft, zJ, zSlack } = vertices;
+  const a = AXIS[axis], b = other(axis);
+  let sa0 = Infinity, sa1 = -Infinity, sb0 = Infinity, sb1 = -Infinity;
+  let aa0 = Infinity, aa1 = -Infinity, ab0 = Infinity, ab1 = -Infinity;
+  for (let v = 0; v < p.length; v += 3) {
+    const av = p[v + a], bv = p[v + b];
+    const w = (Math.abs(av - xs) + rEff) * tanDraft;
+    const across = rEff + w + SIDE_SLACK;
+    aa0 = Math.min(aa0, av - rEff - SIDE_SLACK);
+    aa1 = Math.max(aa1, av + rEff + SIDE_SLACK);
+    ab0 = Math.min(ab0, bv - across);
+    ab1 = Math.max(ab1, bv + across);
+    if (p[v + 2] > zJ + zSlack + rEff + w) continue;
+    sa0 = Math.min(sa0, av - rEff - SIDE_SLACK);
+    sa1 = Math.max(sa1, av + rEff + SIDE_SLACK);
+    sb0 = Math.min(sb0, bv - across);
+    sb1 = Math.max(sb1, bv + across);
+  }
+  // A model with nothing low (it cannot happen once clipped at 0, but an empty filter must not give Infinity).
+  if (!(sa0 <= sa1)) sa0 = sa1 = xs, sb0 = ab0, sb1 = ab1;
+  return { side: rectOf(axis, Math.min(sa0, xs), Math.max(sa1, xs), sb0, sb1), all: rectOf(axis, Math.min(aa0, xs), Math.max(aa1, xs), ab0, ab1) };
+}
+
+/**
+ * The same bounds in O(1) for G13.3's bed filter, never inside the exact ones: the z filter is taken at its widest
+ * over the extent, and |v.a - xs| tan(alpha) is split into its two linear pieces, whose maxima the vertices give once.
+ * The widest filter holds only for xs inside the extent, where every candidate lies, so any other xs is refused.
+ */
+export function sideBoundsFast(vertices: ClamVertices, axis: SeamAxis, xs: number): SideBounds {
+  const { rEff, tanDraft: k } = vertices;
+  const a = AXIS[axis];
+  if (xs < vertices.min[a] - 1e-9 || xs > vertices.max[a] + 1e-9) throw new Error(`The seam at ${axis} = ${xs} lies outside the model's extent, ${vertices.min[a]} to ${vertices.max[a]}.`);
+  const { sideB, allB, sideA, allA } = vertices.axes[axis];
+  const grow = rEff + rEff * k + SIDE_SLACK;
+  const across = (m: [number, number, number, number]): [number, number] => [Math.min(m[2] + k * xs, m[3] - k * xs) - grow, Math.max(m[0] - k * xs, m[1] + k * xs) + grow];
+  const [sb0, sb1] = across(sideB), [ab0, ab1] = across(allB);
+  return {
+    side: rectOf(axis, Math.min(sideA[0] - rEff - SIDE_SLACK, xs), Math.max(sideA[1] + rEff + SIDE_SLACK, xs), sb0, sb1),
+    all: rectOf(axis, Math.min(allA[0] - rEff - SIDE_SLACK, xs), Math.max(allA[1] + rEff + SIDE_SLACK, xs), ab0, ab1),
+  };
+}
+
+/**
+ * G13.6's Hmax_clam: max over v of (v.z + |v.a - xs| tan(beta) + rEff / cos(beta) + w(v)) + (raise + cell) max(1, tan(beta)),
+ * in O(1) per xs: the vertex term is max(M+ - c xs, M- + c xs) with M+- = max(v.z +- c v.a), c = tan(beta) + tan(alpha).
+ * With beta 0, rEff / cos(beta) is rEff. `cell` is the field's: the export's for the rim, so the rim is cell-independent.
+ */
+export function hmaxClam(vertices: ClamVertices, axis: SeamAxis, xs: number, betaDeg: number, raise: number, cell: number): number {
+  const tanBeta = betaDeg > 0 ? Math.tan(betaDeg * DEGREE) : 0;
+  const c = tanBeta + vertices.tanDraft;
+  const key = `${axis} ${c}`;
+  let m = vertices.hmax.get(key);
+  if (!m) {
+    const p = vertices.positions, a = AXIS[axis];
+    let plus = -Infinity, minus = -Infinity;
+    for (let v = 0; v < p.length; v += 3) {
+      plus = Math.max(plus, p[v + 2] + c * p[v + a]);
+      minus = Math.max(minus, p[v + 2] - c * p[v + a]);
+    }
+    m = [plus, minus];
+    vertices.hmax.set(key, m);
+  }
+  const { rEff, tanDraft } = vertices;
+  const sphere = betaDeg > 0 ? rEff / Math.cos(betaDeg * DEGREE) : rEff;
+  return Math.max(m[0] - c * xs, m[1] + c * xs) + sphere + rEff * tanDraft + (raise + cell) * Math.max(1, tanBeta);
+}
+
+/** G13.6's rim: G8's, from D = max(D_G8, D_side) and Hmax_clam, with D3 and the wall's raise for the band. */
+export interface ClamRim extends Rim {
+  axis: SeamAxis;
+  xs: number;
+  /** G8's D, which this type's D only ever widens. */
+  DG8: Rect;
+  Dside: Rect;
+  D3: Rect;
+  zJ: number;
+  /** Whether D_side took D past D_G8 on any side, which report.json states. */
+  dGrew: boolean;
+  /** The wall the user set and the one the band needed, or null when the user's was enough. */
+  wallRaised: { from: number; to: number } | null;
+}
+
+/**
+ * G13.6: the rim of the two-part cover at this split. The corner bolts and the pry notches are this type's locks, so
+ * they are off here whatever `params` hold. O is G8's with the user's wall, raised only where the band above the joint
+ * would leave less than seamLand + gw + 0.8 between D3 and O's faces across the pull; the base, B, is unchanged. The
+ * wall is one value round the box, as `cover.wall` is, so a raise moves all four of O's faces, the halves' depths
+ * and the bed's height with them, and the edge's minimum by the same.
+ */
+export function deriveClamRim(mold: MoldBounds, bounds: SideBounds, hmax: number, params: Params, axis: SeamAxis, xs: number, zJ: number): ClamRim {
+  const locked: Params = { ...params, bolts: { ...params.bolts, enabled: false }, joint: { ...params.joint, pryNotches: false } };
+  const DG8 = mold.D, Dside = bounds.side, D3 = bounds.all;
+  const D: Rect = { x0: Math.min(DG8.x0, Dside.x0), y0: Math.min(DG8.y0, Dside.y0), x1: Math.max(DG8.x1, Dside.x1), y1: Math.max(DG8.y1, Dside.y1) };
+  const dGrew = D.x0 < DG8.x0 || D.y0 < DG8.y0 || D.x1 > DG8.x1 || D.y1 > DG8.y1;
+  const rim = deriveRim({ ...mold, D, hMax: hmax }, locked);
+  const j = params.joint;
+  const room = params.clamshell.seamLand + j.ridgeWidth + 2 * j.grooveClearance + BAND_ROOM;
+  const short = axis === 'x' ? Math.max(rim.O.y0 - (D3.y0 - room), D3.y1 + room - rim.O.y1) : Math.max(rim.O.x0 - (D3.x0 - room), D3.x1 + room - rim.O.x1);
+  let wallRaised: ClamRim['wallRaised'] = null;
+  if (short > SLACK) {
+    const to = rim.wall + short;
+    wallRaised = { from: rim.wall, to };
+    rim.O = outset(rim.O, short);
+    rim.wall = to;
+    rim.edge = { ...rim.edge, minimum: rim.edge.minimum + short };
+    rim.diagnostics.push({ code: 'seam-wall-raised', severity: 'info', also: ['cover.wall'], message: `Wall raised from ${wallRaised.from.toFixed(1)} to ${to.toFixed(1)} mm for the seam seal, so its groove keeps ${BAND_ROOM} mm of plastic to the outside.` });
+  }
+  // D3 along the pull stays inside O less the wall, as D_G8 holds every vertex with its margin: G13.6's assert.
+  const [a0, a1, o0, o1] = axis === 'x' ? [D3.x0, D3.x1, rim.O.x0, rim.O.x1] : [D3.y0, D3.y1, rim.O.y0, rim.O.y1];
+  if (a0 < o0 + rim.wall - SLACK || a1 > o1 - rim.wall + SLACK) throw new Error(`D3 reaches past the wall along the pull (${a0.toFixed(3)} to ${a1.toFixed(3)} against ${(o0 + rim.wall).toFixed(3)} to ${(o1 - rim.wall).toFixed(3)}).`);
+  return { ...rim, axis, xs, DG8, Dside, D3, zJ, dGrew, wallRaised };
+}

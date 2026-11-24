@@ -3,6 +3,8 @@ import type { Params } from '../params/schema';
 import { lengthFits, type BoltLayout } from '../parts/bolts';
 import { BOLT_HOLD_N } from '../parts/fasteners';
 import type { Rim } from '../parts/rim';
+import type { SeamBoltLayout } from '../parts/seamBolts';
+import type { Diagnostic } from './diagnostics';
 
 /** Standard gravity, in m/s2. */
 export const GRAVITY = 9.81;
@@ -120,4 +122,224 @@ export function boltAdvice(liftN: number, stripN: number, bolts: BoltLayout): Bo
   const strips = Math.max(middle[0] + middle[1], liftStrips);
   const fits = lengthFits(bolts);
   return { count: bolts.spots.length, size: bolts.size, length: bolts.length, holdN, boltsHoldN, spans, middle, liftStrips, strips, stripN, lengthFits: fits, enough: fits && strips === 0 };
+}
+
+// ----- G13.9 and G13.10.7: the two-part cover's forces -----
+
+/** liquid density in g/cm3 times g, in N per mm3 of head times mm2 of area. */
+const pressure = (densityGcm3: number): number => densityGcm3 * 1000 * GRAVITY * 1e-9;
+
+/** One side's rows of cavity in a fine side field: G past the seam's h, at v >= 0, v = 0 at half weight as G13.3's score. */
+function sideRowsOf(field: Field, hs: number, raise: number, visit: (depth: number, z: number, weight: number, j: number) => void): void {
+  const { nx, ny, cell, values } = field;
+  const jFloor = Math.round(-field.y0 / cell);
+  for (let j = jFloor; j < ny; j++) {
+    const z = (j - jFloor) * cell, w = j === jFloor ? 0.5 : 1;
+    for (let i = 0, n = j * nx; i < nx; i++, n++) {
+      const g = values[n];
+      if (g > hs) visit(g + raise - hs, z, w, j);
+    }
+  }
+}
+
+export interface HalfForces {
+  /** F_side: the liquid's push on this half along its pull, rho g times the sum of (Zf - z) cell2 over its cavity rows, in N. */
+  sideN: number;
+  /** Net lift: rho g (Zf A0 - V), with A0 the half's cavity at z = 0 and V its volume, in N. Negative pushes it down. */
+  liftN: number;
+  /** The half's cavity, in mm3, with the tool's raise. */
+  volume: number;
+  /** Its cavity rows on P, in mm2. */
+  seamArea: number;
+}
+
+/**
+ * G13.9's forces on one half from its fine side field. The side push is the head on the cavity's shadow on P. The net
+ * lift is the upward part of the pressure on the half's ceilings, less the downward part on its floors: per column of
+ * b, integrating (Zf - z)(-dR/dz) by parts gives Zf times the cavity's depth at z = 0 less the column's cavity area, so
+ * over the half it is Zf A0 - V, as the one-piece's lift is Zf A - V over its footprint.
+ */
+export function halfForces(field: Field, hs: number, raise: number, level: number, densityGcm3: number): HalfForces {
+  const cell2 = field.cell * field.cell;
+  const jFloor = Math.round(-field.y0 / field.cell);
+  let head = 0, volume = 0, floor = 0, rows = 0;
+  sideRowsOf(field, hs, raise, (depth, z, w, j) => {
+    head += w * Math.max(0, level - z);
+    volume += w * depth;
+    rows += w;
+    if (j === jFloor) floor += depth;
+  });
+  const rho = pressure(densityGcm3);
+  return { sideN: rho * head * cell2, liftN: rho * (level * floor * field.cell - volume * cell2), volume: volume * cell2, seamArea: rows * cell2 };
+}
+
+/**
+ * The chamfer distance's (1, sqrt 2) steps read at most this times the Euclidean one, 1 / cos(22.5 degrees), on a
+ * line half way between an axis and a diagonal.
+ */
+const CHAMFER_OVER = 1 / Math.cos(Math.PI / 8);
+
+/**
+ * G13.9's worst case, a film over the seam face out to the band: the same head summed over E_in, which G13.8 builds as
+ * offset(closing(S, 3 mm), seamLand) with the joint's rectangle J and its holes filled. Here it is taken on the lattice
+ * as S grown by 1.5 mm + seamLand, which holds that offset, with J's rows and the holes filled. The growth is read on
+ * a chamfer distance, which reads up to CHAMFER_OVER long, so the face takes every node within that much of the
+ * growth plus a cell, and holds every node a Euclidean offset would. `seam` is S as a mask over (b, z) rows at z >= 0,
+ * `cell` apart from z = 0; J reaches `jointB` across b up to `jointZ`.
+ */
+export function filmPush(seam: Uint8Array, nb: number, nz: number, cell: number, seamLand: number, jointB: [number, number] | null, jointZ: number, level: number, densityGcm3: number): number {
+  const grow = (1.5 + seamLand) * CHAMFER_OVER + cell;
+  // Chamfer distance to S, in mm, and the face within `grow` of it.
+  const dist = new Float32Array(nb * nz).fill(Infinity);
+  for (let n = 0; n < seam.length; n++) if (seam[n]) dist[n] = 0;
+  const s = cell, d = cell * Math.SQRT2;
+  for (let z = 0; z < nz; z++) {
+    for (let b = 0, n = z * nb; b < nb; b++, n++) {
+      let v = dist[n];
+      if (b > 0) v = Math.min(v, dist[n - 1] + s);
+      if (z > 0) {
+        v = Math.min(v, dist[n - nb] + s);
+        if (b > 0) v = Math.min(v, dist[n - nb - 1] + d);
+        if (b < nb - 1) v = Math.min(v, dist[n - nb + 1] + d);
+      }
+      dist[n] = v;
+    }
+  }
+  for (let z = nz - 1; z >= 0; z--) {
+    for (let b = nb - 1, n = b + z * nb; b >= 0; b--, n--) {
+      let v = dist[n];
+      if (b < nb - 1) v = Math.min(v, dist[n + 1] + s);
+      if (z < nz - 1) {
+        v = Math.min(v, dist[n + nb] + s);
+        if (b < nb - 1) v = Math.min(v, dist[n + nb + 1] + d);
+        if (b > 0) v = Math.min(v, dist[n + nb - 1] + d);
+      }
+      dist[n] = v;
+    }
+  }
+  const face = new Uint8Array(nb * nz);
+  for (let n = 0; n < face.length; n++) face[n] = dist[n] <= grow + 1e-9 ? 1 : 0;
+  if (jointB) {
+    for (let z = 0; z * cell <= jointZ + 1e-9 && z < nz; z++) for (let b = Math.max(0, Math.ceil(jointB[0] / cell - 1e-9)); b <= Math.min(nb - 1, Math.floor(jointB[1] / cell + 1e-9)); b++) face[b + z * nb] = 1;
+  }
+  // Holes filled: what the outside cannot reach through the face's complement is face too. The bottom row opens
+  // onto the base, not the outside, so the flood starts from the other three sides.
+  const outside = new Uint8Array(nb * nz);
+  const stack: number[] = [];
+  const seed = (n: number): void => {
+    if (!face[n] && !outside[n]) {
+      outside[n] = 1;
+      stack.push(n);
+    }
+  };
+  for (let b = 0; b < nb; b++) seed(b + (nz - 1) * nb);
+  for (let z = 0; z < nz; z++) {
+    seed(z * nb);
+    seed(nb - 1 + z * nb);
+  }
+  while (stack.length > 0) {
+    const n = stack.pop()!;
+    const b = n % nb, z = (n - b) / nb;
+    if (b > 0) seed(n - 1);
+    if (b < nb - 1) seed(n + 1);
+    if (z > 0) seed(n - nb);
+    if (z < nz - 1) seed(n + nb);
+  }
+  let head = 0;
+  for (let z = 0; z < nz; z++) {
+    const w = z === 0 ? 0.5 : 1;
+    for (let b = 0, n = z * nb; b < nb; b++, n++) if (!outside[n]) head += w * Math.max(0, level - z * cell);
+  }
+  return pressure(densityGcm3) * head * cell * cell;
+}
+
+/** G13.10.7: what the seam fasteners must hold, max(2 max over the halves of (F_side, the film's worst case), MIN_HOLD_N). */
+export function seamHoldN(sideN: readonly number[], filmN: number): number {
+  return Math.max(HOLD_FACTOR * Math.max(...sideN, filmN), MIN_HOLD_N);
+}
+
+/**
+ * G13.9's base tape for the halves: clampAdvice unchanged on their summed lift, with at least one strip per half each
+ * way. A strip across the seam's axis presses one half only, so that way takes two.
+ */
+export function halvesTape(liftN: readonly number[], stripN: number, box: [number, number], axis: 'x' | 'y'): ClampAdvice {
+  const plain = clampAdvice(Math.max(0, liftN.reduce((s, v) => s + v, 0)), stripN, box);
+  const across: [number, number] = [...plain.across];
+  // across[0] counts the strips from front to back, which stand at one x each; with an x seam each lies under one half.
+  const k = axis === 'x' ? 0 : 1;
+  across[k] = Math.max(across[k], 2);
+  return { ...plain, across, strips: Math.max(plain.liftStrips, across[0] + across[1]) };
+}
+
+/** G13.9's taper wedge: the base tape's pull, held by clampAdvice, times 1 / tan(taper), pushing the halves apart at the bottom. */
+export function wedgeN(tape: Pick<ClampAdvice, 'holdN'>, taperDeg: number): number {
+  return tape.holdN / Math.tan((taperDeg * Math.PI) / 180);
+}
+
+/** G13.10.7: the top span, O's extent across b at the top, has no fastener; past SEAL_SPACING_MM README.txt advises one clamp. */
+export function topSpanOf(rim: Pick<Rim, 'O'>, axis: 'x' | 'y'): number {
+  return axis === 'x' ? rim.O.y1 - rim.O.y0 : rim.O.x1 - rim.O.x0;
+}
+
+/** G13.10's hold with seam bolts: what they count against what the seam needs, the wedge, and the top span. */
+export interface SeamBoltAdvice {
+  size: SeamBoltLayout['size'];
+  length: number;
+  count: number;
+  perEnd: number;
+  /** holdN_seam, and what the bolts hold at BOLT_HOLD_N each. */
+  holdN: number;
+  boltsHoldN: number;
+  /** The taper wedge, and what the bottom pair is counted at against it. */
+  wedgeN: number;
+  bottomHoldN: number;
+  topSpan: number;
+  topClamp: boolean;
+  lengthFits: boolean;
+  diagnostics: Diagnostic[];
+}
+
+/** G13.10.7's checks on placed seam bolts: `seam-bolt-wedge` past the bottom pair's 100 N, `seam-top-span` past the spacing. */
+export function seamBoltAdvice(layout: SeamBoltLayout, holdN: number, wedge: number, topSpan: number): SeamBoltAdvice {
+  const boltsHoldN = layout.count * BOLT_HOLD_N;
+  const bottomHoldN = 2 * BOLT_HOLD_N;
+  const diagnostics: Diagnostic[] = [];
+  if (layout.count > 0 && wedge > bottomHoldN + 1e-9) {
+    diagnostics.push({ code: 'seam-bolt-wedge', severity: 'info', message: `Taping the base pushes the halves apart at the bottom with up to ${wedge.toFixed(0)} N, more than the ${bottomHoldN} N the bottom seam bolts are counted at: after taping, check that the seam is closed at the bottom edge.` });
+  }
+  const topClamp = topSpan > SEAL_SPACING_MM + 1e-9;
+  if (topClamp) diagnostics.push(topSpanNote(topSpan));
+  return { size: layout.size, length: layout.length, count: layout.count, perEnd: layout.perEnd, holdN, boltsHoldN, wedgeN: wedge, bottomHoldN, topSpan, topClamp, lengthFits: layout.lengthFits, diagnostics };
+}
+
+/** G13.10.7's info line on a wide half, with bolts or clips alike. */
+export function topSpanNote(topSpan: number): Diagnostic {
+  return { code: 'seam-top-span', severity: 'info', message: `These halves are ${topSpan.toFixed(0)} mm wide at the top, where nothing holds the seam: put one clamp across the two back faces at the middle of the seam, 10 mm under the top, with a flat board or ruler under each jaw.` };
+}
+
+/** G13.10.9: the width a tape belt is counted at, in mm, a common roll's. */
+export const BELT_WIDTH = 25;
+/** G13.10.9: a belt overlaps itself by at least this, in mm. */
+export const BELT_OVERLAP = 50;
+/** G13.10.9: the top belt, like the top clamp, sits this far under the top, in mm. */
+export const BELT_UNDER_TOP = 10;
+
+export interface Belts {
+  count: number;
+  /** Each belt's lower edge, the lowest at the cover's bottom edge. */
+  bottoms: number[];
+  holdN: number;
+}
+
+/**
+ * G13.10.9, Seam fasteners None: tape belts round all four walls, max(2, ceil(holdN / (2 tapeStrip))), raised until no two
+ * are more than SEAL_SPACING_MM apart, the lowest's lower edge at the cover's bottom edge and the highest's upper edge
+ * BELT_UNDER_TOP under the top.
+ */
+export function seamBelts(holdN: number, tapeStripN: number, coverBottom: number, Zt: number): Belts {
+  let count = Math.max(2, tapeStripN > 0 ? Math.ceil(holdN / (2 * tapeStripN) - 1e-9) : 2);
+  const span = Math.max(0, Zt - BELT_UNDER_TOP - BELT_WIDTH - coverBottom);
+  while (span / (count - 1) > SEAL_SPACING_MM + 1e-9) count++;
+  const bottoms = Array.from({ length: count }, (_, k) => coverBottom + (k * span) / (count - 1));
+  return { count, bottoms, holdN };
 }

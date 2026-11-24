@@ -1,6 +1,7 @@
 import Delatin from 'delatin';
 import type { Manifold } from 'manifold-3d';
 import type { Field } from '../field/grid';
+import { LIFT_MAX } from '../field/lift';
 import type { Diagnostic } from '../report/diagnostics';
 import { checked, type Arena } from './arena';
 import type { Rect } from './rect';
@@ -28,7 +29,16 @@ export interface ToolOptions {
    * must not bite, since it would take away clearance: see clippedNodes.
    */
   clip?: Rect;
+  /**
+   * G13.2 step 7, a side field's seam: once the lift has settled, every node whose final height lies in (hs - eps,
+   * hs + eps] is raised to hs + eps, so no tool face lies in or near the plane the half is trimmed by. Raising keeps G4.
+   * With it the lift may not pass LIFT_MAX, which the far side's flatten keeps clear of (src/core/field/lift.ts).
+   */
+  seam?: { hs: number; eps: number };
 }
+
+/** The least positive float32, so the step past hs + eps is never 0. */
+const FLOAT32_MIN = 2 ** -149;
 
 export interface ToolMesh {
   positions: Float32Array;
@@ -52,7 +62,7 @@ export interface ToolMesh {
  * outside the cavity is cropped first, keeping one ring on the floor to close against.
  */
 export function buildToolMesh(field: Field, options: ToolOptions): ToolMesh {
-  const { raise, triangleLimit = TIN_TRIANGLE_LIMIT, clip } = options;
+  const { raise, triangleLimit = TIN_TRIANGLE_LIMIT, clip, seam } = options;
   const { nx, ny, cell, x0, y0, values } = field;
 
   let i0 = nx, i1 = -1, j0 = ny, j1 = -1, clippedNodes = 0;
@@ -90,6 +100,12 @@ export function buildToolMesh(field: Field, options: ToolOptions): ToolMesh {
         data[i + j * width] = v > 0 && inClip(i + i0, j + j0) ? v + lift : TOOL_FLOOR;
       }
     }
+    if (!seam) return;
+    const low = seam.hs - seam.eps, high = seam.hs + seam.eps;
+    // The heights are float32, so a node is raised to the first one past hs + eps, never rounded back into the band.
+    let above = Math.fround(high);
+    while (above <= high) above = Math.fround(above + Math.max(Math.abs(above) * 2 ** -23, FLOAT32_MIN));
+    for (let n = 0; n < data.length; n++) if (data[n] > low && data[n] <= high) data[n] = above;
   };
 
   // Past the limit the tolerance gives way, with the raise going up by the same, so the surface still
@@ -106,6 +122,7 @@ export function buildToolMesh(field: Field, options: ToolOptions): ToolMesh {
     lift += wider - tol;
     tol = wider;
   }
+  if (seam && lift > LIFT_MAX + 1e-9) throw new Error(`The side field's tool was lifted ${lift.toFixed(3)} mm, past the ${LIFT_MAX} mm its far side is flattened clear of.`);
   const diagnostics: Diagnostic[] = [];
   if (tol > options.tol) {
     diagnostics.push({

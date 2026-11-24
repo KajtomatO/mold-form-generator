@@ -15,15 +15,15 @@ import { BOLT_LENGTHS, BRIDGE_LIMIT, FASTENERS, longestLength, OVER_SINK_LAYERS,
 
 const DEGREE = Math.PI / 180;
 /** The same as the openings', so a hole is a 48-gon, 0.2% inside its circle. */
-const SEGMENTS = 48;
+export const SEGMENTS = 48;
 /** How far a cutter runs past a surface it opens through, so they share no plane. */
-const PAST = 1;
+export const PAST = 1;
 /** The base's hole runs this far above the plate, clear of the ridge, so it shares no plane with the top. */
 const ABOVE_PLATE = 0.5;
 /** The cover's lower hole starts this far below the shelf, in the rebate's empty space. */
 const BELOW_SHELF = 0.5;
 /** Overlap between the slot and the hole above it, so the two are one cut. */
-const OVERLAP = 0.01;
+export const OVERLAP = 0.01;
 /** A wall short of the least by more than float rounding is a clash. */
 const SLACK = 1e-6;
 
@@ -205,7 +205,8 @@ export function slotOutline(bolts: Pick<BoltLayout, 'slotWidth'>, spot: BoltSpot
   return local.map(([u, v]) => [spot.x + u * turn[0] - v * turn[1], spot.y + u * turn[1] + v * turn[0]]);
 }
 
-function column(arena: Arena, x: number, y: number, z0: number, z1: number, r0: number, r1: number): Manifold {
+/** A cylinder or a cone frustum along z, r0 at z0 and r1 at z1, as SEGMENTS-gons. G13.10.4's lug cuts build it in a pull frame. */
+export function column(arena: Arena, x: number, y: number, z0: number, z1: number, r0: number, r1: number): Manifold {
   const { track } = arena;
   return track(track(arena.api.Manifold.cylinder(z1 - z0, r0, r1, SEGMENTS)).translate([x, y, z0]));
 }

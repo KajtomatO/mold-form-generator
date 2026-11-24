@@ -395,3 +395,29 @@ export const BOLT_GOLDEN: Record<ExampleId, BoltGolden> = {
   wolf: { cover: 2813521, glue: 70122, merged: 328112, boxX: 129.526, boxY: 150.727, slotFloor: 2.8052, cavity: 21.64, notches: 58.219 },
   chick: { cover: 173821, glue: 20432, merged: 37494, boxX: 76.748, boxY: 81.233, slotFloor: 2.826, cavity: 14.685, notches: 24.088 },
 };
+
+/**
+ * MP1 numbers for the two-part cover (docs/PLAN.md, G13), keyed by test model or gallery id as the tables above are by
+ * example: clamshell defaults (beta 20, base layer 0, M3 seam bolts) on the app's 220 x 220 x 250 bed, fine fields at the
+ * export cell 0.125. Silicone in ml is both halves' cavity with the TIN's raise, less the model above the plane and
+ * sealed air as FIELD_GOLDEN takes them (neither model has sealed air past the filter), with no openings (MP4 adds them).
+ * The hold and the side push in N, Zt in mm. Limits: exact on the axis, the offset and the count, 1% on the rest.
+ */
+export interface ClamshellGolden {
+  silicone: number;
+  axis: 'x' | 'y';
+  xs: number;
+  Zt: number;
+  /** holdN_seam (G13.10.7) and each half's side push, the - half's first. */
+  holdN: number;
+  push: [number, number];
+  boltsPerEnd: number;
+}
+
+/** The keys the clamshell table may take: a test model's, or a gallery model's (src/gallery/catalogue.ts). */
+export type ClamshellModelId = ExampleId | 'sphere' | 'cube' | 'cylinder' | 'cone';
+
+export const CLAMSHELL_GOLDEN = {
+  goddess: { silicone: 58.49, axis: 'y', xs: 152.5, Zt: 114.027, holdN: 12.01, push: [4.89, 4.31], boltsPerEnd: 2 },
+  vis35: { silicone: 270.45, axis: 'y', xs: 219, Zt: 192.693, holdN: 23.22, push: [8.4, 8.69], boltsPerEnd: 3 },
+} satisfies Partial<Record<ClamshellModelId, ClamshellGolden>>;

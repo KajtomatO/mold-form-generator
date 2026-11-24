@@ -81,6 +81,16 @@ export interface MoldSilicone extends SiliconeVolume {
 }
 
 /**
+ * S8's sealed air above the volume filter, leaving out a void inside the model, which its volume already holds: what
+ * moldSilicone takes off, and the two-part cover's silicone with it (src/core/field/clamshell.ts).
+ */
+export function sealedAirOf(mesh: WeldedMesh, settings: Pick<FieldSettings, 'analysisCell' | 'minVolumeMl'>, s8?: Pick<IntervalReport, 'sealed'>): { domains: SealedDomain[]; sealedAir: number } {
+  const intervals = s8 ?? analyseIntervals(mesh, settings.analysisCell);
+  const domains = intervals.sealed.filter((domain) => !domain.inModel && domain.volume >= settings.minVolumeMl * 1000);
+  return { domains, sealedAir: domains.reduce((sum, domain) => sum + domain.volume, 0) };
+}
+
+/**
  * The silicone of a built field, as the plan defines it. Everything that makes it up is chosen here,
  * so the tests and the pipeline measure the same thing: the exterior mesh, so a void is not air, the
  * model above the plane only, because the raster clips the rest, and S8's sealed air above the filter,
@@ -91,9 +101,7 @@ export interface MoldSilicone extends SiliconeVolume {
 export function moldSilicone(mesh: WeldedMesh, plan: FieldPlan, field: Field, report: Pick<SolidReport, 'overlapVolume'>, settings: Pick<FieldSettings, 'analysisCell' | 'minVolumeMl'>, s8?: Pick<IntervalReport, 'sealed'>): MoldSilicone {
   const exterior = exteriorMesh(mesh);
   const modelVolume = volumeAbovePlane(exterior) - report.overlapVolume;
-  const intervals = s8 ?? analyseIntervals(mesh, settings.analysisCell);
-  const domains = intervals.sealed.filter((domain) => !domain.inModel && domain.volume >= settings.minVolumeMl * 1000);
-  const sealedAir = domains.reduce((sum, domain) => sum + domain.volume, 0);
+  const { domains, sealedAir } = sealedAirOf(mesh, settings, s8);
   const volume = siliconeVolume(field, { exteriorVolume: modelVolume, tiles: plan.nx * plan.ny, sealedAir, raise: plan.raise });
   return { ...volume, modelVolume, sealedAir, domains };
 }

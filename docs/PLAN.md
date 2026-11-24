@@ -366,14 +366,14 @@ Before turning, the oriented model is cut at z = 0 with `clipBelow` (`src/core/m
 
 #### G13.2 Side fields (stages S3x, S4x, S6x, keyed by pull)
 
-1. **Lattice.** `planField` on the turned bounds, with nx = ny = 1. Pad below v = 0 by max(rEff + `MARGIN_CELLS`·cell, Tb + 2), and above to Hmax_clam (G13.6) plus 2 cells: coarse fields take the largest Hmax_clam over the candidate range of xs, fine fields the chosen xs. At 0.125 mm the padding adds up to 70% more rows on VIS-35 pulled along y.
+1. **Lattice.** `planField` on the turned bounds, with nx = ny = 1. Pad below v = 0 by max(rEff + `MARGIN_CELLS`·cell, Tb + 2), and above to Hmax_clam (G13.6) plus 2 cells: coarse fields take the largest Hmax_clam over the candidate range of xs, fine fields the chosen xs. At 0.125 mm the padding adds up to 70% more rows on VIS-35 pulled along y. Since MP1 `planSide` refuses a padded lattice past `NODE_CAP`, and G13.6's bounds take rEff from these plans at the export's cell, the largest over the four pulls (`sideREff`), so they hold whatever cell `planField` takes.
 2. **Chain.** `rasterize`, then `dilate(rEff)`, then `conditionField` (draft, then closing), unchanged. G(u,v) is the farthest reach, in h, of the cavity in row (u,v).
 3. **Roof** (`applyRoof(field, β, hStop)`). Sweep v upward: G(u,v) := max(G(u,v), G(u,v−1) − cell·cot β), only where G(u,v−1) > hStop. Coarse fields use hStop = 0; fine fields use hStop = h_s, the seam in this frame, as rows past it add no cavity to this half. β = `clamshell.ceilingDeg`, **20 degrees by default** (the user's answer of 2026-11-22; the design had 30). β = 0 means no roof. The top lattice row of every roofed field is ≤ hStop, which a test holds.
-4. **Base layer rows**, only when `silicone.baseLayer` > 0 (0 by default in this type): for each row with z ≤ the layer's top, raise G to the layer's farthest reach on this side. This runs after the roof and is exempt from it, as BL keeps its own air argument.
+4. **Base layer rows**, only when `silicone.baseLayer` > 0 (0 by default in this type): for each row with z ≤ the layer's top, raise G to the layer's farthest reach on this side. This runs after the roof and is exempt from it, as BL keeps its own air argument. The reach is D's far edge on this side less a cell, and the rows' b runs over D less a cell on each side, as G8's layer comes down within a cell inside D (`layerRows`; D is the rim's at the split, G8's for a coarse field).
 5. **Prism rows.** For v < 0 down to −(Tb + 1): G(u,v) := max(G(u,v), G(u,0)). Raster and dilation already give G(u,0) ≥ G(u,v<0), as the model lies at z ≥ 0, so this is the straight prism into the rebate, and it only raises G.
 6. **Far-side flatten** (fine fields only, after steps 3 to 5). A node whose 8 neighbours and itself all have G ≤ h_s is set to h_s − 1 − liftMax. Those rows hold no cavity on this side, so the half is unchanged and G4 untouched, but the TIN collapses there. `buildToolMesh` asserts lift ≤ liftMax (0.5).
 7. **Seam exclusion** (in `buildToolMesh`, a new option `seam: { hs, eps }`, eps = max(tinTol, 0.05)), after the lift has settled: every node whose final height lies in (h_s − eps, h_s + eps] is raised to h_s + eps. Raising keeps G4; it leaves a silicone sliver of at least eps where the dilated model just crosses P, and no tool face lies in or near the trim plane.
-8. **Coarse and fine fields.** With the axis or the offset on auto, all four pulls are built at 1 mm for G13.3. The chosen pair is then built at the preview cell, and at cellFinal for export. The volume at the xs chosen from coarse fields, rebuilt from fine fields, is within 2% of a sweep over fine fields on every example, which a test holds.
+8. **Coarse and fine fields.** With the axis or the offset on auto, all four pulls are built at 1 mm for G13.3. The chosen pair is then built at the preview cell, and at cellFinal for export. The volume at the xs chosen from coarse fields, rebuilt from fine fields at that xs (hStop = h_s, flattened), is within 2% of a sweep over fine fields on every example, which a test holds (`test/unit/sweep.test.ts`, at 0.5 mm: Goddess, the wolf and Benchy by default, every example under `CFG_FULL=1`, run green at MP1's exit).
 
 Every step from 2 to 7 raises G, except step 6, which changes only rows proved to lie outside this half.
 
@@ -391,13 +391,13 @@ with reach₊ = a_min + G₊ and reach₋ = a_max − G₋, over rows with v ≥
 - Zt(xs) comes from G13.6's Hmax_clam at O(1) per xs: max_v(v.z + c·|v.a − xs|) = max(M₊ − c·xs, M₋ + c·xs), with M± = max_v(v.z ± c·v.a) and c = tan β + tan α.
 - Each half's pose footprint is (O.b extent + 2p) × (Zt + Tb − proud), where 2p is the seam bolts' lugs (G13.10.8, 19.0 mm at M3), 2·`EAR_LENGTH` = 20 mm with Seam fasteners Clips (G13.10.18), and 0 with None; its height is |O.a − xs|.
 - Keep the candidates that fit `print.bedX`, `print.bedY` (either way round) and `print.bedZ`.
-- If none fits: take the least silicone, keep the bed warning, and say on the card the largest β at which some split fits. β is never lowered automatically, as air safety is not traded silently. Where the lugs or the clip ears alone break the fit, the card names the fastener that fits ("fits with Seam fasteners: None (clamps)", or Bolts where the ears' 20 mm miss and the lugs' 19 fit); the fastener is never switched silently.
+- If none fits: take the least silicone, keep the bed warning, and say on the card the largest β at which some split fits. β is never lowered automatically, as air safety is not traded silently. Where the lugs or the clip ears alone break the fit, the card names the fastener that fits ("fits with Seam fasteners: None", or Bolts where the ears' 20 mm miss and the lugs' 19 fit); the fastener is never switched silently.
 
 **Ties.** Within 1%, prefer the higher seam-section top, then the lower Zt, then x.
 
 **Typed values.** `clamshell.axis` x or y skips the axis choice. `clamshell.offset` (mm from the centre of the extent) skips the position choice; it is clamped to the extent less 1 mm on each side and snapped to cellFinal.
 
-Measured in the design (0.5 mm, β 30, before the default became 20; MP1 measures again at 20): Goddess x 62.9 ml at 50%, y 62.0 ml at 69%, and y wins with the lower Zt (116.0 against 119.5). VIS-35 y at 50% is 421.8 ml against 329.9 at 69%, so the sweep matters.
+Measured in the design (0.5 mm, β 30, before the default became 20): Goddess x 62.9 ml at 50%, y 62.0 ml at 69%, and y wins with the lower Zt (116.0 against 119.5). VIS-35 y at 50% is 421.8 ml against 329.9 at 69%, so the sweep matters. Measured in MP1 (0.125 mm, β 20, the app's bed, G13.17's table): Goddess takes y at 72%, 58.5 ml (at β 0 it takes x at 50%); VIS-35 y at 73%, 270.5 ml, and on the user's 250 x 210 bed x at 61%, 136.2 ml.
 
 #### G13.4 The cavity, demolding and G4
 
@@ -435,12 +435,12 @@ Measured in the design (0.5 mm, β 30, before the default became 20; MP1 measure
 
 Let zJ = rh + gx + seamLand + 0.5 (4.0 at defaults), and w(v) = (|v.a − xs| + rEff)·tan α. zJ includes seamLand because the band's leg zone (z ≤ rh + gx) must hold the seamLand offset of every cavity row below zJ.
 
-- **D_side** (the cavity at z ≤ zJ): vertices count if v.z ≤ zJ + rEff + w(v); across the pull v.b ± (rEff + w(v)) + 0.5; along the pull v.a ± rEff + 0.5, clamped to include xs.
+- **D_side** (the cavity at z ≤ zJ): vertices count if v.z ≤ zJ + closeWidth + 0.5 + rEff + w(v); across the pull v.b ± (rEff + w(v)) + 0.5; along the pull v.a ± rEff + 0.5, clamped to include xs. The filter's closeWidth + 0.5 is MP1's: the closing reaches its width along v and the raster half a cell, and with the design's zJ + rEff + w(v) the wolf's built tools had nodes at z ≤ zJ up to 0.8 mm past D_side (`test/unit/sideField.test.ts`). For G13.3's bed filter D_side and D3 are taken in O(1), never inside the exact ones: the z filter at its widest over the extent, and |v.a − xs|·tan α split into its two linear pieces, whose maxima the vertices give once (`sideBoundsFast`). The widest filter holds only for xs inside the extent, where every candidate lies, so `sideBoundsFast` refuses any other; a test holds both bounds and `quickRim`'s D, O, Zt and footprint against the exact ones on Goddess and a random mesh, on both axes, at xs from one end of the extent to the other.
 - **D** = per side max(D_G8, D_side). The base is this type's own anyway (the ridge bars), so D growing is reported, not avoided. **D3** is the same terms with no z filter.
 - **Hmax_clam** = max over v of (v.z + |v.a − xs|·tan β + rEff/cos β + w(v)) + (raise + cell)·max(1, tan β); with β = 0, rEff replaces rEff/cos β. Tested against the built tool meshes' top, not the field.
 - **Zt** = max(Hmax_clam + topCap, rh + gx + cap).
-- **O** is G8's formula with the user's `cover.wall`, which stays a setting in this type (3 by default, as in the one-piece). The band above the joint needs O.b ≥ D3.b + seamLand + gw + 0.8 on both sides, gw = rw + 2cG = 2.1; where that fails, the wall is raised (O only, the base unchanged), with "wall raised from X to Y for the seam seal". D3.a stays inside O.a less the wall, which is asserted.
-- `maskOverrun` runs on both fields' rows at z ≤ zJ.
+- **O** is G8's formula with the user's `cover.wall`, which stays a setting in this type (3 by default, as in the one-piece). The band above the joint needs O.b ≥ D3.b + seamLand + gw + 0.8 on both sides, gw = rw + 2cG = 2.1; where that fails, the wall is raised (O only, the base unchanged), with "wall raised from X to Y for the seam seal". The wall is one value round the box, as `cover.wall` is, so MP1 moves all four of O's faces by the raise, the halves' depths and the bed's height with them, and the edge's minimum by the same; no example raises it at the defaults, and a stem under a wide plate at a 3 degree draft does (`test/unit/sideField.test.ts`). D3.a stays inside O.a less the wall, which is asserted.
+- `sideOverrun`, `maskOverrun`'s rule on a side field: each row at z ≤ zJ + cell with G > h_s reaches from P to its reach plus the tool's raise along a, and a cell wider across b. At cellFinal it is 0 against D_side on both halves of Goddess and VIS-35 (the goldens' test); MP2's halves keep the check.
 
 #### G13.7 The halves (stages S11c, S12c, S13c, per half; S14c the base)
 
@@ -580,27 +580,27 @@ Both end faces get the same z_k.
 - **Highest centre:** z_top = Zt − `PRY_RUN` (12) − `LUG_GAP` (1) − hL/2, which keeps the pry chamfers clear.
 
 **Count per end face:**
-- Error **`seam-bolt-no-room`** (S10c) if z_top < z_bot, which is Zt < 23.2 at Tb 4. Remedy: Seam fasteners None.
+- Error **`seam-bolt-no-room`** (S10c) if z_top < z_bot, which is Zt < 23.2 at Tb 4. Remedy: Seam fasteners None, or a higher Top cap; the message gives the halves' height and the least a lug needs, hL + `PRY_RUN` + `LUG_GAP` = 27 mm, both as printed from the cover's bottom edge, and shows under both rows.
 - **n = 1** if z_top − z_bot < hL + `LUG_CLEAR` (8), which is Zt < 45.2, with the info line **`seam-bolt-single`**. `LUG_CLEAR` is the room above a lug's slot for dropping a nut in (6.35 across corners); with less, the lug above would block it.
 - **Otherwise** n = max(2, ⌈(z_top − z_bot)/`SEAL_SPACING_MM`⌉ + 1), evenly spaced from z_bot to z_top.
-- **Force guard:** n is then raised until 2n·`BOLT_HOLD_N` ≥ holdN_seam. No example reaches this.
+- **Force guard:** n is then raised until 2n·`BOLT_HOLD_N` ≥ holdN_seam, as far as the gaps leave room to drop a nut in (n ≤ ⌊(z_top − z_bot)/(hL + `LUG_CLEAR`)⌋ + 1). Short of it, and with n = 1 where 2·`BOLT_HOLD_N` < holdN_seam, the warning **`seam-bolt-held-back`** names the hold against what the bolts are counted at and offers Seam fasteners None, with clamps and belts, or a larger size. No example reaches this: the most any asks at β 45 is 41 N (the wolf).
 
-| model (Zt at β 30) | centre span | per end | screws |
+| model (Zt at β 20, measured in MP1) | centre span | per end | screws |
 |---|---|---|---|
-| sphere 52.0 (the help model) | 28.8 | 2 | 4 |
-| Benchy y 58.5 | 35.3 | 2 | 4 |
-| Goddess y 116.0 | 92.8 | 2 | 4 |
-| VIS-35 x 143.1 | 119.9 | 3 | 6 |
-| wolf x 171.6 | 148.4 | 3 | 6 |
-| VIS-35 y at β 20, about 188 | about 165 | 3 | 6 |
+| sphere x 51.0 (the help model) | 27.8 | 2 | 4 |
+| Benchy y 58.2 | 35.0 | 2 | 4 |
+| Goddess y 114.0 | 90.8 | 2 | 4 |
+| VIS-35 x 143.2 (the user's bed) | 120.0 | 3 | 6 |
+| wolf x 171.3 | 148.1 | 3 | 6 |
+| VIS-35 y 192.7 (the app's bed) | 169.5 | 3 | 6 |
 
-These counts hold at the default β 20: Zt only falls as β falls, and every one-piece Zt (the β → 0 bound) is above 45.2. MP1 measures them at β 20 and the goldens hold them.
+At β 30 only Zt changes (Goddess 117.1, VIS-35 x 144.2, wolf 174.2), and the counts are the same; at β 45 Goddess takes 3 (Zt 125.3). The low models take one per end with `seam-bolt-single` at β 20: the jersey barrier (Zt 31.1), the barrel (37.9) and the chick (32.9); the eight barriers at 45.7 take 2, and 1 at β 0 (30.3). `test/unit/seamBolts.test.ts` holds the table with the exact rim and the hold the fields give, and the goldens hold Goddess's and VIS-35's.
 
 **Why ≤ 100 mm between lugs is enough:** the end wall of a half bends in its own plane, as a plate as deep as the half, so the seam stays closed between lugs; the base tape strips along a tie the bottom across b.
 
 ##### G13.10.7 Forces
 
-- **holdN_seam** = max(2·max over the halves of (F_side, film worst case), `MIN_HOLD_N`): at most 30 N on the examples (wolf F_side 15.0 N at β 30). The bolts count 4 to 6 x 50 = 200 to 300 N, a margin of 6.7 times or more; the interlayer estimate is about 700 N per lug, about 14 times the 50 N counted.
+- **holdN_seam** = max(2·max over the halves of (F_side, film worst case), `MIN_HOLD_N`): at β 20 at most 34 N on the examples (the wolf, F_side 14.3 N and a film of 16.9; VIS-35 x the same 33.8), 41 N at β 45 (MP1). The bolts count 4 to 6 x 50 = 200 to 300 N, a margin of 8.9 times or more; the interlayer estimate is about 700 N per lug, about 14 times the 50 N counted.
 - **Taper wedge:** wedgeN = clampAdvice.holdN / tan τ (wolf 42.5 N at τ 15 degrees); the bottom pair is counted at 100 N. Info line **`seam-bolt-wedge`** if wedgeN > 100 N. README.txt's check that the seam is closed at the bottom edge stays.
 - **Top span** (O.b's extent across the top) has no fastener, with bolts or with clips: the user chose README advice over lugs on the top face (the answer of 2026-11-23, "README: one clamp"). A half is a box as deep as itself, so a span of about 228 mm opens by about 0.01 mm under the side push, where K5's cG is 0.25. If the span is over `SEAL_SPACING_MM` (a wide half): info line **`seam-top-span`**, and README.txt advises **one clamp across the back faces, at the middle of the seam, 10 mm under the top**, pressing through a board on each face (VIS-35 x has it; Goddess, about 90, does not). The same line and the same advice come with Seam fasteners Bolts and Clips; with None the clamps of G13.10.9 already cover it. If MP6's pour weeps there, the advice becomes a requirement.
 - **Creep:** PLA under a snug preload relaxes a little over hours, so README.txt asks for the screws to be snugged again after the leak test, just before the pour.
@@ -613,7 +613,7 @@ These counts hold at the default β 20: Zt only falls as β falls, and every one
 - **Slide (G13.4):** each lug moves with its own half, at |b| > O.b, on its own side of P and above the table, so the pull proof holds for half ∪ lugs with the screws out. A screw left in blocks the slide (a positive control).
 - **Base tape:** strips along a do not meet the lugs. Strips along b go more than Tn + p in front of P (M3: 14 mm) and more than Tp + p behind it (17 mm); report.json gives the zone. On a half shallower than that the strip runs over the lug's 45 degree slope; the slot opens on the lug's top face, not on the slope.
 - **Openings, funnel, merged mode, casting:** the openings are unaffected; the funnel is seated after the screws are in; to cast, bolt the halves round the glove, and the nuts are held by their screws when the mold is turned over.
-- **Bed (G13.3):** the pose footprint is (O.b extent + 2p) x (Zt + Tb − proud), analytic and O(1) per candidate. VIS-35 x on the user's 250 x 210 bed: about 247 x 147 mm (the 147 at β 30; MP1 gives the β 20 figure), so it fits with about 3 mm to spare at M3 (MP1 measures it again); at M4 it is 251.5 and misses. When the lugs alone break the fit, the card says "fits with Seam fasteners: None (clamps)".
+- **Bed (G13.3):** the pose footprint is (O.b extent + 2p) x (Zt + Tb − proud), analytic and O(1) per candidate. VIS-35 x on the user's 250 x 210 bed, measured in MP1 at β 20: 249.6 x 147.0 mm (148.0 at β 30), so it fits with 0.4 mm to spare at M3; at M4 it is 254.1 and misses, and the y split is taken. When the lugs alone break the fit, the card says "fits with Seam fasteners: None".
 - **View:** the lugs are part of each half's mesh. The screws are not drawn, as in M10.
 
 ##### G13.10.9 Seam fasteners None
@@ -657,7 +657,7 @@ With clamshell and bolts, the fit-test ZIP adds `fit_test/seam_bolt_coupon_neg.s
 - **Constants (not settings):** `LUG_HEIGHT` 14, relief 1 layer, `LUG_GAP` 1, `LUG_CLEAR` 8, `PRY_RUN` 12, ε 1, f_min = layer + 2·minWall, `SEAL_SPACING_MM` 100, `BOLT_HOLD_N` 50.
 - **Lock reason** for `bolts.enabled`: "the halves print on their backs, so corner bolts would lie sideways; this type bolts the seam (Seam fasteners)".
 - **UI:** a "Seam fasteners" row in the Two-part block; with bolts, the Bolts rows show under "Seam bolts", with no enabled toggle, the Length label reading "Auto, 10 mm"; help topic `seam-bolts`, a pictogram of a lug pair, screw and nut, in the help registry (HB).
-- **Rules:** `seam-bolt-no-room` (error); `seam-bolt-short` and `seam-bolt-long` (warnings); `bolt-bridge` (shared); `seam-bolt-single`, `seam-bolt-wedge` and `seam-top-span` (info; `seam-top-span` also with clips). The clips' rules are G13.10.19's.
+- **Rules:** `seam-bolt-no-room` (error); `seam-bolt-short`, `seam-bolt-long` and `seam-bolt-held-back` (warnings); `bolt-bridge` (shared); `seam-bolt-single`, `seam-bolt-wedge` and `seam-top-span` (info; `seam-top-span` also with clips). The clips' rules are G13.10.19's.
 
 ##### G13.10.14 Report and README
 
@@ -734,7 +734,7 @@ Built in 0.3.0 by the user's answer of 2026-11-23 ("Bolts and clips now"), from 
 | wolf x 171.6 | 4 | 8 |
 | VIS-35 y at β 20, about 188 | 4 | 8 |
 
-MP1 measures them at β 20, as for the bolts, and the goldens hold them.
+MP3b measures them at β 20, where MP1 measured the bolts (G13.10.6's Zt), and the goldens hold them.
 
 **Load and rating.** holdN_seam is G13.10.7's. `CLIP_HOLD_N` = 40 N a key (in `parts/fasteners.ts` beside `BOLT_HOLD_N`), an estimate kept far under what a printed key carries: the neck at the least engagement about 17 mm², 2.4 MPa at 40 N (about 5% of printed PLA's strength along the layers); the ear's two walls carry the draw across layers over 2·2.4·10 = 48 mm², 0.8 MPa against about 15 MPa; bearing on the flares about 1.5 MPa; the estimated failure is several hundred N a key (neck and ear each about 700 N), so the rating is about 1/15 of it. Rule: count·`CLIP_HOLD_N` ≥ holdN_seam, else the warning **`clips-hold`** ("add a row, or set Seam fasteners to Bolts"); rows are raised first where they fit. VIS-35 x: 8 x 40 = 320 N against 28.8 (11 times); wolf 320 against 30; sphere 160 against 10.
 
@@ -750,7 +750,7 @@ MP1 measures them at β 20, as for the bolts, and the goldens hold them.
 
 - **Halves:** no new `allowed` faces; the steepest new faces are the corbel at 45.0 degrees and the flares at 40. The audit's steep area equals the top chamfer's in every pose, so the ears add none. There are no bridges.
 - **Keys:** `clips.stl` in its own pose, head down, audited with no allowed set; nothing in it is steeper than vertical.
-- **Bed (G13.3):** each half's pose footprint is (O.b extent + 2·Le) x (Zt + Tb − proud); the height |O.a − xs| does not change, as the corbel stops at the back face. VIS-35 x on the user's 250 x 210: 248 x 147 (the 147 at β 30; MP1 gives the β 20 figure), 2 mm to spare, so README.txt asks for mouse ears at the corners rather than a full brim when the margin is under 5 mm. On the app's default 220 bed it misses with or without ears, and the y split is chosen.
+- **Bed (G13.3):** each half's pose footprint is (O.b extent + 2·Le) x (Zt + Tb − proud); the height |O.a − xs| does not change, as the corbel stops at the back face. VIS-35 x on the user's 250 x 210, measured in MP1 at β 20: 250.6 x 147.0, 0.6 mm too wide, so with clips the y split is chosen there (83.6 x 196.5, 270.5 ml against the x split's 136.2 with bolts), and no warning is given, as a split fits. Where the ears fit with under 5 mm to spare, README.txt asks for mouse ears at the corners rather than a full brim. On the app's default 220 bed the x split misses with or without ears, and the y split is chosen.
 - **Slide (G13.4):** every ear lies on its own half's side of P, outside O in b and at z ≥ z_lo; moving pos along +a moves its ears into empty space, and neg is the mirror case. With the keys out the slide is unchanged; with any key in it is blocked, as the key crosses P. The two halves' sockets line up in (b, z): both sit on the same shelf, and the ridge bars and pins register b; pin error of ±0.2 is taken by the key's clearance and the flares.
 - **Base tape:** strips along b keep |a − xs| ≥ 20, clear of the ears; a half shallower than that takes its strips along a only.
 
@@ -848,7 +848,7 @@ Face by face: the cavity is a height field along the pull, so its plastic normal
 
 **Audit:** `auditOverhang` with a new `allowed` predicate: the top chamfer's faces and `seamBoltBridges(layout)` (empty with clips or None), nothing else. The test asserts that the steep area equals the allowed set's area in every pose. There is no general bridge detector.
 
-**Bed fit** (wall 3, before the lugs' 2p across b): VIS-35 pulled along x needs about 228 x 147 mm, 247 x 147 with M3 lugs and 248 x 147 with clip ears (the 147s at β 30; MP1 gives the β 20 figures), which fits the user's 250 x 210 bed and misses the app's default 220 x 220 at any angle; pulled along y, at β 30 it needed about 62 x 220.1 mm and missed a 220 bed by 0.1 to 0.4, and at β 20 it is about 62 x 192 mm and fits. Goddess (y) is about 90 x 120 mm at β 30.
+**Bed fit** (wall 3; measured in MP1 at β 20 and cellFinal): VIS-35 pulled along x needs 230.6 x 147.0 mm, 249.6 x 147.0 with M3 lugs and 250.6 x 147.0 with clip ears, so with lugs it fits the user's 250 x 210 bed by 0.4 mm, with ears it misses it by 0.6, and it misses the app's default 220 x 220 at any angle; pulled along y it is 63.6 x 196.5 mm (82.6 with lugs) and fits a 220 bed, as it does at β 30 (219.1 long, 0.9 to spare; the design's 220.1 was at 0.5 mm), while at β 45 no split fits the 220 bed and the card names β 39 or less. Goddess (y) is 93.3 x 117.8 mm at β 20, 112.3 wide with lugs.
 
 #### G13.13 Analyses, report and files
 
@@ -898,30 +898,50 @@ The base ridge's two bars are this type's construction, not a setting. `cover.wa
 
 - **Measured in Node:** four coarse fields at 1 mm under 0.1 s; four 0.125 mm fields of VIS-35 with the padded lattice 1.9 s, 180 MB RSS for the whole script.
 - **Expected:** the field-to-tool steps scale with the seam section's area against the one-piece's top footprint (Goddess about 2 x 43 to 49 cm² against 26, VIS-35 x about 2 x 151 against 68), so 2.5 to 4.5 times the one-piece for these steps before the far-side flatten, which reduces it. The export's second `minGap` (9.4 to 10.4 s on Benchy at GC): 1.3 to 1.6 times that step. `NODE_PREVIEW_MS` gains rows for this type, so T1's 150 ms target is not met by quietly coarsening the cell.
-- **Gate at the end of MP1:** a Node spike of VIS-35 at cellFinal on both axes, on what MP1 builds: the side fields, two TINs, two `toolSolid`s and `minGap(model, tool)` for each, heap and time recorded. MP2 starts only if the heap's peak stays at or under the one-piece's plus 300 MiB.
+- **Gate at the end of MP1:** a Node spike of VIS-35 at cellFinal on both axes, on what MP1 builds: the side fields, two TINs, two `toolSolid`s and `minGap(model, tool)` for each, heap and time recorded. MP2 starts only if the heap's peak stays at or under the one-piece's plus 300 MiB. **Measured in MP1** (`test/regression/clamshellSpike.test.ts`, each case a process of its own, `CFG_MEASURE=1`), on the server: the one-piece (field, TIN of 44,554 triangles, `toolSolid` and minGap) peaks at 169 MiB RSS in 2.5 s; the x split (xs 173, a 300 mm bed) at 233 MiB in 4.7 s, with fine fields of 1,694 x 1,158 nodes, TINs of 40,820 and 49,032 triangles and minGap 1.4 to 1.5 s a half; the y split (xs 219) at 206 MiB in 4.1 s, fields of 410 x 1,574, TINs of 42,384 and 45,704. So the peak is 64 MiB over the one-piece's, well under the 300 MiB of the gate, and the time about 1.7 to 1.9 times. As a tool holds the model, minGap(model, tool) reads 0; the spike reads each gap to the half's box trimmed at P less its tool, its cavity wall, which gives 3.222 and 3.222 mm (x) and 3.243 and 3.211 mm (y) against the one-piece's 3.223, each at least t.
 - **Gate at the end of MP2,** once the trimmed halves exist: the same spike with two `minGap(model, half)` and the margin's rebuild with two held pairs, under the same rule; past it, the run stops and the user is asked.
 - **Budgets in the browsers (MP5),** Chromium and Firefox on Goddess and VIS-35: preview and export each within the spike's ratio plus 20%; PSS peak at most the one-piece's plus 300 MiB. The type is not added to the 3 million triangle soak, as it is not offered there.
 
 #### G13.17 Silicone saved
 
-Method, one for every figure: the repo's `buildField` (raster, dilate, draft 1 degree, closing 1.2) on the oriented model standing on its first base candidate, cut at z = 0; t 3, rEff 3.366, base layer off on both sides, no openings, the roof's lattice padded by 250 mm; the best axis and offset by G13.3's sweep, the bed ignored unless noted; percentages against the one-piece with the layer off. ml:
+Method, one for every figure: the repo's `buildField` (raster, dilate, draft 1 degree, closing 1.2) on the oriented model standing on its first base candidate, cut at z = 0; t 3, rEff 3.366, base layer off on both sides, no openings, the roof's lattice padded by 250 mm; the best axis and offset by G13.3's sweep, the bed ignored unless noted; percentages against the one-piece with the layer off, both less the model and S8's sealed air (none on these models). The design's table, ml:
 
 | model | one-piece (layer off / t) | β 0 | **β 20 (default)** | β 30 | β 45 | Zt at β 30 (one-piece) |
 |---|---|---|---|---|---|---|
 | Goddess, 0.5 mm | 117.9 / 121.9 | 57.7 (−51%) | **60.4 (−49%)** | 62.0 (−47%), y | 66.5 (−44%) | 116.0 (110.0) |
-| Goddess, 0.125 mm | 117.7 / 122.0 | 55.5 (−53%) | **MP1** | 60.0 (−49%), y | – | 116.0 |
+| Goddess, 0.125 mm | 117.7 / 122.0 | 55.5 (−53%) | **58.5 (−50%), y** | 60.0 (−49%), y | – | 116.0 |
 | VIS-35, x pull (bed ≥ 230 mm), 0.5 mm | 529.4 / 535.8 | 137.6 (−74%) | **138.8 (−74%)** | 140.8 (−73%) | 148.9 (−72%) | 143.1 (139.3) |
 | VIS-35, y pull, 0.5 mm | – | 159.9 (−70%) | **265.5 (−50%), fits 220** | 329.9 (−38%), misses 220 by 0.4 mm | 457.1 (−14%) | 216.6 |
-| VIS-35, 0.125 mm, x / y | 541.1 | 134.1 / 160.9 | **MP1** | 137.2 (−75%) / 334.3 (−38%) | – | 143.3 / 216.3 |
+| VIS-35, 0.125 mm, x / y | 541.1 | 134.1 / 160.9 | **136.2 (−75%) / 270.5 (−50%)** | 137.2 (−75%) / 334.3 (−38%) | – | 143.3 / 216.3 |
 | Wolf, x, 0.5 mm | 206.0 / 224.8 | 138.8 (−33%) | **150.1 (−27%)** | 159.3 (−23%) | 184.9 (−10%) | 171.6 (167.4) |
 | Benchy, y, 0.5 mm | 42.9 / 44.7 | 34.6 (−19%) | **36.5 (−15%)** | 38.1 (−11%) | 42.0 (−2%) | 58.5 (56.4) |
 | Sphere r21 (the help model), 0.5 mm | 28.7 / 30.6 | 21.8 (−24%) | **22.2 (−23%)** | 22.9 (−20%) | 26.1 (−9%) | 52.0 (48.4) |
 
+**Measured in MP1** (`test/regression/clamshellMeasure.test.ts`, `CFG_MEASURE=1`): the same method at cellFinal 0.125 through `src/core/field/clamshell.ts`, with G13.3's choice and the bed applied, at the two-part defaults (base layer 0, M3 seam bolts); the one-piece is FIELD_GOLDEN's (`test/regression/golden.ts`, layer off), or for the gallery's models `moldSilicone` at the same settings. Both sides take off S8's sealed air past the 0.05 ml filter, as `moldSilicone` does; none of these models has any. The split is the axis and xs as a share of the extent; Zt and the pose are at β 20 with the lugs (19.0 mm across b), the pose as width x length, then the tallest half's height. On the app's 220 x 220 x 250 bed, ml:
+
+| model | one-piece | β 0 | **β 20 (default)** | β 30 | β 45 | split, Zt at β 20 | pose at β 20, lugs |
+|---|---|---|---|---|---|---|---|
+| Goddess | 117.7 | 55.4 (−53%), x | **58.5 (−50%)** | 60.1 (−49%) | 65.0 (−45%) | y 72%, 114.0 | 112.3 x 117.8, 44.4 |
+| VIS-35 | 541.1 | 163.0 (−70%), y | **270.5 (−50%)** | 338.4 (−37%) | 146.2 (−73%), x, misses; fits at β ≤ 39 | y 73%, 192.7 | 82.6 x 196.5, 163.2 |
+| VIS-35, the user's 250 x 210 x 220 | 541.1 | 134.0 (−75%) | **136.2 (−75%)** | 137.4 (−75%) | 146.2 (−73%) | x 61%, 143.2 | 249.6 x 147.0, 35.3 |
+| Wolf | 202.5 | 133.3 (−34%) | **144.9 (−28%)** | 155.3 (−23%) | 180.9 (−11%) | x 48%, 171.3 | 161.7 x 175.1, 62.5 |
+| Benchy | 42.8 | 33.4 (−22%) | **35.4 (−17%)** | 37.2 (−13%) | 41.3 (−4%) | y 52%, 58.2 | 108.0 x 62.0, 30.4 |
+| Sphere (the help model) | 28.1 | 20.5 (−27%) | **20.9 (−26%)** | 21.6 (−23%) | 25.0 (−11%) | x 46%, 51.0 | 90.0 x 54.8, 37.2 |
+| Barrel | 10.1 | 8.4 (−16%), y | **8.8 (−13%)** | 9.1 (−10%) | 9.8 (−2%) | x 59%, 37.9 | 70.7 x 41.7, 27.8 |
+| Chick | 11.5 | 11.4 (−1%) | **11.7 (+2%)** | 12.4 (+8%) | 15.8 (+38%) | x 48%, 32.9 | 92.0 x 36.7, 35.2 |
+| Jersey barrier | 11.2 | 11.2 (0%) | **11.4 (+3%)** | 11.6 (+4%) | 12.2 (+9%) | y 40%, 31.1 | 96.8 x 34.9, 23.1 |
+| Cone | 11.6 | 11.6 (0%) | **11.7 (0%)** | 11.9 (+2%) | 12.5 (+7%) | x 48%, 49.2 | 87.4 x 53.0, 35.1 |
+| Cylinder | 19.2 | 17.7 (−7%) | **19.8 (+3%)** | 21.2 (+11%) | 24.3 (+27%) | x 41%, 55.6 | 78.7 x 59.4, 32.6 |
+| Cube | 31.8 | 30.5 (−4%) | **37.7 (+19%)** | 42.3 (+33%) | 52.1 (+63%) | x 42%, 57.7 | 88.7 x 61.5, 38.1 |
+| Eight jersey barriers | 86.0 | 116.3 (+35%), x | **194.4 (+126%)** | 226.7 (+164%) | 294.8 (+243%) | y 58%, 45.7 | 163.7 x 49.5, 61.3 |
+
+- Every split fits both beds at β 0 to 30 with lugs, clip ears or neither, but for VIS-35 x with clip ears on the user's bed (250.6 wide, G13.10.18), where the y split is taken; at β 45 VIS-35 misses the app's bed with each fastener. Clip ears add 20.0 mm across b and no fastener nothing, so with ears the pose is 1.0 mm wider than with lugs, and with none 19.0 narrower. The other models choose the same split on both beds.
+- A prism or a drum standing on its base gains nothing from the split, and a roof over its flat top costs silicone at any β > 0: the cube, the cylinder, the cone, the jersey barrier and the chick save under 3% or cost more, which G13.13's "no saving on this model" line says, and the eight barriers, each its own body, take more than twice the one-piece's (the Two-part cover is not offered for a model of more than one body, MP5).
+- Side push at β 20, per half: Goddess 4.9 and 4.3 N, VIS-35 x 14.4 and 13.9, VIS-35 y 8.4 and 8.7, the wolf 14.3 and 14.0, under 3 N on the rest; the film's worst case is 1.1 to 1.4 times the larger.
 - Other figures (β 30): t = 4, Goddess 139.1 → 79.1 ml (−43%), VIS-35 593.4 → 183.8 (x, −69%) or 384.8 (y, −35%). VIS-35 y at β 15: 236.3 ml (−55%), Zt 175.1. Against today's default (the one-piece with the layer on), Goddess 121.9 → 60.4 ml at β 20 (−50%).
 - Not included: sprues (the same in both types), the seam's film (under 0.5 ml) and hidden-leaf vents (about 1 ml each).
 - **Plastic:** the halves keep what the silicone gave up, about +56 ml on Goddess and +390 ml on VIS-35 (x), mostly 5% infill, and about 2 cm³ per lug pair, or with clips about 1 g a key and the ears.
-- **Plan on**, at β 20: about 49% less silicone on Goddess; on VIS-35 about 74% on a bed of at least 230 x 150 mm (the user's 250 x 210 with M3 lugs, 247 x 147), and about 50% on the app's default 220 mm bed, whose y split fits at β 20; 15 to 27% on Benchy, the sphere and the wolf. The draft's "VIS-35 −60% on a 220 bed" came from the cut-off roof and was wrong.
-- The β 20 column and the 0.125 mm rows at β 20 are measured again at cellFinal with the bed applied in MP1.
+- **Plan on**, at β 20 (MP1's figures): about 50% less silicone on Goddess; on VIS-35 about 75% on a bed of at least 250 x 150 mm with M3 lugs (the user's 250 x 210, 249.6 x 147.0) or 231 x 150 with no fastener, and about 50% on the app's default 220 mm bed, whose y split fits at β 20; 13 to 28% on Benchy, the sphere, the barrel and the wolf; nothing on a prism, a drum or several bodies. The draft's "VIS-35 −60% on a 220 bed" came from the cut-off roof and was wrong.
 
 **Deferred to 0.3.x:** a free angle about z; a draggable P; lugs on the top face (the user chose README.txt's top clamp, 2026-11-23); the H-hull cap (−9% on VIS-35 y at β 0); a third, top part; shells that follow the cavity, to save plastic; the base rib at the seam's bottom corners, unless MP6's leak test or pour needs it. Printed seam clips, which the judge deferred, are not deferred: the user's answer of 2026-11-23 builds them in 0.3.0 (G13.10.0, MP3b).
 
@@ -1776,17 +1796,20 @@ Scope:
 - `src/core/parts/rim.ts`: D_side, D3, Hmax_clam, Zt and the wall's raise for the band.
 - `src/core/parts/seamBolts.ts`: `seamBoltNeeds`, `placeSeamBolts`, `lugBedGrowth`, the length rules and warnings; `src/core/parts/bolts.ts` exports `column`, `SEGMENTS`, `PAST` and `OVERLAP`.
 - `src/core/report/clamp.ts`: side push, net lift, holdN_seam, the wedge, the top span, `seamBoltAdvice`, and the belts for fastener None.
+- `src/core/field/clamshell.ts`: the run end to end as MP5 joins it to the pipeline (`prepareClamshell`, the coarse rows, `chooseFor`, `exactRim`, `fineSplit` with the silicone, forces, film and hold, `seamHold`), so the tests and the measurement read shipped code; `test/fixtures/clamshell.ts` only adds the gallery's models.
 - **Measurement**, the design's MP0 that is still to do: every example and the gallery's models by G13.17's method at cellFinal, the bed applied (the app's default 220 x 220 x 250 and the user's 250 x 210 x 220), at β 0, 20, 30 and 45, with M3 lugs, with clip ears and with neither: silicone, axis, xs, Zt, the bed footprints, side push and screws per end. G13.17's β 20 column, G13.10.6's table and the β 30 footprints of G13.10.8, G13.10.18 and G13.12 are corrected from these. The clip rows and G13.10.17's table are MP3b's, as they need `placeClips`. The help model's figure decides that the sphere's clip shows two halves.
 - **The spike** of G13.16, on what this run builds: VIS-35 at cellFinal on both axes, the side fields, two TINs, two `toolSolid`s and `minGap(model, tool)` for each, heap and time recorded. The halves' part of it is MP2's gate.
 
 Checks (`test/unit/sideField.test.ts`, `sweep.test.ts`, `seamBolts.test.ts`, `clampSeam.test.ts`):
 - Frames: det +1 and exact round trips. Each side field ≥ the brute-force voxel envelope on small random meshes. The roof's property, and the top row of every roofed field ≤ hStop. Prism rows only raise G; the flatten touches only rows with no point of the dilated model past P. `buildToolMesh`'s band holds: no final node in (h_s − eps, h_s + eps].
-- The sweep equals brute force, and so does the O(1) Hmax; a synthetic L picks the right axis; the bed: VIS-35 at 220 and β 20 gives y, at 300 x, at the user's 250 x 210 x with M3 lugs and y with M4 (`skipWithout(ctx, 'vis35')`); a box that fits at O.b but not at O.b + 2p is refused with "fits with Seam fasteners: None (clamps)", and one that fits at O.b + 19 but not + 20 names Bolts with clips set (the `clips` value is MT's, `EAR_LENGTH` this run's); a coarse xs within 2% of a fine sweep.
-- D_side, D3 and Hmax_clam bound the built tool meshes on every example, also at β 60.
-- Seam bolts, no solids: G13.10.2's table at each size, the auto lengths 10, 10 and 12; f whole layers from the back face, in [f_min, f_min + layer) over a sweep of H₊; Tn ≥ Tn,min at the auto length for every f, a flush head passing the nut by 2 threads; the lowest lug's bottom at coverBottom, the top lug's top at most Zt − 13, gaps at least `LUG_CLEAR`, centres at most 100 apart; G13.10.6's table (VIS-35 behind `skipWithout(ctx, 'vis35')`); Zt 30 gives one per end, Zt 20 `seam-bolt-no-room`; a side push of 300 N raises n; `seam-bolt-short` at M3 x 6 and `seam-bolt-long` at M3 x 40, each naming the length that fits.
+- The sweep equals brute force, and so does the O(1) Hmax; a synthetic L picks the right axis; the bed: VIS-35 at 220 and β 20 gives y, at 300 x, at the user's 250 x 210 x with M3 lugs and y with M4 (`skipWithout(ctx, 'vis35')`); a box that fits at O.b but not at O.b + 2p is refused with "fits with Seam fasteners: None", and one that fits at O.b + 19 but not + 20 names Bolts with clips set (the `clips` value is MT's, `EAR_LENGTH` this run's); a coarse xs within 2% of a fine sweep.
+- D_side, D3 and Hmax_clam bound the built tool meshes on every example, also at β 60, at xs of 0.2, 0.55 and 0.8 of the extent (Goddess, the wolf, Benchy and the sphere by default, every example under `CFG_FULL=1`); the O(1) bounds and `quickRim` hold the exact ones; the wall's raise on a model that needs it; `sideOverrun` 0 at cellFinal.
+- Seam bolts, no solids: G13.10.2's table at each size, the auto lengths 10, 10 and 12; f whole layers from the back face, in [f_min, f_min + layer) over a sweep of H₊; Tn ≥ Tn,min at the auto length for every f, a flush head passing the nut by 2 threads; the lowest lug's bottom at coverBottom, the top lug's top at most Zt − 13, gaps at least `LUG_CLEAR`, centres at most 100 apart; G13.10.6's table (VIS-35 behind `skipWithout(ctx, 'vis35')`); Zt 30 gives one per end, Zt 20 `seam-bolt-no-room`; a side push of 300 N raises n, and a hold past what fits gives `seam-bolt-held-back`; `seam-bolt-short` at M3 x 6 and `seam-bolt-long` at M3 x 40, each naming the length that fits.
 - Goldens (1%), in a new clamshell table in `test/regression/golden.ts` keyed by example or gallery id, as the existing tables are `Record<ExampleId, …>`: clamshell Goddess always, VIS-35 behind `skipWithout(ctx, 'vis35')`: silicone, axis, xs, Zt, the hold and the push.
 
-Exit: the checks green; the measurement written into G13.17, G13.10.6, G13.10.8, G13.10.18 and G13.12; the spike's heap peak at or under the one-piece's plus 300 MiB, else the run stops and the user is asked.
+Exit: the checks green; the measurement written into G13.17, G13.10.6, G13.10.8, G13.10.18 and G13.12; the spike's heap peak at or under the one-piece's plus 300 MiB, else the run stops and the user is asked. Met on 2026-11-24: the checks green, also under `CFG_FULL=1`; the measurement in those sections; the spike 64 MiB over the one-piece (G13.16).
+
+MP1 adds no UI. Its diagnostics (`seam-bolt-short`, `seam-bolt-long`, `seam-bolt-held-back` and `bolt-bridge` on the shared bolt settings, `seam-bolt-no-room`, `clamshell-bed`) reach the sidebar first in MP5, whose Seam bolts rows show `bolts.size`, `bolts.length`, `bolts.holeClearance`, `bolts.nutClearance` and `bolts.minWall` in this type while `bolts.enabled` is locked off; until then Cover & joint shows only the locked toggle there, so the rows these messages name are not drawn.
 
 ### MP2: the halves, the base bars and the seal
 
@@ -1860,7 +1883,7 @@ Scope:
 Checks:
 - `test/unit/stages.test.ts`: the one-piece rows' keys unchanged; the new stages' inputs; a locked value changes no key.
 - `test/unit/export.test.ts`: the ZIP lists the two halves by axis, and `clips.stl` only with clips; report.json's count = 2·perEnd, its Hardware line agreeing with the layout; with clips, `clips.count` = 2·rows and the plate holding count + 2 keys; `seam-top-span` and README.txt's top clamp on VIS-35 x with bolts and with clips, and not on Goddess; README.txt's lines.
-- `e2e/clamshell.spec.ts` (Chromium and Firefox): the switch builds the halves; the explode vectors; a drag held to P; the Seam fasteners row with its three values and the shared rows; the Clips rows with clips; the corner-bolt toggle off with its reason; the export ZIP and the fit-test ZIP with bolts and with clips, Node's bytes; the clips exploding along ±b; a section through a lug; budgets on Goddess and VIS-35 (G13.16). Review shots `mp-halves`, `mp-exploded`, `mp-section-lug` and `mp-card` in both themes.
+- `e2e/clamshell.spec.ts` (Chromium and Firefox): the switch builds the halves; the explode vectors; a drag held to P; the Seam fasteners row with its three values and the shared rows, with Seam fasteners Bolts a `seam-bolt-short` shown inline under Bolt length and `bolt-bridge` under Nut clearance or Bolt size, each row it names drawn; the Clips rows with clips; the corner-bolt toggle off with its reason; the export ZIP and the fit-test ZIP with bolts and with clips, Node's bytes; the clips exploding along ±b; a section through a lug; budgets on Goddess and VIS-35 (G13.16). Review shots `mp-halves`, `mp-exploded`, `mp-section-lug` and `mp-card` in both themes.
 
 Exit: the checks green, budgets met in both browsers, the one-piece type byte-identical.
 
